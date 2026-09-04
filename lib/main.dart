@@ -28,7 +28,7 @@ class SocietyManagementApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Society Management',
+      title: 'Ramkrishnapuram RWA',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
         useMaterial3: true,
@@ -59,32 +59,272 @@ class AuthWrapper extends StatelessWidget {
           return const RoleRouter();
         }
         
-        return SignInScreen(
-          headerBuilder: (context, constraints, shrinkOffset) {
-            return const Padding(
-              padding: EdgeInsets.all(20),
-              child: Center(
-                child: Text(
-                  'Society Management',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.teal,
+        return const CustomAuthScreen();
+      },
+    );
+  }
+}
+
+class CustomAuthScreen extends StatefulWidget {
+  const CustomAuthScreen({super.key});
+
+  @override
+  State<CustomAuthScreen> createState() => _CustomAuthScreenState();
+}
+
+class _CustomAuthScreenState extends State<CustomAuthScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  
+  bool _isSignIn = true;
+  bool _isPasswordVisible = false;
+  bool _isLoading = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    final email = _emailController.text.trim().toLowerCase();
+    final password = _passwordController.text.trim();
+
+    try {
+      if (_isSignIn) {
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+      } else {
+        await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.message ?? 'An authentication error occurred.';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'An error occurred: $e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _resetPassword() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter your email address first.')),
+      );
+      return;
+    }
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Password reset email sent! Check your inbox.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: Card(
+              elevation: 4,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.apartment, size: 64, color: Colors.teal),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Ramkrishnapuram RWA',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.teal,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _isSignIn ? 'Welcome back! Sign in to continue.' : 'Create an account to get started.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[600]),
+                      ),
+                      const SizedBox(height: 24),
+                      if (_errorMessage != null) ...[
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.red.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.error_outline, color: Colors.red, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _errorMessage!,
+                                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      TextFormField(
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                          labelText: 'Email Address',
+                          prefixIcon: Icon(Icons.email_outlined),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter your email';
+                          }
+                          if (!value.contains('@')) {
+                            return 'Please enter a valid email';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: _passwordController,
+                        obscureText: !_isPasswordVisible,
+                        decoration: InputDecoration(
+                          labelText: 'Password',
+                          prefixIcon: const Icon(Icons.lock_outline),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _isPasswordVisible ? Icons.visibility : Icons.visibility_off,
+                              color: Colors.grey[600],
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _isPasswordVisible = !_isPasswordVisible;
+                              });
+                            },
+                          ),
+                          border: const OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter your password';
+                          }
+                          if (!_isSignIn && value.length < 6) {
+                            return 'Password must be at least 6 characters';
+                          }
+                          return null;
+                        },
+                      ),
+                      if (_isSignIn) ...[
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: _resetPassword,
+                            child: const Text('Forgot Password?'),
+                          ),
+                        ),
+                      ] else ...[
+                        const SizedBox(height: 16),
+                      ],
+                      SizedBox(
+                        width: double.infinity,
+                        height: 48,
+                        child: ElevatedButton(
+                          onPressed: _isLoading ? null : _submit,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.teal,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: _isLoading
+                              ? const SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Text(
+                                  _isSignIn ? 'Sign In' : 'Sign Up',
+                                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(_isSignIn ? "Don't have an account?" : "Already have an account?"),
+                          TextButton(
+                            onPressed: () {
+                              setState(() {
+                                _isSignIn = !_isSignIn;
+                                _errorMessage = null;
+                              });
+                            },
+                            child: Text(_isSignIn ? 'Sign Up' : 'Sign In'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
-            );
-          },
-          subtitleBuilder: (context, action) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8.0),
-              child: action == AuthAction.signIn
-                  ? const Text('Welcome to your community! Please sign in.')
-                  : const Text('Welcome to your community! Please sign up.'),
-            );
-          },
-        );
-      },
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -121,25 +361,59 @@ class _RoleRouterState extends State<RoleRouter> {
 
       if (docSnap.exists) {
         final data = docSnap.data() as Map<String, dynamic>;
+        final role = data['role'] as String?;
+        final flatNum = data['flatNumber']?.toString().trim() ?? '';
+
+        if (role == 'RESIDENT' && flatNum.isNotEmpty) {
+          final cleanFlatNum = flatNum.trim().toLowerCase();
+          final flatDoc = await FirebaseFirestore.instance.collection('flats').doc(flatNum).get();
+          final allFlatsSnap = await FirebaseFirestore.instance.collection('flats').get();
+          final flatExists = flatDoc.exists ||
+              allFlatsSnap.docs.any((d) => d.id.trim().toLowerCase() == cleanFlatNum);
+
+          if (!flatExists) {
+            // Flat has been deleted by Admin! Delete user doc, sign out, and block access
+            await docRef.delete();
+            await FirebaseAuth.instance.signOut();
+            if (mounted) {
+              setState(() {
+                _error = 'This flat has been deleted by the Admin. Access revoked.';
+                _isLoading = false;
+              });
+            }
+            return;
+          }
+        }
+
         setState(() {
-          _role = data['role'] as String?;
+          _role = role;
           _isLoading = false;
         });
         return;
       }
 
-      // 2. Not found by uid. Let's check by phone number.
-      if (user.phoneNumber != null && user.phoneNumber!.isNotEmpty) {
-        var querySnap = await FirebaseFirestore.instance
+      // 2. Not found by uid. Let's check by email or phone number.
+      QuerySnapshot<Map<String, dynamic>>? querySnap;
+      if (user.email != null && user.email!.isNotEmpty) {
+        querySnap = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: user.email!.toLowerCase())
+            .limit(1)
+            .get();
+      }
+
+      if ((querySnap == null || querySnap.docs.isEmpty) && user.phoneNumber != null && user.phoneNumber!.isNotEmpty) {
+        querySnap = await FirebaseFirestore.instance
             .collection('users')
             .where('phone', isEqualTo: user.phoneNumber)
             .limit(1)
             .get();
+      }
 
-        if (querySnap.docs.isNotEmpty) {
-          // Found the record admin created. Link it to this UID.
-          final existingDoc = querySnap.docs.first;
-          final existingData = existingDoc.data();
+      if (querySnap != null && querySnap.docs.isNotEmpty) {
+        // Found the record admin created. Link it to this UID.
+        final existingDoc = querySnap.docs.first;
+        final existingData = existingDoc.data();
           
           // Normalize role for dashboard routing
           String assignedRole = existingData['role'] ?? 'RESIDENT';
@@ -163,9 +437,19 @@ class _RoleRouterState extends State<RoleRouter> {
           }
           return;
         }
+
+      // 3. User is completely new or deleted.
+      if (user.email != null && user.email!.endsWith('@ramkrishnapuram.com')) {
+        await FirebaseAuth.instance.signOut();
+        if (mounted) {
+          setState(() {
+            _error = 'This account or flat has been deleted by the Admin.';
+            _isLoading = false;
+          });
+        }
+        return;
       }
 
-      // 3. User is completely new. Route to ProfileSetup
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -254,8 +538,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       appBar: AppBar(
         title: const Text('Complete Profile'),
         actions: [
-          IconButton(
+          TextButton.icon(
             icon: const Icon(Icons.logout),
+            label: const Text('Log out'),
             onPressed: () => FirebaseAuth.instance.signOut(),
           ),
         ],

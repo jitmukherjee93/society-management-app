@@ -22,7 +22,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
 
     try {
       await FirebaseFirestore.instance.collection('maintenance_dues').add({
-        'flatNumber': _flatController.text.trim(),
+        'flatNumber': _flatController.text.trim().toUpperCase(),
         'amount': double.parse(_amountController.text.trim()),
         'month': _monthController.text.trim(),
         'status': 'UNPAID',

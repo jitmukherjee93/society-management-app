@@ -27,8 +27,9 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
       appBar: AppBar(
         title: const Text('Resident Dashboard'),
         actions: [
-          IconButton(
+          TextButton.icon(
             icon: const Icon(Icons.logout),
+            label: const Text('Log out'),
             onPressed: () => FirebaseAuth.instance.signOut(),
           ),
         ],

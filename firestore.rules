@@ -24,7 +24,12 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if isAdmin() || (isAuthenticated() && request.auth.uid == userId);
+      allow read: if isAdmin() || (isAuthenticated() && (
+        request.auth.uid == userId ||
+        (resource.data != null && resource.data.uid == request.auth.uid) ||
+        (request.auth.token.email != null && resource.data != null && resource.data.email == request.auth.token.email) ||
+        (request.auth.token.phone_number != null && resource.data != null && resource.data.phone == request.auth.token.phone_number)
+      ));
       allow create: if isAdmin() || (isAuthenticated() 
                     && request.auth.uid == userId 
                     && request.resource.data.role == 'RESIDENT'

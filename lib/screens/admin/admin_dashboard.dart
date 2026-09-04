@@ -31,8 +31,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
         title: const Text('Admin Dashboard'),
         backgroundColor: Colors.deepPurple,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
+          TextButton.icon(
+            icon: const Icon(Icons.logout, color: Colors.white),
+            label: const Text('Log out', style: TextStyle(color: Colors.white)),
             onPressed: () => FirebaseAuth.instance.signOut(),
           ),
         ],

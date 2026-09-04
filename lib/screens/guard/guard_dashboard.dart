@@ -101,8 +101,9 @@ class _GuardDashboardState extends State<GuardDashboard> {
         title: const Text('Guard Dashboard'),
         backgroundColor: Colors.blueGrey,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
+          TextButton.icon(
+            icon: const Icon(Icons.logout, color: Colors.white),
+            label: const Text('Log out', style: TextStyle(color: Colors.white)),
             onPressed: () => FirebaseAuth.instance.signOut(),
           ),
         ],
