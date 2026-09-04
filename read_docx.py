@@ -1,0 +1,1 @@
+import zipfile, xml.etree.ElementTree as ET, sys; ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}; open('srs_content.txt', 'w', encoding='utf-8').write('\n'.join(''.join(t.text for t in p.findall('.//w:t', ns) if t.text) for p in ET.fromstring(zipfile.ZipFile(sys.argv[1]).read('word/document.xml')).findall('.//w:p', ns) if p.findall('.//w:t', ns)))

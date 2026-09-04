@@ -1,0 +1,31 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "society-management-app-a808b",
+          "appId": "1:202094225926:android:3baa22da11eec4de14b187",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "society-management-app-a808b",
+          "configurations": {
+            "android": "1:202094225926:android:3baa22da11eec4de14b187",
+            "ios": "1:202094225926:ios:15bcef935700116e14b187",
+            "macos": "1:202094225926:ios:15bcef935700116e14b187",
+            "web": "1:202094225926:web:8168541fb27059b414b187",
+            "windows": "1:202094225926:web:c2c0ae396c83ae5c14b187"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  }
+}

@@ -1,0 +1,81 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'ADMIN';
+    }
+
+    function isResident() {
+      return isAuthenticated() && getUserRole() == 'RESIDENT';
+    }
+    
+    function isGuard() {
+      return isAuthenticated() && getUserRole() == 'GUARD';
+    }
+
+    match /users/{userId} {
+      allow read: if isAdmin() || (isAuthenticated() && request.auth.uid == userId);
+      allow create: if isAdmin() || (isAuthenticated() 
+                    && request.auth.uid == userId 
+                    && request.resource.data.role == 'RESIDENT'
+                    && request.resource.data.uid == userId);
+      allow update: if isAdmin() || (isAuthenticated() && request.auth.uid == userId 
+                                     && request.resource.data.role == resource.data.role);
+      allow delete: if isAdmin();
+    }
+
+    match /flats/{flatId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /maintenance_dues/{dueId} {
+      allow read: if isAdmin() || (isResident() && resource.data.flatNumber == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.flatNumber);
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isResident() 
+        && resource.data.flatNumber == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.flatNumber
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status == 'PAID_OFFLINE_PENDING'
+      );
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /complaints/{complaintId} {
+      allow read, write: if isAdmin();
+      allow read: if isResident() && resource.data.residentUid == request.auth.uid;
+      allow create: if isResident() && request.resource.data.residentUid == request.auth.uid;
+    }
+
+    match /visitors/{visitorId} {
+      allow read, write: if isAdmin();
+      allow read: if isResident() && resource.data.hostUid == request.auth.uid;
+      allow create: if isResident() && request.resource.data.hostUid == request.auth.uid;
+      allow read: if isGuard();
+      allow update: if isGuard() 
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+                    && request.resource.data.status == 'CHECKED_IN';
+    }
+    
+    match /posts/{postId} {
+      allow read: if isAuthenticated();
+      allow create: if isResident() && request.resource.data.authorUid == request.auth.uid;
+      allow update: if isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes']);
+      allow delete: if isAdmin() || (isResident() && resource.data.authorUid == request.auth.uid);
+    }
+  }
+}

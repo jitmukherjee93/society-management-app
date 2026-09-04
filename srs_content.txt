@@ -1,0 +1,958 @@
+Parosi
+Society Management Platform
+Software Requirements Specification
+Version:  1.0
+Date:  12 May 2026
+Status:  Draft — For Review
+Prepared by:  Parosi Product Team
+Table of Contents
+1.  Introduction
+3
+1.1  Purpose
+3
+1.2  Scope
+3
+1.3  Roles & Definitions
+3
+1.4  Conventions Used in This Document
+4
+2.  Module 1 — Account / Society
+4
+2.1  Overview
+4
+2.2  Data Model
+4
+2.3  Permission Matrix
+5
+2.4  Super Admin Requirements
+5
+2.5  Society Admin Requirements
+6
+2.6  Resident Requirements
+7
+2.7  Business Rules
+7
+2.8  API Endpoints
+8
+3.  Module 2 — Users
+8
+3.1  Overview
+8
+3.2  Data Model
+9
+3.3  Permission Matrix
+9
+3.4  Super Admin Requirements
+9
+3.5  Society Admin Requirements
+10
+3.6  Resident Requirements
+11
+3.7  Business Rules
+11
+3.8  API Endpoints
+12
+4.  Module 3 — Announcements
+12
+4.1  Overview
+12
+4.2  Data Model
+12
+4.3  Permission Matrix
+13
+4.4  Super Admin Requirements
+13
+4.5  Society Admin / Executive Requirements
+13
+4.6  Resident Requirements
+14
+4.7  Business Rules
+14
+4.8  API Endpoints
+15
+5.  Module 4 — Community
+15
+5.1  Overview
+15
+5.2  Data Model
+15
+5.3  Permission Matrix
+16
+5.4  Super Admin Requirements
+16
+5.5  Society Admin / Executive Requirements
+17
+5.6  Resident Requirements
+17
+5.7  Business Rules
+18
+5.8  API Endpoints
+18
+6.  Non-Functional Requirements
+19
+7.  Assumptions & Constraints
+19
+8.  Revision History
+20
+1.  Introduction
+1.1  Purpose
+This document defines the functional software requirements for the Parosi Society Management Platform, covering four core modules: Account/Society, Users, Announcements, and Community. It is intended to serve as the authoritative reference for the development, testing, and product review of these modules across the web browser application, backend API, and mobile application.
+1.2  Scope
+Parosi is a multi-tenant society management SaaS product targeting residential housing societies in India. Each tenant is a Society — an independent data boundary. The platform supports three primary user roles within a society: Society Admin (and Executive), Guard, and Resident (Owner or Tenant). A platform-level Super Admin role manages all societies from a central console.
+This SRS covers the following modules:
+Module 1 — Account/Society: Management of society profiles and configuration.
+Module 2 — Users: Management of user accounts, profiles, and memberships.
+Module 3 — Announcements: Society-scoped notice board managed by admins.
+Module 4 — Community: Member-generated posts, reactions, and comments.
+1.3  Roles & Definitions
+Role
+Description
+Super Admin
+Platform-level administrator with unrestricted access to all societies, users, and data. Not a member of any specific society.
+Society Admin
+Primary administrator of a single society. Created by Super Admin. Has full control over society settings, members, and all content within the society.
+Executive
+Secondary administrator role within a society. Has the same access as Society Admin except for a small number of destructive operations (e.g., cannot delete the society itself).
+Guard
+Security personnel assigned to a society. Access limited to guest pass management. Cannot access financial, resident, or community modules.
+Owner
+A flat owner who is a resident member of the society. Has full resident-level access.
+Resident
+A tenant or non-owner resident member of the society. Same access as Owner for the modules in this document.
+Designated Resident
+A resident granted additional read or create access to specific admin modules via a named designation. Retains the resident base experience.
+1.4  Conventions Used in This Document
+The following symbols are used in permission tables throughout this document:
+✅  — Permission granted (full access for the specified operation)
+❌  — Permission denied (operation not accessible to this role)
+⚠️  — Conditional permission (access granted subject to stated conditions)
+CRUD — Create, Read, Update, Delete
+RUD  — Read, Update, Delete (no Create)
+2.  Module 1 — Account / Society
+2.1  Overview
+The Account/Society module governs the lifecycle and configuration of a Society entity on the Parosi platform. A Society is the top-level multi-tenancy boundary — all other data (residents, bills, posts, etc.) belongs to exactly one society. This module covers creation, retrieval, update, deactivation, and deletion of society records, as well as the initial onboarding setup flow.
+2.2  Data Model
+The Society entity comprises the following fields:
+Field
+Type
+Description
+Constraints
+id
+UUID
+Primary key. Auto-generated.
+System
+name
+String
+Display name of the society.
+Required
+handle
+String
+URL-safe unique slug used in deep links and invoice prefixes.
+Required, unique, immutable after creation
+description
+Text
+Optional free-text description of the society.
+Optional
+address
+String
+Street address.
+Optional
+city
+String
+City.
+Optional
+state
+String
+State.
+Optional
+pincode
+String
+PIN code.
+Optional
+logo_url
+String
+URL to society logo image stored in cloud storage.
+Optional
+total_flats
+Integer
+Indicative total flat count.
+Optional
+wings
+JSON
+Array of wing/block definitions used during setup.
+Optional
+setup_complete
+Boolean
+Indicates whether the initial setup wizard has been completed.
+Default: false
+is_active
+Boolean
+Soft-delete flag. Inactive societies are hidden from all users.
+Default: true
+invoice_day
+Integer
+Day of month (1–28) on which maintenance bills auto-generate.
+Optional, 1–28
+due_day
+Integer
+Day of month (1–28) after which unpaid bills become overdue.
+Optional, 1–28
+payment_upi_id
+String
+UPI ID shown to residents when submitting maintenance payment.
+Optional
+payment_account_number
+Text
+Bank account details shown to residents.
+Optional
+payment_qr_url
+String
+URL to payment QR code image.
+Optional
+place_id
+String
+Google Places ID for map integration.
+Optional
+latitude / longitude
+Decimal
+Geographic coordinates.
+Optional
+created_at / updated_at
+Timestamp
+Auto-managed audit timestamps.
+System
+2.3  Permission Matrix
+Role
+Create
+Read
+Update
+Delete
+Super Admin
+✅
+✅
+✅
+✅
+Society Admin
+❌
+✅
+✅
+❌
+Executive
+❌
+✅
+✅
+❌
+Guard
+❌
+❌
+❌
+❌
+Owner
+❌
+✅
+❌
+❌
+Resident
+❌
+✅
+❌
+❌
+Note: Only Super Admin can create or delete a society. Society Admin and Executive can update settings for their own society only. Residents have read-only access to their own society's basic profile.
+2.4  Super Admin Requirements
+CREATE SOCIETY
+SA-SOC-001: Super Admin shall be able to create a new society by providing: society name, unique handle, optional description/address/city/state/pincode, admin name, admin email, admin password, and optional admin phone.
+SA-SOC-002: The system shall reject creation if the handle is already in use by another society. Error: "handle_taken".
+SA-SOC-003: The system shall reject creation if the admin email is already registered. Error: "admin_email_taken".
+SA-SOC-004: On successful creation, the system shall atomically create: (a) the society record, (b) the admin user account with hashed password, and (c) a society_member record linking the admin to the society with role "society_admin".
+SA-SOC-005: The handle shall be normalised to lowercase, trimmed, and hyphenated (spaces → hyphens) before storage.
+SA-SOC-006: Admin password shall be hashed using bcrypt (min 10 rounds) before storage. Plaintext password shall never be persisted.
+READ / LIST SOCIETIES
+SA-SOC-007: Super Admin shall see a list of all societies (active and inactive), sorted by creation date descending.
+SA-SOC-008: Each society card in the list shall display: society name, handle, flat count, member count, admin email, admin name, active status, and creation date.
+SA-SOC-009: Super Admin shall be able to navigate into any society and act with society_admin privileges within that society.
+UPDATE SOCIETY
+SA-SOC-010: Super Admin shall be able to update any society's name, description, address, city, state, pincode, total_flats, and is_active flag.
+SA-SOC-011: The handle field shall not be editable after creation.
+DELETE SOCIETY
+SA-SOC-012: Super Admin shall be able to permanently delete a society.
+SA-SOC-013: Deleting a society shall cascade-delete all dependent data: society_members, flats, bills, bill_records, guest_passes, announcements, posts, post_likes, post_comments, complaints, designations, and audit_logs.
+SA-SOC-014: User accounts that belong exclusively to the deleted society (i.e., have no membership in any other society) shall also be permanently deleted.
+SA-SOC-015: User accounts shared across multiple societies shall be retained.
+SA-SOC-016: The system shall prompt for confirmation before executing the delete operation on the UI.
+RESET ADMIN PASSWORD
+SA-SOC-017: Super Admin shall be able to reset a society admin's password to a temporary value.
+SA-SOC-018: The UI shall clearly indicate that the reset password is temporary and the admin should change it on next login.
+2.5  Society Admin Requirements
+READ SOCIETY PROFILE
+ADMIN-SOC-001: Society Admin shall be able to view all fields of their own society profile including flat count, member count, setup status, and payment configuration.
+ADMIN-SOC-002: Society Admin shall not have access to other societies' data.
+UPDATE SOCIETY DETAILS
+ADMIN-SOC-003: Society Admin shall be able to update: name, description, address, city, state, pincode, and total_flats.
+ADMIN-SOC-004: Society Admin shall be able to update invoice automation settings: invoice_day (1–28) and due_day (1–28). Both fields are optional but must be integers in range if set.
+ADMIN-SOC-005: Society Admin shall be able to update payment channel: UPI ID, bank account details (free-text), and payment QR code image.
+ADMIN-SOC-006: Payment QR code upload shall accept PNG, JPEG, and WebP formats with a maximum file size of 5 MB.
+ADMIN-SOC-007: Uploading a new QR code shall automatically delete the previous one from cloud storage.
+ADMIN-SOC-008: Society Admin shall be able to remove the payment QR code; the previous image shall be deleted from storage.
+ADMIN-SOC-009: Society Admin shall be able to configure per-wing maintenance rates (₹/sq.ft) in the Settings page under Maintenance Setup.
+ADMIN-SOC-010: All settings changes shall be reflected immediately upon save without requiring a page reload.
+SOCIETY SETUP WIZARD
+ADMIN-SOC-011: On first login to an incomplete society, the setup wizard modal shall appear automatically.
+ADMIN-SOC-012: The wizard shall guide the admin through: society name/city → wing/block configuration → flat layout (floors, flats per floor).
+ADMIN-SOC-013: If only one wing is configured, the wing name input shall be disabled and flats shall be stored with wing = "" (no wing prefix on flat numbers, e.g., "101" not "A-101").
+ADMIN-SOC-014: On completing the wizard, the system shall auto-create all flat records based on the configured layout.
+ADMIN-SOC-015: On completing setup, the system shall post a one-time welcome message to the Community feed authored as "Team Parosi".
+ADMIN-SOC-016: setup_complete shall be set to true; the wizard shall not re-appear on subsequent logins.
+RESTRICTIONS
+ADMIN-SOC-017: Society Admin shall not be able to create a new society.
+ADMIN-SOC-018: Society Admin shall not be able to delete their society.
+ADMIN-SOC-019: Society Admin shall not be able to modify the society handle.
+2.6  Resident Requirements
+READ SOCIETY PROFILE
+RES-SOC-001: Residents (Owner/Resident) shall be able to view basic society information: name, city, logo, and payment channel details (UPI ID, bank account, QR code).
+RES-SOC-002: Payment channel details shall be displayed to residents only within the bills/payment flow, not as a standalone settings page.
+RES-SOC-003: Residents shall not see any administrative settings (invoice_day, due_day, wings, setup status).
+RESTRICTIONS
+RES-SOC-004: Residents shall not be able to create, update, or delete any society record or setting.
+RES-SOC-005: Residents shall not see any data belonging to societies they are not a member of.
+2.7  Business Rules
+BR-SOC-001: A society handle must be globally unique across the platform and cannot be changed after creation.
+BR-SOC-002: A society must have exactly one active society_admin member at all times.
+BR-SOC-003: Invoice and due days must be between 1 and 28 inclusive to avoid month-end ambiguity (February).
+BR-SOC-004: Auto invoice generation runs on a daily scheduler. If invoice_day matches the current day and bills have not yet been generated for the current month, the system creates maintenance bill records for all active flats.
+BR-SOC-005: Deactivating a society (is_active = false) hides it from all users but does not delete data. Super Admin can reactivate it.
+BR-SOC-006: Only image files (JPEG, PNG, WebP) are accepted for logo and payment QR uploads.
+2.8  API Endpoints
+Method + Path
+Description
+Auth Required
+GET    /api/societies/:societyId
+Retrieve society profile with flat & member counts
+All members
+PATCH  /api/societies/:societyId
+Update society settings, wings, invoice/payment config
+Society Admin
+POST   /api/societies/:societyId/payment-qr
+Upload payment QR code image
+Society Admin
+DELETE /api/societies/:societyId/payment-qr
+Remove payment QR code
+Society Admin
+GET    /api/admin/societies
+List all societies (Super Admin)
+Super Admin
+POST   /api/admin/societies
+Create new society with admin account (Super Admin)
+Super Admin
+PATCH  /api/admin/societies/:id
+Update any society (Super Admin)
+Super Admin
+DELETE /api/admin/societies/:id
+Delete society and cascade data (Super Admin)
+Super Admin
+POST   /api/admin/societies/:id/reset-admin-password
+Reset society admin password
+Super Admin
+3.  Module 2 — Users
+3.1  Overview
+The Users module governs the management of individual user accounts on the Parosi platform. A user account is a global entity; the same user can be a member of multiple societies with different roles in each. This module covers account creation, authentication, profile management, and membership administration.
+3.2  Data Model
+The User entity comprises the following fields:
+Field
+Type
+Description
+Constraints
+id
+UUID
+Primary key. Auto-generated.
+System
+name
+String
+Display name of the user.
+Required
+email
+String
+Email address. Used for admin login. Unique.
+Unique, nullable for phone-only users
+phone
+String
+Mobile number (10 digits, India). Used for OTP login.
+required, 10 digits
+password_hash
+String
+bcrypt hash of password. Used for Society Admin login.
+Nullable (phone-auth users have no password)
+guard_pin
+String
+bcrypt hash of guard PIN.
+Nullable (only guards)
+avatar_url
+String
+URL to profile picture in cloud storage.
+Optional
+role
+String
+"super_admin" for platform admins; "user" for all others. Society role is in society_members.
+Default: "user"
+is_active
+Boolean
+Soft-delete flag. Inactive users cannot log in.
+Default: true
+last_society_id
+UUID
+Last society the user interacted with. Used for deep-link resume.
+Optional
+fcm_token
+String
+Firebase Cloud Messaging token for push notifications.
+Optional
+created_at / updated_at
+Timestamp
+Auto-managed audit timestamps.
+System
+3.3  Permission Matrix
+Role
+Create
+Read
+Update
+Delete
+Super Admin
+✅
+✅ (all users)
+✅
+✅
+Society Admin
+✅
+✅ (own society members)
+✅ (own members)
+⚠️ deactivate only
+Executive
+✅
+✅ (own society members)
+✅ (own members)
+⚠️ deactivate only
+Guard
+❌
+❌
+❌
+❌
+Owner
+❌
+⚠️ self only
+⚠️ self only
+❌
+Resident
+❌
+⚠️ self only
+⚠️ self only
+❌
+Note: Residents can only read and update their own profile. They have no visibility into other users' accounts. Society Admin/Executive can manage members within their own society only.
+3.4  Super Admin Requirements
+CREATE USER
+SA-USR-001: Super Admin shall be able to create a new user account with: name, email, password, optional phone, and role.
+SA-USR-002: Email must be unique across the platform. Duplicate email creation shall be rejected.
+SA-USR-003: Password shall be hashed (bcrypt, min 10 rounds) before storage.
+READ / LIST USERS
+SA-USR-004: Super Admin shall see a paginated list of all users on the platform, sorted by creation date descending.
+SA-USR-005: Each user entry shall display: id, name, email, phone, role, is_active status, and creation date.
+UPDATE USER
+SA-USR-006: Super Admin shall be able to update any user's name, phone, role, and is_active status.
+SA-USR-007: When is_active is set to false, the system shall scramble the user's email address (prepend "__deleted__") so the email becomes available for future reuse.
+DELETE / DEACTIVATE USER
+SA-USR-008: Super Admin shall be able to deactivate a user account. Deactivated users cannot authenticate.
+SA-USR-009: Super Admin shall be able to promote a user to "super_admin" role.
+3.5  Society Admin Requirements
+ADD RESIDENT / MEMBER
+ADMIN-USR-001: Society Admin shall be able to add a resident to their society by providing: phone number, name, flat assignment, and role (owner or resident).
+ADMIN-USR-002: If a user with the given phone number already exists in the system (any society), that user's account shall be reused and linked to the flat. The user's name shall be updated to the provided name.
+ADMIN-USR-003: If no user exists with the given phone number, a new user account shall be created with: name, phone, role = "user".
+ADMIN-USR-004: Phone number must be exactly 10 digits. Non-numeric characters are rejected.
+ADMIN-USR-005: Society Admin shall optionally add a resident using an existing user_id (from search results) instead of phone/name.
+ADMIN-USR-006: The flat_id must belong to the same society. Adding a resident to a flat from another society shall be rejected.
+ADMIN-USR-007: Marking a new resident as "owner" shall automatically unset the current owner flag on any existing owner of the same flat.
+SEARCH USERS
+ADMIN-USR-008: Society Admin shall be able to search for existing users by name or phone number to add them as residents.
+ADMIN-USR-009: Search results shall be scoped to the current society's existing members only. Results shall not include users from other societies.
+ADMIN-USR-010: Search requires a minimum of 2 characters. Results are limited to 10 matches.
+UPDATE MEMBER
+ADMIN-USR-011: Society Admin shall be able to update a member's flat assignment, role (owner/resident), owner flag, and active status within their society.
+ADMIN-USR-012: Updating the owner flag shall unset the previous owner on the target flat.
+REMOVE MEMBER
+ADMIN-USR-013: Society Admin shall be able to remove (deactivate membership for) a resident from their society.
+ADMIN-USR-014: Removal shall set the society_member.is_active flag to false; the user account itself is retained.
+ADMIN-USR-015: A confirmation prompt shall be shown before removing a resident.
+ADD GUARD
+ADMIN-USR-016: Society Admin shall be able to add a guard by providing: name, phone, and PIN.
+ADMIN-USR-017: Guard PIN shall be hashed using bcrypt before storage.
+ADMIN-USR-018: Guards are assigned the "guard" role in society_members.
+3.6  Resident Requirements
+VIEW OWN PROFILE
+RES-USR-001: Residents shall be able to view their own profile: name, email, phone, avatar, and society memberships.
+RES-USR-002: Residents shall not be able to view other users' profile details (name, phone, email).
+UPDATE OWN PROFILE
+RES-USR-003: Residents shall be able to update their own name.
+RES-USR-004: Residents shall be able to update their phone number. The new number must be exactly 10 digits.
+RES-USR-005: Residents shall be able to upload or change their profile picture. Accepted formats: JPEG, PNG, WebP. Maximum size: 5 MB.
+RES-USR-006: Uploading a new avatar shall automatically delete the previous one from cloud storage.
+RES-USR-007: Residents with email-based accounts shall be able to change their password by providing the current password and a new password of minimum 8 characters.
+RES-USR-008: Residents shall not be able to change their own email address.
+AUTHENTICATION
+RES-USR-009: Residents (phone-auth users) shall authenticate via Firebase Phone OTP. The OTP is sent as an SMS via Firebase.
+RES-USR-010: Society Admins shall authenticate via email and password.
+RES-USR-011: Guards shall authenticate via phone number and PIN.
+RES-USR-012: All successful logins shall return a signed JWT with 8-hour expiry.
+RES-USR-013: The FCM device token shall be updatable by the authenticated user for push notification delivery.
+3.7  Business Rules
+BR-USR-001: A user's global role field is either "super_admin" or "user". All society-specific roles (society_admin, executive, guard, owner, resident) are stored in society_members.
+BR-USR-002: The same user account can hold different roles in different societies.
+BR-USR-003: A deactivated user (is_active = false) cannot log in via any authentication method.
+BR-USR-004: Email addresses are unique and case-insensitive. The system normalises emails to lowercase before comparison.
+BR-USR-005: Phone numbers are stored as 10-digit strings without the country code. The country code (+91) is applied by Firebase during OTP dispatch.
+BR-USR-006: When a Society Admin adds a resident whose phone already exists, the system updates the user's display name to the provided name. This name update propagates across all societies that user belongs to.
+BR-USR-007: An avatar_url stores the full CDN URL. On replacement or account deletion, the previous image file is removed from cloud storage.
+3.8  API Endpoints
+Method + Path
+Description
+Auth Required
+POST   /api/auth/login
+Email + password login
+Public
+POST   /api/auth/send-otp
+Request OTP for phone login
+Public
+POST   /api/auth/verify-otp
+Verify OTP and issue JWT
+Public
+POST   /api/auth/guard-login
+Guard phone + PIN login
+Public
+POST   /api/auth/firebase-verify
+Exchange Firebase ID token for Parosi JWT
+Public
+GET    /api/auth/me
+Retrieve own profile and society memberships
+Authenticated
+PATCH  /api/auth/me
+Update own name and phone
+Authenticated
+PATCH  /api/auth/me/avatar
+Upload / replace own avatar
+Authenticated
+POST   /api/auth/change-password
+Change own password
+Authenticated
+PATCH  /api/auth/me/fcm-token
+Save device FCM token
+Authenticated
+GET    /api/societies/:id/residents
+List society residents
+Admin / Designated
+GET    /api/societies/:id/residents/search-users
+Search users to add as residents
+Admin / Designated
+POST   /api/societies/:id/residents
+Add resident to society
+Admin
+PATCH  /api/societies/:id/residents/:memberId
+Update resident membership
+Admin
+DELETE /api/societies/:id/residents/:memberId
+Remove resident from society
+Admin
+GET    /api/admin/users
+List all platform users (Super Admin)
+Super Admin
+POST   /api/admin/users
+Create user (Super Admin)
+Super Admin
+PATCH  /api/admin/users/:id
+Update user (Super Admin)
+Super Admin
+4.  Module 3 — Announcements
+4.1  Overview
+The Announcements module provides a society-scoped notice board. Society Admins and Executives (and designated residents with create permission) can publish, edit, pin, and delete announcements. All active members of the society — including guards — can read announcements. Members of other societies have no access.
+4.2  Data Model
+Field
+Type
+Description
+Constraints
+id
+UUID
+Primary key. Auto-generated.
+System
+society_id
+UUID (FK)
+References the owning society. Cascade-delete on society removal.
+Required
+created_by
+UUID (FK)
+References the user who created the announcement.
+Required
+title
+String
+Short heading of the announcement.
+Required, non-empty after trim
+body
+Text
+Full announcement content.
+Required, non-empty after trim
+pinned
+Boolean
+Pinned announcements appear first in the list.
+Default: false
+image_url
+String
+Optional attached image URL (stored in cloud storage).
+Optional
+created_at / updated_at
+Timestamp
+Auto-managed audit timestamps.
+System
+4.3  Permission Matrix
+Role
+Create
+Read
+Update
+Delete
+Super Admin
+✅
+✅ (all societies)
+✅
+✅
+Society Admin
+✅
+✅ (own society)
+✅
+✅
+Executive
+✅
+✅ (own society)
+✅
+✅
+Designated Resident*
+✅
+✅ (own society)
+❌
+❌
+Guard
+❌
+✅ (own society)
+❌
+❌
+Owner
+❌
+✅ (own society)
+❌
+❌
+Resident
+❌
+✅ (own society)
+❌
+❌
+* Designated Resident: A resident assigned a designation with "announcements: create" permission may create announcements. They may not edit or delete any announcement.
+4.4  Super Admin Requirements
+SA-ANN-001: Super Admin shall have full CRUD access to announcements in any society.
+SA-ANN-002: When operating in the context of a specific society, Super Admin shall see all announcements for that society.
+SA-ANN-003: Super Admin shall be able to create, edit, pin, unpin, and delete any announcement in any society.
+4.5  Society Admin / Executive Requirements
+CREATE ANNOUNCEMENT
+ADMIN-ANN-001: Society Admin and Executive shall be able to create an announcement for their society by providing: title (required), body (required), optional pin toggle, and optional image.
+ADMIN-ANN-002: Title and body fields cannot be empty or whitespace-only. The system shall trim leading and trailing whitespace before storage.
+ADMIN-ANN-003: An optional image may be attached. Accepted formats: JPEG, PNG, WebP, and other image/* MIME types. Maximum file size: 10 MB.
+ADMIN-ANN-004: On successful creation, a push notification shall be sent to all society members who have FCM tokens registered. The notification title shall be the announcement title; the body shall be the first 100 characters of the announcement body.
+ADMIN-ANN-005: Pinned announcements shall appear at the top of the list above all non-pinned announcements.
+EDIT ANNOUNCEMENT
+ADMIN-ANN-006: Society Admin and Executive shall be able to edit any announcement in their society: title, body, and pinned status.
+ADMIN-ANN-007: Editing shall update the updated_at timestamp. The UI shall display "(edited)" for announcements whose updated_at differs from created_at.
+ADMIN-ANN-008: Editing an announcement shall not trigger a new push notification.
+DELETE ANNOUNCEMENT
+ADMIN-ANN-009: Society Admin and Executive shall be able to delete any announcement in their society.
+ADMIN-ANN-010: If the announcement has an attached image, the image file shall be deleted from cloud storage upon announcement deletion.
+ADMIN-ANN-011: A confirmation prompt shall be shown before deletion.
+RESTRICTIONS
+ADMIN-ANN-012: Society Admin and Executive shall not be able to create, view, edit, or delete announcements belonging to other societies.
+4.6  Resident Requirements
+RES-ANN-001: Residents (Owner and Resident roles) shall be able to view all announcements for their society.
+RES-ANN-002: Announcements shall be displayed in order: pinned items first (sorted by creation date descending), then unpinned items (sorted by creation date descending).
+RES-ANN-003: Each announcement card shall display: title, body (full text, preserving line breaks), author name, creation date, and pinned badge (if pinned).
+RES-ANN-004: Attached images shall be displayed within the announcement card.
+RES-ANN-005: Residents shall not see Create, Edit, or Delete controls.
+RES-ANN-006: Residents shall not have access to announcements from societies they are not members of.
+4.7  Business Rules
+BR-ANN-001: Announcements are scoped to a single society. Cross-society access is not permitted.
+BR-ANN-002: Multiple announcements may be pinned simultaneously. Pinned announcements are ordered among themselves by creation date descending.
+BR-ANN-003: Guards may read announcements but cannot create, edit, or delete them.
+BR-ANN-004: A designated resident with "announcements: create" permission may create but not edit or delete announcements. Edit/delete operations require the society_admin or executive role.
+BR-ANN-005: Push notifications for new announcements are dispatched asynchronously and do not block the API response.
+BR-ANN-006: The image upload uses multipart/form-data. Text-only announcements use application/json.
+4.8  API Endpoints
+Method + Path
+Description
+Auth Required
+GET    /api/societies/:id/announcements
+List all announcements for a society
+All members (incl. guards)
+POST   /api/societies/:id/announcements
+Create announcement (with optional image)
+Admin / Designated Create
+PATCH  /api/societies/:id/announcements/:annId
+Edit announcement title, body, pinned
+Admin only
+DELETE /api/societies/:id/announcements/:annId
+Delete announcement and its image
+Admin only
+5.  Module 4 — Community
+5.1  Overview
+The Community module is the social feed of the society. It allows all members (admins, owners, and residents) to create posts, react with likes, and engage through comments. Unlike Announcements — which are admin-broadcast — Community posts are resident-generated content. Guards do not have access to the Community module.
+5.2  Data Model
+Three related entities support this module:
+Post
+Field
+Type
+Description
+Constraints
+id
+UUID
+Primary key.
+System
+society_id
+UUID (FK)
+References the owning society. Cascade-delete.
+Required
+user_id
+UUID (FK)
+References the author. Cascade-delete.
+Required
+content
+Text
+Post body. Maximum 500 characters.
+Required, max 500 chars
+image_url
+String
+Optional image attachment URL.
+Optional
+display_name
+String
+If set, overrides the author's real name in the UI (used for official society posts).
+Optional
+likes_count
+Integer
+Cached count of post likes.
+Default: 0
+comments_count
+Integer
+Cached count of post comments.
+Default: 0
+created_at / updated_at
+Timestamp
+Auto-managed timestamps.
+System
+Post Like
+post_id (FK) + user_id (FK), unique constraint prevents duplicate likes. Cascade-delete on post removal.
+Post Comment
+id, post_id (FK), user_id (FK), content (Text, required), created_at / updated_at. Cascade-delete on post removal.
+5.3  Permission Matrix
+Posts:
+Role
+Create
+Read
+Update
+Delete
+Super Admin
+✅
+✅ (all societies)
+❌
+✅ (any post)
+Society Admin
+✅
+✅ (own society)
+❌
+✅ (any post in own society)
+Executive
+✅
+✅ (own society)
+❌
+✅ (any post in own society)
+Guard
+❌
+❌
+❌
+❌
+Owner
+✅
+✅ (own society)
+❌
+⚠️ own posts only
+Resident
+✅
+✅ (own society)
+❌
+⚠️ own posts only
+Comments:
+Role
+Create
+Read
+Update
+Delete
+Super Admin
+✅
+✅ (all societies)
+❌
+✅ (any comment)
+Society Admin
+✅
+✅ (own society)
+❌
+✅ (any comment in own society)
+Executive
+✅
+✅ (own society)
+❌
+✅ (any comment in own society)
+Guard
+❌
+❌
+❌
+❌
+Owner
+✅
+✅ (own society)
+❌
+⚠️ own comments only
+Resident
+✅
+✅ (own society)
+❌
+⚠️ own comments only
+Note: Posts and comments cannot be edited after creation (no Update operation). Like is a toggle action, not a CRUD entity, so it is excluded from the matrix.
+5.4  Super Admin Requirements
+SA-COM-001: Super Admin shall have the ability to view community posts in any society.
+SA-COM-002: Super Admin shall be able to create posts in any society. The post shall display the author's real name unless display_name is explicitly set.
+SA-COM-003: Super Admin shall be able to delete any post or comment in any society.
+SA-COM-004: Super Admin shall be able to like / unlike any post.
+5.5  Society Admin / Executive Requirements
+CREATE POST
+ADMIN-COM-001: Society Admin and Executive shall be able to create posts in their society.
+ADMIN-COM-002: Posts may contain text content (max 500 characters) and an optional image attachment (JPEG, PNG, WebP, max 10 MB).
+ADMIN-COM-003: Empty post content shall be rejected.
+DELETE POST / COMMENT
+ADMIN-COM-004: Society Admin and Executive shall be able to delete any post within their society, regardless of author.
+ADMIN-COM-005: Deleting a post shall also delete all associated likes and comments (cascade).
+ADMIN-COM-006: If the deleted post has an attached image, the image file shall be removed from cloud storage.
+ADMIN-COM-007: Society Admin and Executive shall be able to delete any comment on any post within their society.
+MODERATION
+ADMIN-COM-008: Society Admin and Executive may delete any post or comment that violates community guidelines. No edit capability is provided for posts or comments authored by others.
+5.6  Resident Requirements
+VIEW FEED
+RES-COM-001: Residents shall see a reverse-chronological feed of all posts in their society.
+RES-COM-002: The feed shall support cursor-based pagination. The cursor parameter is a created_at timestamp; the system returns posts with created_at earlier than the cursor.
+RES-COM-003: Default page size is 20 posts per request.
+RES-COM-004: Each post card shall display: author name (or display_name if set), author avatar (hidden if display_name is set), content, image (if any), like count, comment count, creation date, and a "liked by me" indicator.
+CREATE POST
+RES-COM-005: Residents shall be able to create a post in their society.
+RES-COM-006: Post content is required and must not exceed 500 characters. The UI shall show a live character counter.
+RES-COM-007: Residents may optionally attach one image (JPEG, PNG, WebP, max 10 MB).
+RES-COM-008: Posts are published immediately upon submission.
+DELETE OWN POST
+RES-COM-009: Residents shall be able to delete their own posts.
+RES-COM-010: Residents shall not be able to delete posts authored by other members.
+RES-COM-011: Deleting a post removes it and all its comments and likes.
+LIKES
+RES-COM-012: Residents shall be able to like and unlike any post in their society.
+RES-COM-013: Each resident can like a given post at most once. Attempting to like an already-liked post shall toggle to unlike.
+RES-COM-014: The like count on the post shall update immediately on the UI.
+COMMENTS
+RES-COM-015: Residents shall be able to view all comments on any post in their society.
+RES-COM-016: Residents shall be able to add a comment to any post. Comment content is required.
+RES-COM-017: Residents shall be able to delete their own comments.
+RES-COM-018: Residents shall not be able to delete comments authored by other members.
+RES-COM-019: Comments are displayed in chronological order (oldest first).
+RES-COM-020: Each comment shall display: author name, author avatar, content, and creation date.
+RESTRICTIONS
+RES-COM-021: Residents shall not be able to edit a post or comment after creation.
+RES-COM-022: Residents shall not have access to community content from societies they are not members of.
+5.7  Business Rules
+BR-COM-001: Guards do not have access to the Community module. The community feed and post/comment endpoints return 403 for guard-role members.
+BR-COM-002: Posts belong to a society and are never shared or visible across societies.
+BR-COM-003: Post content has a maximum of 500 characters, enforced at both API and UI levels.
+BR-COM-004: The likes_count and comments_count fields are maintained as denormalised counters using increment/decrement operations. They are not recalculated from scratch on each read.
+BR-COM-005: The post feed uses cursor-based pagination (not offset/limit) to support infinite scroll without page-skipping issues.
+BR-COM-006: The display_name field overrides the author's real name when set. When display_name is set, the author's avatar is also hidden. This is used for system-generated or official posts (e.g., welcome post from "Team Parosi").
+BR-COM-007: Images attached to posts are uploaded to cloud storage (Cloudflare R2). On post deletion, the associated image is removed from storage.
+BR-COM-008: Post and comment deletion is permanent (hard delete), not soft-delete.
+5.8  API Endpoints
+Method + Path
+Description
+Auth Required
+GET    /api/societies/:id/posts
+List posts (paginated, cursor-based)
+Members (no guards)
+POST   /api/societies/:id/posts
+Create post (text or text + image)
+Members (no guards)
+DELETE /api/societies/:id/posts/:postId
+Delete post
+Own post or Admin
+POST   /api/societies/:id/posts/:postId/like
+Toggle like on a post
+Members (no guards)
+GET    /api/societies/:id/posts/:postId/comments
+List comments for a post
+Members (no guards)
+POST   /api/societies/:id/posts/:postId/comments
+Add a comment
+Members (no guards)
+DELETE /api/societies/:id/posts/:postId/comments/:commentId
+Delete a comment
+Own comment or Admin
+6.  Non-Functional Requirements
+Performance
+API responses for list operations shall return within 500 ms under normal load.
+Image uploads shall complete within 5 seconds for files up to 10 MB.
+The community feed shall support 100 concurrent readers per society without degradation.
+Security
+All API endpoints (except /auth/* and /health) shall require a valid JWT.
+JWTs shall be signed with a server-side secret (min 32 characters). The fallback development secret must not be used in production.
+All passwords and PINs shall be stored as bcrypt hashes (min cost 10). Plaintext values shall never be logged or persisted.
+Auth endpoints (/login, /send-otp, /verify-otp, /guard-login) shall be protected by rate limiting (max 10 requests per 15 minutes per IP).
+Cross-society data access shall be prevented at the API layer via society membership verification on every request.
+Scalability
+The platform is multi-tenant. Each society is an isolated data boundary. No data shall leak between societies.
+The system shall support a minimum of 500 concurrent societies.
+Availability
+The backend API shall target 99.5% uptime on a monthly basis.
+Scheduled jobs (auto invoice generation) shall be idempotent — running twice in the same month shall not create duplicate bills.
+Accessibility
+Web UI shall be usable at viewport widths of 1280px and above.
+All form inputs shall have visible labels.
+Error messages shall be displayed inline, not only as browser alerts.
+Internationalisation
+Dates shall be displayed in Indian format: DD Month YYYY (e.g., 12 May 2026).
+Monetary amounts shall be prefixed with the ₹ symbol.
+All content is currently in English only. Multi-language support is out of scope for v1.
+7.  Assumptions & Constraints
+Assumptions
+All resident users have an Indian mobile number (10 digits, +91 country code).
+Society Admins have a valid email address for email/password login.
+Firebase Phone Authentication is the sole OTP mechanism for residents and guards.
+Cloud storage (Cloudflare R2) is available and configured for all environments.
+Push notifications are delivered via Firebase Cloud Messaging (FCM); delivery is best-effort.
+A single PostgreSQL database instance serves all societies (row-level multi-tenancy).
+Constraints
+Image upload is limited to 5 MB for avatars and 10 MB for announcement/post images.
+Invoice generation day and due day must be between 1 and 28 (no 29, 30, 31) to remain valid for all months.
+Post content is limited to 500 characters.
+OTP codes expire after 10 minutes.
+JWT tokens expire after 8 hours. No refresh token mechanism exists in v1.
+The community feed does not support editing of posts or comments after creation.
+Guards cannot access the Community or Finance modules.
+The handle field of a society is immutable after creation.
+8.  Revision History
+Version
+Date
+Author
+Changes
+1.0
+12 May 2026
+Parosi Product Team
+Initial draft — Modules 1–4: Account/Society, Users, Announcements, Community.
+End of Document
