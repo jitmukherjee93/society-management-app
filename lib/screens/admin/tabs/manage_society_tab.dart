@@ -182,6 +182,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     bool isBikeOwner,
     String bikeReg, {
     String role = 'Owner',
+    String? email,
     String? rentAgreementUrl,
     String? rentAgreementFileName,
   }) async {
@@ -190,6 +191,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         : flatNo;
 
     final flatEmail = '${docId.toLowerCase().replaceAll(' ', '')}@ramkrishnapuram.com';
+    final customEmail = (email != null && email.trim().isNotEmpty) ? email.trim().toLowerCase() : flatEmail;
 
     // 0. Automatically create user account in Firebase Auth without signing out current admin
     String? newUid;
@@ -236,7 +238,8 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       'name': name,
       'phone': '+91$mobile',
       'whatsapp': whatsapp,
-      'email': flatEmail,
+      'username': flatEmail,
+      'email': customEmail,
       'flatNumber': docId,
       'block': block,
       'role': 'RESIDENT',
@@ -498,6 +501,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     final formKey = GlobalKey<FormState>();
     final flatCtrl = TextEditingController();
     final nameCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
     final waCtrl = TextEditingController();
     final mobileCtrl = TextEditingController();
     final carRegCtrl = TextEditingController();
@@ -575,6 +579,18 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                           v!.trim().isEmpty ? (hasAttemptedSubmit ? 'Required' : null) : null,
                     ),
                     const SizedBox(height: 12),
+                    TextFormField(
+                      controller: emailCtrl,
+                      decoration: kInput('Email Address (Optional)', icon: Icons.email),
+                      keyboardType: TextInputType.emailAddress,
+                      validator: (v) {
+                        if (v != null && v.trim().isNotEmpty && !v.contains('@')) {
+                          return 'Please enter a valid email';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -635,6 +651,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                     carRegCtrl.text.trim(),
                     isBikeOwner == 'Yes',
                     bikeRegCtrl.text.trim(),
+                    email: emailCtrl.text.trim(),
                   );
                   if (mounted) {
                     scaffoldMessenger.showSnackBar(
@@ -659,6 +676,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final formKey = GlobalKey<FormState>();
     final nameCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
     final waCtrl = TextEditingController();
     final mobileCtrl = TextEditingController();
     final carRegCtrl = TextEditingController();
@@ -693,6 +711,18 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                       decoration: kInput('Rentee Name *', icon: Icons.badge),
                       validator: (v) =>
                           v!.trim().isEmpty ? (hasAttemptedSubmit ? 'Required' : null) : null,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: emailCtrl,
+                      decoration: kInput('Email Address (Optional)', icon: Icons.email),
+                      keyboardType: TextInputType.emailAddress,
+                      validator: (v) {
+                        if (v != null && v.trim().isNotEmpty && !v.contains('@')) {
+                          return 'Please enter a valid email';
+                        }
+                        return null;
+                      },
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -820,6 +850,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                     isBikeOwner == 'Yes',
                     bikeRegCtrl.text.trim(),
                     role: 'Rentee',
+                    email: emailCtrl.text.trim(),
                     rentAgreementUrl: downloadUrl,
                     rentAgreementFileName: fileName,
                   );
@@ -880,6 +911,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final formKey = GlobalKey<FormState>();
     final nameCtrl = TextEditingController(text: currentData['name']);
+    final emailCtrl = TextEditingController(text: currentData['email']?.toString() ?? '');
     final waCtrl = TextEditingController(text: currentData['whatsapp']?.toString());
 
     String rawPhone = currentData['phone']?.toString() ?? '';
@@ -916,6 +948,18 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                       decoration: kInput('Name *', icon: Icons.badge),
                       validator: (v) =>
                           v!.trim().isEmpty ? (hasAttemptedSubmit ? 'Required' : null) : null,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: emailCtrl,
+                      decoration: kInput('Email Address (Optional)', icon: Icons.email),
+                      keyboardType: TextInputType.emailAddress,
+                      validator: (v) {
+                        if (v != null && v.trim().isNotEmpty && !v.contains('@')) {
+                          return 'Please enter a valid email';
+                        }
+                        return null;
+                      },
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -967,10 +1011,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                 if (!formKey.currentState!.validate()) return;
                 Navigator.pop(ctx);
                 try {
-                  await FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(memberId)
-                      .update({
+                  final updateData = <String, dynamic>{
                     'name': nameCtrl.text.trim(),
                     'phone': '+91${mobileCtrl.text.trim()}',
                     'whatsapp': waCtrl.text.trim(),
@@ -978,7 +1019,14 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                     'carReg': isCarOwner == 'Yes' ? carRegCtrl.text.trim() : '',
                     'isBikeOwner': isBikeOwner == 'Yes',
                     'bikeReg': isBikeOwner == 'Yes' ? bikeRegCtrl.text.trim() : '',
-                  });
+                  };
+                  if (emailCtrl.text.trim().isNotEmpty) {
+                    updateData['email'] = emailCtrl.text.trim().toLowerCase();
+                  }
+                  await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(memberId)
+                      .update(updateData);
                   if (mounted) {
                     scaffoldMessenger.showSnackBar(
                         const SnackBar(content: Text('Member Updated Successfully')));
@@ -1266,6 +1314,8 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text('${resData['phone'] ?? ''} • $displayRole'),
+                                      if ((resData['email']?.toString() ?? '').isNotEmpty)
+                                        Text('Email: ${resData['email']}'),
                                       if ((resData['whatsapp']?.toString() ?? '').isNotEmpty)
                                         Text('WA: ${resData['whatsapp']}'),
                                       if (isCarOwner) Text('Car: ${resData['carReg']}'),

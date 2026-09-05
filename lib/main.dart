@@ -77,7 +77,6 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   
-  bool _isSignIn = true;
   bool _isPasswordVisible = false;
   bool _isLoading = false;
   String? _errorMessage;
@@ -89,6 +88,47 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
     super.dispose();
   }
 
+  Future<String?> _resolveAuthEmail(String input) async {
+    final cleanInput = input.trim().toLowerCase();
+    if (cleanInput.isEmpty) return null;
+
+    // 1. If user typed full email address directly
+    if (cleanInput.contains('@')) {
+      // First check if a user record has this personal email stored
+      final snapByEmail = await FirebaseFirestore.instance
+          .collection('users')
+          .where('email', isEqualTo: cleanInput)
+          .get();
+      if (snapByEmail.docs.isNotEmpty) {
+        final data = snapByEmail.docs.first.data();
+        final username = data['username']?.toString();
+        if (username != null && username.isNotEmpty) {
+          return username; // Return the primary Auth email/username
+        }
+      }
+      return cleanInput;
+    }
+
+    // 2. If user typed username or flatId (e.g. "b-204" or "b-204@ramkrishnapuram.com")
+    final flatEmail = '${cleanInput.replaceAll(' ', '')}@ramkrishnapuram.com';
+
+    // Verify if matching user or flat exists in Firestore
+    final snapByFlat = await FirebaseFirestore.instance
+        .collection('users')
+        .where('flatNumber', isEqualTo: cleanInput.toUpperCase())
+        .get();
+
+    if (snapByFlat.docs.isNotEmpty) {
+      final data = snapByFlat.docs.first.data();
+      final username = data['username']?.toString();
+      if (username != null && username.isNotEmpty) {
+        return username;
+      }
+    }
+
+    return flatEmail;
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     
@@ -97,21 +137,19 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
       _errorMessage = null;
     });
 
-    final email = _emailController.text.trim().toLowerCase();
+    final input = _emailController.text.trim();
     final password = _passwordController.text.trim();
 
     try {
-      if (_isSignIn) {
-        await FirebaseAuth.instance.signInWithEmailAndPassword(
-          email: email,
-          password: password,
-        );
-      } else {
-        await FirebaseAuth.instance.createUserWithEmailAndPassword(
-          email: email,
-          password: password,
-        );
+      final authEmail = await _resolveAuthEmail(input);
+      if (authEmail == null || authEmail.isEmpty) {
+        throw Exception('Please enter a valid Username or Email.');
       }
+
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: authEmail,
+        password: password,
+      );
     } on FirebaseAuthException catch (e) {
       if (mounted) {
         setState(() {
@@ -134,18 +172,42 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
   }
 
   Future<void> _resetPassword() async {
-    final email = _emailController.text.trim();
-    if (email.isEmpty) {
+    final input = _emailController.text.trim();
+    if (input.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter your email address first.')),
+        const SnackBar(content: Text('Please enter your Username or Email address first.')),
       );
       return;
     }
+
     try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      final cleanInput = input.toLowerCase();
+      String targetEmail = cleanInput;
+
+      // If input is not an explicit email or is a username, lookup personal email or username
+      if (!cleanInput.contains('@')) {
+        final resolved = await _resolveAuthEmail(cleanInput);
+        if (resolved != null) targetEmail = resolved;
+      }
+
+      // Check if custom email exists for this user in Firestore to send reset email there
+      final userSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('username', isEqualTo: targetEmail)
+          .get();
+
+      if (userSnap.docs.isNotEmpty) {
+        final data = userSnap.docs.first.data();
+        final personalEmail = data['email']?.toString();
+        if (personalEmail != null && personalEmail.contains('@')) {
+          targetEmail = personalEmail;
+        }
+      }
+
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: targetEmail);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Password reset email sent! Check your inbox.')),
+          SnackBar(content: Text('Password reset email sent to $targetEmail! Check your inbox.')),
         );
       }
     } catch (e) {
@@ -187,7 +249,7 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        _isSignIn ? 'Welcome back! Sign in to continue.' : 'Create an account to get started.',
+                        'Welcome back! Sign in to continue.',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.grey[600]),
                       ),
@@ -219,16 +281,13 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
                         decoration: const InputDecoration(
-                          labelText: 'Email Address',
-                          prefixIcon: Icon(Icons.email_outlined),
+                          labelText: 'Username / Email Address',
+                          prefixIcon: Icon(Icons.person_outline),
                           border: OutlineInputBorder(),
                         ),
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
-                            return 'Please enter your email';
-                          }
-                          if (!value.contains('@')) {
-                            return 'Please enter a valid email';
+                            return 'Please enter your username or email';
                           }
                           return null;
                         },
@@ -257,23 +316,16 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
                           if (value == null || value.trim().isEmpty) {
                             return 'Please enter your password';
                           }
-                          if (!_isSignIn && value.length < 6) {
-                            return 'Password must be at least 6 characters';
-                          }
                           return null;
                         },
                       ),
-                      if (_isSignIn) ...[
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: TextButton(
-                            onPressed: _resetPassword,
-                            child: const Text('Forgot Password?'),
-                          ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: _resetPassword,
+                          child: const Text('Forgot Password?'),
                         ),
-                      ] else ...[
-                        const SizedBox(height: 16),
-                      ],
+                      ),
                       SizedBox(
                         width: double.infinity,
                         height: 48,
@@ -295,27 +347,11 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              : Text(
-                                  _isSignIn ? 'Sign In' : 'Sign Up',
-                                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              : const Text(
+                                  'Sign In',
+                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                                 ),
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(_isSignIn ? "Don't have an account?" : "Already have an account?"),
-                          TextButton(
-                            onPressed: () {
-                              setState(() {
-                                _isSignIn = !_isSignIn;
-                                _errorMessage = null;
-                              });
-                            },
-                            child: Text(_isSignIn ? 'Sign Up' : 'Sign In'),
-                          ),
-                        ],
                       ),
                     ],
                   ),
