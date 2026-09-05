@@ -264,6 +264,41 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
   }
 
   Future<void> _removeFlat(String flatId) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red, size: 28),
+            SizedBox(width: 8),
+            Text('Confirm Flat Deletion'),
+          ],
+        ),
+        content: Text(
+          'Are you sure you want to delete flat "$flatId"?\n\n'
+          'This will permanently remove the flat, all assigned members (owners/rentees), '
+          'their user accounts, uploaded documents, and maintenance dues.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete Flat'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+    if (!mounted) return;
+
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     try {
       final cleanId = flatId.trim().toLowerCase();
@@ -308,6 +343,53 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
   }
 
   Future<void> _removeMember(String memberId, Map<String, dynamic> resData) async {
+    final memberName = resData['name'] ?? 'Member';
+    final roleStr = (resData['role'] ?? '').toString();
+    final occStr = (resData['occupantType'] ?? '').toString();
+    final hasAgreement = resData['rentAgreementUrl'] != null &&
+        resData['rentAgreementUrl'].toString().isNotEmpty;
+    final bool isRentee = resData['isRentee'] == true ||
+        occStr == 'Rentee' ||
+        occStr == 'Resident' ||
+        roleStr == 'Rentee' ||
+        roleStr == 'Resident' ||
+        hasAgreement;
+    final displayRole = isRentee ? 'Rentee' : 'Owner';
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 28),
+            const SizedBox(width: 8),
+            Text('Confirm $displayRole Deletion'),
+          ],
+        ),
+        content: Text(
+          'Are you sure you want to delete $displayRole "$memberName"?\n\n'
+          'This will permanently delete their account, details, and associated documents.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete Member'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+    if (!mounted) return;
+
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     try {
       final flatId = resData['flatNumber']?.toString() ?? '';
@@ -647,7 +729,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                     const SizedBox(height: 24),
                     const Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('Rent Agreement (Optional)',
+                      child: Text("Owner's NOC/Rent Agreement/Contract *",
                           style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
                     const SizedBox(height: 8),
@@ -672,9 +754,11 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            rentAgreementFile?.name ?? 'No file selected (Optional)',
+                            rentAgreementFile?.name ?? 'No file selected *',
                             style: TextStyle(
-                              color: rentAgreementFile != null ? Colors.green : Colors.grey,
+                              color: rentAgreementFile != null
+                                  ? Colors.green
+                                  : (hasAttemptedSubmit ? Colors.red : Colors.grey),
                               fontStyle: rentAgreementFile != null
                                   ? FontStyle.normal
                                   : FontStyle.italic,
@@ -689,6 +773,17 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                           ),
                       ],
                     ),
+                    if (hasAttemptedSubmit && rentAgreementFile == null)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 4),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            "Owner's NOC/Rent Agreement/Contract is required",
+                            style: TextStyle(color: Colors.red, fontSize: 12),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -703,7 +798,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                   backgroundColor: Colors.deepPurple, foregroundColor: Colors.white),
               onPressed: () async {
                 setDS(() => hasAttemptedSubmit = true);
-                if (!formKey.currentState!.validate()) return;
+                if (!formKey.currentState!.validate() || rentAgreementFile == null) return;
                 setState(() => _isUploading = true);
                 renteeAdded = true;
                 Navigator.pop(ctx);

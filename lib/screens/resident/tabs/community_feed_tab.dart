@@ -34,7 +34,7 @@ class _CommunityFeedTabState extends State<CommunityFeedTab> {
       });
 
       _postController.clear();
-      FocusScope.of(context).unfocus();
+      if (mounted) FocusScope.of(context).unfocus();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
