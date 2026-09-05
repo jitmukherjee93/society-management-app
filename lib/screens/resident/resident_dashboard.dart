@@ -1,7 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'tabs/community_feed_tab.dart';
+import '../../widgets/pdf_iframe.dart';
 
 class ResidentDashboard extends StatefulWidget {
   const ResidentDashboard({super.key});
@@ -67,20 +71,947 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
   }
 }
 
-class HomeTab extends StatelessWidget {
+class HomeTab extends StatefulWidget {
   const HomeTab({super.key});
 
   @override
+  State<HomeTab> createState() => _HomeTabState();
+}
+
+class _HomeTabState extends State<HomeTab> {
+  // Store the future so it's computed ONCE and never re-runs on rebuild
+  late Future<DocumentReference?> _docRefFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final userEmail = user.email?.toLowerCase();
+      final flatPrefix = userEmail?.contains('@') == true
+          ? userEmail!.split('@').first.toLowerCase()
+          : null;
+      _docRefFuture = _resolveUserDocRef(user.uid, userEmail, flatPrefix);
+    } else {
+      _docRefFuture = Future.value(null);
+    }
+  }
+
+  void _editDetailsDialog(BuildContext context, String docId, Map<String, dynamic> data) {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final formKey = GlobalKey<FormState>();
+
+    String rawPhone = data['phone']?.toString() ?? '';
+    if (rawPhone.startsWith('+91')) rawPhone = rawPhone.substring(3);
+
+    final mobileCtrl = TextEditingController(text: rawPhone);
+    final waCtrl = TextEditingController(text: data['whatsapp']?.toString() ?? '');
+    final emailCtrl = TextEditingController(text: data['email']?.toString() ?? '');
+
+    bool isCarOwner = data['isCarOwner'] == true;
+    bool isBikeOwner = data['isBikeOwner'] == true;
+    final currentCarReg = data['carReg']?.toString().trim() ?? '';
+    final currentBikeReg = data['bikeReg']?.toString().trim() ?? '';
+    final carRegCtrl = TextEditingController(text: currentCarReg);
+    final bikeRegCtrl = TextEditingController(text: currentBikeReg);
+
+    PlatformFile? carRcFile;
+    PlatformFile? bikeRcFile;
+    bool isSaving = false;
+
+    Future<String?> uploadRcDoc(PlatformFile file, String prefix) async {
+      final fileName = file.name;
+      final ref = FirebaseStorage.instance
+          .ref('vehicle_rc/${prefix}_${DateTime.now().millisecondsSinceEpoch}_$fileName');
+      final contentType = fileName.toLowerCase().endsWith('.pdf')
+          ? 'application/pdf'
+          : fileName.toLowerCase().endsWith('.png')
+              ? 'image/png'
+              : 'image/jpeg';
+      final bytes = await file.readAsBytes();
+      await ref.putString(
+        base64Encode(bytes),
+        format: PutStringFormat.base64,
+        metadata: SettableMetadata(contentType: contentType),
+      );
+      return ref.getDownloadURL();
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (_, setDS) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.edit_note, color: Colors.teal),
+              SizedBox(width: 8),
+              Text('Edit My Details'),
+            ],
+          ),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Contact Information',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.teal),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: mobileCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Mobile Number *',
+                        prefixIcon: Icon(Icons.phone),
+                        prefixText: '+91 ',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.phone,
+                      validator: (v) {
+                        final val = v?.trim() ?? '';
+                        if (val.isEmpty) return 'Mobile number is required';
+                        if (val.length != 10 || !RegExp(r'^[0-9]+$').hasMatch(val)) {
+                          return 'Enter a valid 10-digit number';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: waCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'WhatsApp Number *',
+                        prefixIcon: Icon(Icons.chat),
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.phone,
+                      validator: (v) {
+                        final val = v?.trim() ?? '';
+                        if (val.isEmpty) return 'WhatsApp number is required';
+                        if (val.length != 10 || !RegExp(r'^[0-9]+$').hasMatch(val)) {
+                          return 'Enter a valid 10-digit number';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: emailCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Email Address *',
+                        prefixIcon: Icon(Icons.email),
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.emailAddress,
+                      validator: (v) {
+                        final val = v?.trim() ?? '';
+                        if (val.isEmpty) return 'Email is required';
+                        if (!val.contains('@')) return 'Enter a valid email address';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    const Divider(),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Vehicle Details',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.teal),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Note: Updating vehicle numbers requires uploading RC/Blue Book copy for Admin approval.',
+                      style: TextStyle(fontSize: 12, color: Colors.black54, fontStyle: FontStyle.italic),
+                    ),
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Do you own a 4-Wheeler (Car)?'),
+                      secondary: const Icon(Icons.directions_car, color: Colors.teal),
+                      value: isCarOwner,
+                      activeThumbColor: Colors.teal,
+                      onChanged: (val) {
+                        setDS(() => isCarOwner = val);
+                      },
+                    ),
+                    if (isCarOwner) ...[
+                      const SizedBox(height: 4),
+                      TextFormField(
+                        controller: carRegCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Car Registration No. *',
+                          hintText: 'e.g. WB 02 AB 1234',
+                          prefixIcon: Icon(Icons.pin),
+                          border: OutlineInputBorder(),
+                        ),
+                        textCapitalization: TextCapitalization.characters,
+                        validator: (v) {
+                          if (isCarOwner && (v == null || v.trim().isEmpty)) {
+                            return 'Please enter car registration number';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      // RC upload button for Car if reg changed or newly added
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.teal.shade200),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.upload_file, size: 20, color: Colors.teal),
+                                const SizedBox(width: 8),
+                                const Expanded(
+                                  child: Text(
+                                    'Upload Car RC / Blue Book Copy *',
+                                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                                  ),
+                                ),
+                                TextButton.icon(
+                                  icon: const Icon(Icons.attach_file, size: 16),
+                                  label: Text(carRcFile == null ? 'Select File' : 'Change'),
+                                  onPressed: () async {
+                                    final res = await FilePicker.pickFiles(
+                                      type: FileType.custom,
+                                      allowedExtensions: ['pdf', 'png', 'jpg', 'jpeg'],
+                                    );
+                                    if (res.isNotEmpty) {
+                                      setDS(() => carRcFile = res.first);
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                            if (carRcFile != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  'Selected: ${carRcFile!.name}',
+                                  style: const TextStyle(fontSize: 12, color: Colors.teal, fontWeight: FontWeight.bold),
+                                ),
+                              )
+                            else if (data['pendingCarReg'] != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  'Pending approval: ${data['pendingCarReg']}',
+                                  style: const TextStyle(fontSize: 12, color: Colors.orange, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Do you own a 2-Wheeler (Bike/Scooter)?'),
+                      secondary: const Icon(Icons.two_wheeler, color: Colors.teal),
+                      value: isBikeOwner,
+                      activeThumbColor: Colors.teal,
+                      onChanged: (val) {
+                        setDS(() => isBikeOwner = val);
+                      },
+                    ),
+                    if (isBikeOwner) ...[
+                      const SizedBox(height: 4),
+                      TextFormField(
+                        controller: bikeRegCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Bike Registration No. *',
+                          hintText: 'e.g. WB 02 CD 5678',
+                          prefixIcon: Icon(Icons.pin),
+                          border: OutlineInputBorder(),
+                        ),
+                        textCapitalization: TextCapitalization.characters,
+                        validator: (v) {
+                          if (isBikeOwner && (v == null || v.trim().isEmpty)) {
+                            return 'Please enter bike registration number';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      // RC upload button for Bike
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.teal.shade200),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.upload_file, size: 20, color: Colors.teal),
+                                const SizedBox(width: 8),
+                                const Expanded(
+                                  child: Text(
+                                    'Upload Bike RC / Blue Book Copy *',
+                                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                                  ),
+                                ),
+                                TextButton.icon(
+                                  icon: const Icon(Icons.attach_file, size: 16),
+                                  label: Text(bikeRcFile == null ? 'Select File' : 'Change'),
+                                  onPressed: () async {
+                                    final res = await FilePicker.pickFiles(
+                                      type: FileType.custom,
+                                      allowedExtensions: ['pdf', 'png', 'jpg', 'jpeg'],
+                                    );
+                                    if (res.isNotEmpty) {
+                                      setDS(() => bikeRcFile = res.first);
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                            if (bikeRcFile != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  'Selected: ${bikeRcFile!.name}',
+                                  style: const TextStyle(fontSize: 12, color: Colors.teal, fontWeight: FontWeight.bold),
+                                ),
+                              )
+                            else if (data['pendingBikeReg'] != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  'Pending approval: ${data['pendingBikeReg']}',
+                                  style: const TextStyle(fontSize: 12, color: Colors.orange, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSaving ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton.icon(
+              icon: isSaving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save),
+              label: const Text('Save Changes'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.teal,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: isSaving
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+
+                      final newCarReg = isCarOwner ? carRegCtrl.text.trim().toUpperCase() : '';
+                      final newBikeReg = isBikeOwner ? bikeRegCtrl.text.trim().toUpperCase() : '';
+                      final carChanged = newCarReg.isNotEmpty && newCarReg != currentCarReg;
+                      final bikeChanged = newBikeReg.isNotEmpty && newBikeReg != currentBikeReg;
+
+                      if (carChanged && carRcFile == null && data['pendingCarRcUrl'] == null) {
+                        scaffoldMessenger.showSnackBar(
+                          const SnackBar(content: Text('Please upload RC / Blue Book copy for Car update.')),
+                        );
+                        return;
+                      }
+                      if (bikeChanged && bikeRcFile == null && data['pendingBikeRcUrl'] == null) {
+                        scaffoldMessenger.showSnackBar(
+                          const SnackBar(content: Text('Please upload RC / Blue Book copy for Bike update.')),
+                        );
+                        return;
+                      }
+
+                      setDS(() => isSaving = true);
+                      try {
+                        final updatePayload = <String, dynamic>{
+                          'phone': '+91${mobileCtrl.text.trim()}',
+                          'whatsapp': waCtrl.text.trim(),
+                          'email': emailCtrl.text.trim().toLowerCase(),
+                        };
+
+                        final residentName = data['name'] ?? 'Resident';
+                        final flatNum = data['flatNumber'] ?? 'Unknown Flat';
+                        final blockStr = data['block'] ?? '';
+                        final flatDisplay = blockStr.isNotEmpty && !flatNum.toString().contains('-')
+                            ? '$blockStr-$flatNum'
+                            : flatNum.toString();
+
+                        if (!isCarOwner) {
+                          updatePayload['isCarOwner'] = false;
+                          updatePayload['carReg'] = '';
+                          updatePayload['pendingCarReg'] = FieldValue.delete();
+                          updatePayload['pendingCarRcUrl'] = FieldValue.delete();
+                          updatePayload['pendingCarRcFileName'] = FieldValue.delete();
+                          updatePayload['carRejectionReason'] = FieldValue.delete();
+                        } else if (carChanged) {
+                          String? carRcUrl;
+                          if (carRcFile != null) {
+                            carRcUrl = await uploadRcDoc(carRcFile!, 'car');
+                          }
+                          updatePayload['pendingCarReg'] = newCarReg;
+                          if (carRcUrl != null) {
+                            updatePayload['pendingCarRcUrl'] = carRcUrl;
+                            updatePayload['pendingCarRcFileName'] = carRcFile!.name;
+                          }
+                          updatePayload['carRejectionReason'] = FieldValue.delete();
+
+                          // Notify admin
+                          await FirebaseFirestore.instance.collection('notifications').add({
+                            'targetRole': 'ADMIN',
+                            'type': 'VEHICLE_UPDATE_REQUEST',
+                            'title': 'Car Number Update Request',
+                            'message': '$residentName ($flatDisplay) requested to update Car number to $newCarReg with RC copy.',
+                            'flatNumber': flatDisplay,
+                            'userId': docId,
+                            'vehicleType': 'Car',
+                            'requestedReg': newCarReg,
+                            'createdAt': FieldValue.serverTimestamp(),
+                          });
+                        }
+
+                        if (!isBikeOwner) {
+                          updatePayload['isBikeOwner'] = false;
+                          updatePayload['bikeReg'] = '';
+                          updatePayload['pendingBikeReg'] = FieldValue.delete();
+                          updatePayload['pendingBikeRcUrl'] = FieldValue.delete();
+                          updatePayload['pendingBikeRcFileName'] = FieldValue.delete();
+                          updatePayload['bikeRejectionReason'] = FieldValue.delete();
+                        } else if (bikeChanged) {
+                          String? bikeRcUrl;
+                          if (bikeRcFile != null) {
+                            bikeRcUrl = await uploadRcDoc(bikeRcFile!, 'bike');
+                          }
+                          updatePayload['pendingBikeReg'] = newBikeReg;
+                          if (bikeRcUrl != null) {
+                            updatePayload['pendingBikeRcUrl'] = bikeRcUrl;
+                            updatePayload['pendingBikeRcFileName'] = bikeRcFile!.name;
+                          }
+                          updatePayload['bikeRejectionReason'] = FieldValue.delete();
+
+                          // Notify admin
+                          await FirebaseFirestore.instance.collection('notifications').add({
+                            'targetRole': 'ADMIN',
+                            'type': 'VEHICLE_UPDATE_REQUEST',
+                            'title': 'Bike Number Update Request',
+                            'message': '$residentName ($flatDisplay) requested to update Bike number to $newBikeReg with RC copy.',
+                            'flatNumber': flatDisplay,
+                            'userId': docId,
+                            'vehicleType': 'Bike',
+                            'requestedReg': newBikeReg,
+                            'createdAt': FieldValue.serverTimestamp(),
+                          });
+                        }
+
+                        // If user only checked isCarOwner/isBikeOwner without reg change
+                        if (isCarOwner && !carChanged && data['carReg'] == null) {
+                          updatePayload['isCarOwner'] = true;
+                          updatePayload['carReg'] = newCarReg;
+                        }
+                        if (isBikeOwner && !bikeChanged && data['bikeReg'] == null) {
+                          updatePayload['isBikeOwner'] = true;
+                          updatePayload['bikeReg'] = newBikeReg;
+                        }
+
+                        await FirebaseFirestore.instance.collection('users').doc(docId).update(updatePayload);
+
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        scaffoldMessenger.showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              carChanged || bikeChanged
+                                  ? 'Details saved! Vehicle update submitted for Admin approval.'
+                                  : 'Details updated successfully!',
+                            ),
+                          ),
+                        );
+                      } catch (e) {
+                        setDS(() => isSaving = false);
+                        scaffoldMessenger.showSnackBar(
+                          SnackBar(content: Text('Failed to update details: $e')),
+                        );
+                      }
+                    },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const Center(child: Text('No logged in user'));
+    }
+
+    return FutureBuilder<DocumentReference?>(
+      future: _docRefFuture, // use stored future — never re-runs on rebuild
+      builder: (context, futureSnap) {
+        if (futureSnap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final docRef = futureSnap.data;
+        if (docRef == null) {
+          return _buildHomeLayout(context, null, null);
+        }
+
+        return StreamBuilder<DocumentSnapshot>(
+          stream: docRef.snapshots(),
+          builder: (context, docSnap) {
+            if (docSnap.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (!docSnap.hasData || !docSnap.data!.exists) {
+              return _buildHomeLayout(context, null, null);
+            }
+            final doc = docSnap.data!;
+            return _buildHomeLayout(context, doc.id, doc.data() as Map<String, dynamic>);
+          },
+        );
+      },
+    );
+  }
+
+  /// One-time async lookup: finds the user's Firestore document reference via uid,
+  /// username, email, or flat-prefix document ID. Also writes the uid back to the
+  /// document so future lookups always use the fast uid path.
+  Future<DocumentReference?> _resolveUserDocRef(
+    String uid,
+    String? userEmail,
+    String? flatPrefix,
+  ) async {
+    final fs = FirebaseFirestore.instance;
+
+    // 1. Try uid field match
+    final uidSnap = await fs.collection('users').where('uid', isEqualTo: uid).limit(1).get();
+    if (uidSnap.docs.isNotEmpty) return uidSnap.docs.first.reference;
+
+    if (userEmail == null) return null;
+
+    // 2. Try username == userEmail (flat email like b-312@ramkrishnapuram.com)
+    final usernameSnap =
+        await fs.collection('users').where('username', isEqualTo: userEmail).limit(1).get();
+    if (usernameSnap.docs.isNotEmpty) {
+      final ref = usernameSnap.docs.first.reference;
+      ref.update({'uid': uid}).catchError((_) {});
+      return ref;
+    }
+
+    // 3. Try email == userEmail (personal email)
+    final emailSnap =
+        await fs.collection('users').where('email', isEqualTo: userEmail).limit(1).get();
+    if (emailSnap.docs.isNotEmpty) {
+      final ref = emailSnap.docs.first.reference;
+      ref.update({'uid': uid}).catchError((_) {});
+      return ref;
+    }
+
+    // 4. Try document ID == flatPrefix (e.g. "b-312")
+    if (flatPrefix != null) {
+      final docSnap = await fs.collection('users').doc(flatPrefix).get();
+      if (docSnap.exists) {
+        docSnap.reference.update({'uid': uid}).catchError((_) {});
+        return docSnap.reference;
+      }
+    }
+
+    return null;
+  }
+
+  Widget _buildHomeLayout(BuildContext context, String? docId, Map<String, dynamic>? data) {
+    final name = data?['name'] ?? 'Resident';
+    final flatNumber = data?['flatNumber'] ?? 'N/A';
+    final block = data?['block'] ?? '';
+    final flatLabel = block.isNotEmpty && !flatNumber.toString().contains('-')
+        ? '$block-$flatNumber'
+        : flatNumber.toString();
+    final role = (data?['isRentee'] == true || data?['occupantType'] == 'Rentee')
+        ? 'Rentee'
+        : 'Owner';
+    final mobile = data?['phone'] ?? 'N/A';
+    final whatsapp = data?['whatsapp'] ?? 'N/A';
+    final email = data?['email'] ?? 'N/A';
+    final bool isCarOwner = data?['isCarOwner'] == true;
+    final String carReg = data?['carReg']?.toString().trim() ?? '';
+    final bool isBikeOwner = data?['isBikeOwner'] == true;
+    final String bikeReg = data?['bikeReg']?.toString().trim() ?? '';
+
+    final String? pendingCarReg = data?['pendingCarReg']?.toString().trim();
+    final String? pendingCarRcUrl = data?['pendingCarRcUrl']?.toString();
+    final String? carRejectionReason = data?['carRejectionReason']?.toString();
+
+    final String? pendingBikeReg = data?['pendingBikeReg']?.toString().trim();
+    final String? pendingBikeRcUrl = data?['pendingBikeRcUrl']?.toString();
+    final String? bikeRejectionReason = data?['bikeRejectionReason']?.toString();
+
+    void showRcDocDialog(String url, String title) {
+      final lower = url.toLowerCase();
+      final isPdf = lower.contains('.pdf');
+      final isImage = lower.contains('.png') || lower.contains('.jpg') || lower.contains('.jpeg');
+
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: MediaQuery.of(context).size.width * 0.8,
+            height: MediaQuery.of(context).size.height * 0.6,
+            child: isImage
+                ? InteractiveViewer(
+                    child: Image.network(
+                      url,
+                      fit: BoxFit.contain,
+                      loadingBuilder: (_, child, progress) =>
+                          progress == null ? child : const Center(child: CircularProgressIndicator()),
+                      errorBuilder: (_, e, _) =>
+                          const Center(child: Text('Error loading image')),
+                    ),
+                  )
+                : isPdf
+                    ? buildPdfIframe(url)
+                    : Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.description, size: 64, color: Colors.grey),
+                          const SizedBox(height: 16),
+                          const Text('RC Document uploaded.', style: TextStyle(fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          ],
+        ),
+      );
+    }
+
+    String vehicleSummary;
+    if (isCarOwner && isBikeOwner) {
+      vehicleSummary = 'Both (4-Wheeler & 2-Wheeler)';
+    } else if (isCarOwner) {
+      vehicleSummary = 'Car (4-Wheeler)';
+    } else if (isBikeOwner) {
+      vehicleSummary = 'Bike (2-Wheeler)';
+    } else {
+      vehicleSummary = 'None';
+    }
+
     return ListView(
       padding: const EdgeInsets.all(16.0),
-      children: const [
-        Text(
+      children: [
+        Card(
+          elevation: 3,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          color: Colors.teal.shade50,
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        CircleAvatar(
+                          backgroundColor: Colors.teal,
+                          child: Icon(
+                            role == 'Rentee' ? Icons.key : Icons.home,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              name,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              'Flat: $flatLabel • $role',
+                              style: TextStyle(color: Colors.teal.shade900),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    if (docId != null && data != null)
+                      IconButton(
+                        icon: const Icon(Icons.edit, color: Colors.teal),
+                        onPressed: () => _editDetailsDialog(context, docId, data),
+                        tooltip: 'Edit My Details',
+                      ),
+                  ],
+                ),
+                const Divider(height: 24),
+                const Text(
+                  'Contact Information',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(Icons.phone, size: 18, color: Colors.teal),
+                    const SizedBox(width: 8),
+                    Text('Mobile: $mobile'),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(Icons.chat, size: 18, color: Colors.teal),
+                    const SizedBox(width: 8),
+                    Text('WhatsApp: $whatsapp'),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(Icons.email, size: 18, color: Colors.teal),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Email: $email',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Registered Vehicles',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.teal.shade100,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        vehicleSummary,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.teal.shade900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (!isCarOwner && !isBikeOwner)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 4.0),
+                    child: Text(
+                      'No vehicles registered yet.',
+                      style: TextStyle(color: Colors.black54, fontStyle: FontStyle.italic),
+                    ),
+                  )
+                else ...[
+                  if (isCarOwner)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.directions_car, size: 18, color: Colors.teal),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: 'Car: ${carReg.isNotEmpty ? carReg : "Registered (No Reg. No.)"}',
+                                        style: const TextStyle(fontWeight: FontWeight.w500),
+                                      ),
+                                      if (pendingCarReg != null && pendingCarReg.isNotEmpty)
+                                        const TextSpan(
+                                          text: ' (Update pending Admin approval)',
+                                          style: TextStyle(
+                                            color: Colors.orange,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (pendingCarReg != null && pendingCarReg.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 26, top: 2),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    'Requested: $pendingCarReg',
+                                    style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
+                                  ),
+                                  if (pendingCarRcUrl != null) ...[
+                                    const SizedBox(width: 8),
+                                    InkWell(
+                                      onTap: () => showRcDocDialog(pendingCarRcUrl, 'Car RC / Blue Book'),
+                                      child: const Text(
+                                        'View Uploaded RC',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.teal,
+                                          decoration: TextDecoration.underline,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          if (carRejectionReason != null && carRejectionReason.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 26, top: 4),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Text(
+                                  'Last request rejected: $carRejectionReason',
+                                  style: TextStyle(color: Colors.red.shade800, fontSize: 12),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  if (isBikeOwner)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.two_wheeler, size: 18, color: Colors.teal),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: 'Bike: ${bikeReg.isNotEmpty ? bikeReg : "Registered (No Reg. No.)"}',
+                                        style: const TextStyle(fontWeight: FontWeight.w500),
+                                      ),
+                                      if (pendingBikeReg != null && pendingBikeReg.isNotEmpty)
+                                        const TextSpan(
+                                          text: ' (Update pending Admin approval)',
+                                          style: TextStyle(
+                                            color: Colors.orange,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (pendingBikeReg != null && pendingBikeReg.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 26, top: 2),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    'Requested: $pendingBikeReg',
+                                    style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
+                                  ),
+                                  if (pendingBikeRcUrl != null) ...[
+                                    const SizedBox(width: 8),
+                                    InkWell(
+                                      onTap: () => showRcDocDialog(pendingBikeRcUrl, 'Bike RC / Blue Book'),
+                                      child: const Text(
+                                        'View Uploaded RC',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.teal,
+                                          decoration: TextDecoration.underline,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          if (bikeRejectionReason != null && bikeRejectionReason.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 26, top: 4),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Text(
+                                  'Last request rejected: $bikeRejectionReason',
+                                  style: TextStyle(color: Colors.red.shade800, fontSize: 12),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        const Text(
           'Quick Actions',
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         ),
-        SizedBox(height: 16),
-        Card(
+        const SizedBox(height: 12),
+        const Card(
           child: ListTile(
             leading: Icon(Icons.security, size: 40, color: Colors.teal),
             title: Text('Gate Pass System'),

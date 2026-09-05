@@ -28,14 +28,27 @@ service cloud.firestore {
         request.auth.uid == userId ||
         (resource.data != null && resource.data.uid == request.auth.uid) ||
         (request.auth.token.email != null && resource.data != null && resource.data.email == request.auth.token.email) ||
+        (request.auth.token.email != null && resource.data != null && resource.data.username == request.auth.token.email) ||
         (request.auth.token.phone_number != null && resource.data != null && resource.data.phone == request.auth.token.phone_number)
       ));
       allow create: if isAdmin() || (isAuthenticated() 
                     && request.auth.uid == userId 
                     && request.resource.data.role == 'RESIDENT'
                     && request.resource.data.uid == userId);
-      allow update: if isAdmin() || (isAuthenticated() && request.auth.uid == userId 
-                                     && request.resource.data.role == resource.data.role);
+      allow update: if isAdmin() || (isAuthenticated() && (
+        // Standard: doc ID matches auth uid
+        (request.auth.uid == userId && request.resource.data.role == resource.data.role) ||
+        // Resident found via email/username — allow updating uid + contact fields only
+        (
+          resource.data != null &&
+          request.resource.data.role == resource.data.role &&
+          (
+            (request.auth.token.email != null && resource.data.email == request.auth.token.email) ||
+            (request.auth.token.email != null && resource.data.username == request.auth.token.email) ||
+            resource.data.uid == request.auth.uid
+          )
+        )
+      ));
       allow delete: if isAdmin();
     }
 
@@ -81,6 +94,16 @@ service cloud.firestore {
       allow create: if isResident() && request.resource.data.authorUid == request.auth.uid;
       allow update: if isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes']);
       allow delete: if isAdmin() || (isResident() && resource.data.authorUid == request.auth.uid);
+    }
+
+    match /notifications/{notificationId} {
+      allow read, write: if isAdmin();
+      allow create: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        resource.data.targetRole == 'ADMIN' && isAdmin() ||
+        resource.data.targetUid == request.auth.uid ||
+        resource.data.targetRole == 'ALL'
+      );
     }
   }
 }

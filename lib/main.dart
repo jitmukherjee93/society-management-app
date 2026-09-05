@@ -88,47 +88,6 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
     super.dispose();
   }
 
-  Future<String?> _resolveAuthEmail(String input) async {
-    final cleanInput = input.trim().toLowerCase();
-    if (cleanInput.isEmpty) return null;
-
-    // 1. If user typed full email address directly
-    if (cleanInput.contains('@')) {
-      // First check if a user record has this personal email stored
-      final snapByEmail = await FirebaseFirestore.instance
-          .collection('users')
-          .where('email', isEqualTo: cleanInput)
-          .get();
-      if (snapByEmail.docs.isNotEmpty) {
-        final data = snapByEmail.docs.first.data();
-        final username = data['username']?.toString();
-        if (username != null && username.isNotEmpty) {
-          return username; // Return the primary Auth email/username
-        }
-      }
-      return cleanInput;
-    }
-
-    // 2. If user typed username or flatId (e.g. "b-204" or "b-204@ramkrishnapuram.com")
-    final flatEmail = '${cleanInput.replaceAll(' ', '')}@ramkrishnapuram.com';
-
-    // Verify if matching user or flat exists in Firestore
-    final snapByFlat = await FirebaseFirestore.instance
-        .collection('users')
-        .where('flatNumber', isEqualTo: cleanInput.toUpperCase())
-        .get();
-
-    if (snapByFlat.docs.isNotEmpty) {
-      final data = snapByFlat.docs.first.data();
-      final username = data['username']?.toString();
-      if (username != null && username.isNotEmpty) {
-        return username;
-      }
-    }
-
-    return flatEmail;
-  }
-
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     
@@ -141,15 +100,47 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
     final password = _passwordController.text.trim();
 
     try {
-      final authEmail = await _resolveAuthEmail(input);
-      if (authEmail == null || authEmail.isEmpty) {
-        throw Exception('Please enter a valid Username or Email.');
+      final cleanInput = input.toLowerCase();
+      String targetAuthEmail = cleanInput;
+
+      // If user typed a short flatId/username without '@' (e.g. "b-204" or "b204")
+      if (!cleanInput.contains('@')) {
+        targetAuthEmail = '${cleanInput.replaceAll(' ', '')}@ramkrishnapuram.com';
       }
 
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: authEmail,
-        password: password,
-      );
+      // 1. Try direct Firebase Auth sign-in first
+      try {
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: targetAuthEmail,
+          password: password,
+        );
+        return;
+      } catch (authError) {
+        // If direct email failed and input contains '@', try lookup by personal email in Firestore
+        if (cleanInput.contains('@')) {
+          try {
+            final snapByEmail = await FirebaseFirestore.instance
+                .collection('users')
+                .where('email', isEqualTo: cleanInput)
+                .get();
+
+            if (snapByEmail.docs.isNotEmpty) {
+              final data = snapByEmail.docs.first.data();
+              final username = data['username']?.toString();
+              if (username != null && username.isNotEmpty && username != cleanInput) {
+                await FirebaseAuth.instance.signInWithEmailAndPassword(
+                  email: username,
+                  password: password,
+                );
+                return;
+              }
+            }
+          } catch (_) {
+            // Unauthenticated Firestore read rules will be bypassed gracefully
+          }
+        }
+        rethrow;
+      }
     } on FirebaseAuthException catch (e) {
       if (mounted) {
         setState(() {
@@ -184,25 +175,25 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
       final cleanInput = input.toLowerCase();
       String targetEmail = cleanInput;
 
-      // If input is not an explicit email or is a username, lookup personal email or username
       if (!cleanInput.contains('@')) {
-        final resolved = await _resolveAuthEmail(cleanInput);
-        if (resolved != null) targetEmail = resolved;
+        targetEmail = '${cleanInput.replaceAll(' ', '')}@ramkrishnapuram.com';
       }
 
       // Check if custom email exists for this user in Firestore to send reset email there
-      final userSnap = await FirebaseFirestore.instance
-          .collection('users')
-          .where('username', isEqualTo: targetEmail)
-          .get();
+      try {
+        final userSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .where('username', isEqualTo: targetEmail)
+            .get();
 
-      if (userSnap.docs.isNotEmpty) {
-        final data = userSnap.docs.first.data();
-        final personalEmail = data['email']?.toString();
-        if (personalEmail != null && personalEmail.contains('@')) {
-          targetEmail = personalEmail;
+        if (userSnap.docs.isNotEmpty) {
+          final data = userSnap.docs.first.data();
+          final personalEmail = data['email']?.toString();
+          if (personalEmail != null && personalEmail.contains('@')) {
+            targetEmail = personalEmail;
+          }
         }
-      }
+      } catch (_) {}
 
       await FirebaseAuth.instance.sendPasswordResetEmail(email: targetEmail);
       if (mounted) {

@@ -1064,7 +1064,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                     fit: BoxFit.contain,
                     loadingBuilder: (_, child, progress) =>
                         progress == null ? child : const Center(child: CircularProgressIndicator()),
-                    errorBuilder: (_, e, __) =>
+                    errorBuilder: (_, e, _) =>
                         const Center(child: Text('Error loading image')),
                   ),
                 )
@@ -1096,6 +1096,159 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                 await launchUrl(uri, mode: LaunchMode.externalApplication);
               }
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _approveVehicleUpdate(
+    String userDocId,
+    Map<String, dynamic> userData,
+    String vehicleType,
+  ) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    try {
+      final updateData = <String, dynamic>{};
+      String? approvedReg;
+
+      if (vehicleType == 'Car') {
+        approvedReg = userData['pendingCarReg']?.toString().trim();
+        if (approvedReg != null && approvedReg.isNotEmpty) {
+          updateData['carReg'] = approvedReg;
+          updateData['isCarOwner'] = true;
+        }
+        updateData['pendingCarReg'] = FieldValue.delete();
+        updateData['pendingCarRcUrl'] = FieldValue.delete();
+        updateData['pendingCarRcFileName'] = FieldValue.delete();
+        updateData['carRejectionReason'] = FieldValue.delete();
+      } else if (vehicleType == 'Bike') {
+        approvedReg = userData['pendingBikeReg']?.toString().trim();
+        if (approvedReg != null && approvedReg.isNotEmpty) {
+          updateData['bikeReg'] = approvedReg;
+          updateData['isBikeOwner'] = true;
+        }
+        updateData['pendingBikeReg'] = FieldValue.delete();
+        updateData['pendingBikeRcUrl'] = FieldValue.delete();
+        updateData['pendingBikeRcFileName'] = FieldValue.delete();
+        updateData['bikeRejectionReason'] = FieldValue.delete();
+      }
+
+      await FirebaseFirestore.instance.collection('users').doc(userDocId).update(updateData);
+
+      // Notify resident
+      final targetUid = userData['uid']?.toString();
+      if (targetUid != null && targetUid.isNotEmpty) {
+        await FirebaseFirestore.instance.collection('notifications').add({
+          'targetUid': targetUid,
+          'targetRole': 'RESIDENT',
+          'type': 'VEHICLE_APPROVED',
+          'title': '$vehicleType Number Approved',
+          'message': 'Your request to update $vehicleType number to $approvedReg has been approved by the Admin.',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('$vehicleType number update approved successfully!')),
+      );
+    } catch (e) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Failed to approve update: $e')),
+      );
+    }
+  }
+
+  void _rejectVehicleUpdate(
+    String userDocId,
+    Map<String, dynamic> userData,
+    String vehicleType,
+  ) {
+    final reasonCtrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Reject $vehicleType Update Request'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Please provide a reason for rejecting the $vehicleType update:'),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: reasonCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Rejection Reason *',
+                  hintText: 'e.g. RC copy unclear / vehicle details do not match',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 3,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) {
+                    return 'Please enter a rejection reason';
+                  }
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              if (!formKey.currentState!.validate()) return;
+              final reason = reasonCtrl.text.trim();
+              Navigator.pop(ctx);
+
+              try {
+                final updateData = <String, dynamic>{};
+                if (vehicleType == 'Car') {
+                  updateData['pendingCarReg'] = FieldValue.delete();
+                  updateData['pendingCarRcUrl'] = FieldValue.delete();
+                  updateData['pendingCarRcFileName'] = FieldValue.delete();
+                  updateData['carRejectionReason'] = reason;
+                } else if (vehicleType == 'Bike') {
+                  updateData['pendingBikeReg'] = FieldValue.delete();
+                  updateData['pendingBikeRcUrl'] = FieldValue.delete();
+                  updateData['pendingBikeRcFileName'] = FieldValue.delete();
+                  updateData['bikeRejectionReason'] = reason;
+                }
+
+                await FirebaseFirestore.instance.collection('users').doc(userDocId).update(updateData);
+
+                // Notify resident
+                final targetUid = userData['uid']?.toString();
+                if (targetUid != null && targetUid.isNotEmpty) {
+                  await FirebaseFirestore.instance.collection('notifications').add({
+                    'targetUid': targetUid,
+                    'targetRole': 'RESIDENT',
+                    'type': 'VEHICLE_REJECTED',
+                    'title': '$vehicleType Number Update Rejected',
+                    'message': 'Your request to update $vehicleType number was rejected by Admin. Reason: $reason',
+                    'createdAt': FieldValue.serverTimestamp(),
+                  });
+                }
+
+                scaffoldMessenger.showSnackBar(
+                  SnackBar(content: Text('$vehicleType update rejected.')),
+                );
+              } catch (e) {
+                scaffoldMessenger.showSnackBar(
+                  SnackBar(content: Text('Failed to reject: $e')),
+                );
+              }
+            },
+            child: const Text('Confirm Rejection'),
           ),
         ],
       ),
@@ -1318,27 +1471,185 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                                         Text('Email: ${resData['email']}'),
                                       if ((resData['whatsapp']?.toString() ?? '').isNotEmpty)
                                         Text('WA: ${resData['whatsapp']}'),
-                                      if (isCarOwner) Text('Car: ${resData['carReg']}'),
-                                      if (isBikeOwner) Text('Bike: ${resData['bikeReg']}'),
-                                      if (resData['rentAgreementUrl'] != null)
-                                        Padding(
-                                          padding: const EdgeInsets.only(top: 4),
-                                          child: InkWell(
-                                            onTap: () => _showDocumentDialog(
-                                              resData['rentAgreementUrl'].toString(),
-                                              resData['rentAgreementFileName']?.toString() ??
-                                                  'Document',
-                                            ),
-                                            child: const Text(
-                                              'View Rent Agreement',
-                                              style: TextStyle(
-                                                  color: Colors.deepPurple,
-                                                  decoration: TextDecoration.underline),
-                                            ),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
+                                       if (isCarOwner) Text('Car: ${resData['carReg']}'),
+                                       if (resData['pendingCarReg'] != null && resData['pendingCarReg'].toString().isNotEmpty) ...[
+                                         const SizedBox(height: 4),
+                                         Container(
+                                           padding: const EdgeInsets.all(8),
+                                           decoration: BoxDecoration(
+                                             color: Colors.amber.shade50,
+                                             borderRadius: BorderRadius.circular(8),
+                                             border: Border.all(color: Colors.amber.shade300),
+                                           ),
+                                           child: Column(
+                                             crossAxisAlignment: CrossAxisAlignment.start,
+                                             children: [
+                                               Row(
+                                                 children: [
+                                                   const Icon(Icons.directions_car, size: 16, color: Colors.orange),
+                                                   const SizedBox(width: 6),
+                                                   Expanded(
+                                                     child: Text(
+                                                       'Car Update Requested: ${resData['pendingCarReg']}',
+                                                       style: const TextStyle(
+                                                         fontWeight: FontWeight.bold,
+                                                         color: Colors.black87,
+                                                         fontSize: 13,
+                                                       ),
+                                                     ),
+                                                   ),
+                                                 ],
+                                               ),
+                                               if (resData['pendingCarRcUrl'] != null)
+                                                 Padding(
+                                                   padding: const EdgeInsets.only(top: 4),
+                                                   child: InkWell(
+                                                     onTap: () => _showDocumentDialog(
+                                                       resData['pendingCarRcUrl'].toString(),
+                                                       resData['pendingCarRcFileName']?.toString() ?? 'Car_RC',
+                                                     ),
+                                                     child: const Text(
+                                                       '📄 View Uploaded RC / Blue Book',
+                                                       style: TextStyle(
+                                                         color: Colors.deepPurple,
+                                                         decoration: TextDecoration.underline,
+                                                         fontWeight: FontWeight.w600,
+                                                         fontSize: 12,
+                                                       ),
+                                                     ),
+                                                   ),
+                                                 ),
+                                               const SizedBox(height: 6),
+                                               Row(
+                                                 children: [
+                                                   ElevatedButton.icon(
+                                                     icon: const Icon(Icons.check, size: 16),
+                                                     label: const Text('Approve', style: TextStyle(fontSize: 12)),
+                                                     style: ElevatedButton.styleFrom(
+                                                       backgroundColor: Colors.green,
+                                                       foregroundColor: Colors.white,
+                                                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                                       minimumSize: const Size(0, 30),
+                                                     ),
+                                                     onPressed: () => _approveVehicleUpdate(resDoc.id, resData, 'Car'),
+                                                   ),
+                                                   const SizedBox(width: 8),
+                                                   ElevatedButton.icon(
+                                                     icon: const Icon(Icons.close, size: 16),
+                                                     label: const Text('Reject', style: TextStyle(fontSize: 12)),
+                                                     style: ElevatedButton.styleFrom(
+                                                       backgroundColor: Colors.red,
+                                                       foregroundColor: Colors.white,
+                                                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                                       minimumSize: const Size(0, 30),
+                                                     ),
+                                                     onPressed: () => _rejectVehicleUpdate(resDoc.id, resData, 'Car'),
+                                                   ),
+                                                 ],
+                                               ),
+                                             ],
+                                           ),
+                                         ),
+                                       ],
+                                       if (isBikeOwner) Text('Bike: ${resData['bikeReg']}'),
+                                       if (resData['pendingBikeReg'] != null && resData['pendingBikeReg'].toString().isNotEmpty) ...[
+                                         const SizedBox(height: 4),
+                                         Container(
+                                           padding: const EdgeInsets.all(8),
+                                           decoration: BoxDecoration(
+                                             color: Colors.amber.shade50,
+                                             borderRadius: BorderRadius.circular(8),
+                                             border: Border.all(color: Colors.amber.shade300),
+                                           ),
+                                           child: Column(
+                                             crossAxisAlignment: CrossAxisAlignment.start,
+                                             children: [
+                                               Row(
+                                                 children: [
+                                                   const Icon(Icons.two_wheeler, size: 16, color: Colors.orange),
+                                                   const SizedBox(width: 6),
+                                                   Expanded(
+                                                     child: Text(
+                                                       'Bike Update Requested: ${resData['pendingBikeReg']}',
+                                                       style: const TextStyle(
+                                                         fontWeight: FontWeight.bold,
+                                                         color: Colors.black87,
+                                                         fontSize: 13,
+                                                       ),
+                                                     ),
+                                                   ),
+                                                 ],
+                                               ),
+                                               if (resData['pendingBikeRcUrl'] != null)
+                                                 Padding(
+                                                   padding: const EdgeInsets.only(top: 4),
+                                                   child: InkWell(
+                                                     onTap: () => _showDocumentDialog(
+                                                       resData['pendingBikeRcUrl'].toString(),
+                                                       resData['pendingBikeRcFileName']?.toString() ?? 'Bike_RC',
+                                                     ),
+                                                     child: const Text(
+                                                       '📄 View Uploaded RC / Blue Book',
+                                                       style: TextStyle(
+                                                         color: Colors.deepPurple,
+                                                         decoration: TextDecoration.underline,
+                                                         fontWeight: FontWeight.w600,
+                                                         fontSize: 12,
+                                                       ),
+                                                     ),
+                                                   ),
+                                                 ),
+                                               const SizedBox(height: 6),
+                                               Row(
+                                                 children: [
+                                                   ElevatedButton.icon(
+                                                     icon: const Icon(Icons.check, size: 16),
+                                                     label: const Text('Approve', style: TextStyle(fontSize: 12)),
+                                                     style: ElevatedButton.styleFrom(
+                                                       backgroundColor: Colors.green,
+                                                       foregroundColor: Colors.white,
+                                                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                                       minimumSize: const Size(0, 30),
+                                                     ),
+                                                     onPressed: () => _approveVehicleUpdate(resDoc.id, resData, 'Bike'),
+                                                   ),
+                                                   const SizedBox(width: 8),
+                                                   ElevatedButton.icon(
+                                                     icon: const Icon(Icons.close, size: 16),
+                                                     label: const Text('Reject', style: TextStyle(fontSize: 12)),
+                                                     style: ElevatedButton.styleFrom(
+                                                       backgroundColor: Colors.red,
+                                                       foregroundColor: Colors.white,
+                                                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                                       minimumSize: const Size(0, 30),
+                                                     ),
+                                                     onPressed: () => _rejectVehicleUpdate(resDoc.id, resData, 'Bike'),
+                                                   ),
+                                                 ],
+                                               ),
+                                             ],
+                                           ),
+                                         ),
+                                       ],
+                                       if (resData['rentAgreementUrl'] != null)
+                                         Padding(
+                                           padding: const EdgeInsets.only(top: 4),
+                                           child: InkWell(
+                                             onTap: () => _showDocumentDialog(
+                                               resData['rentAgreementUrl'].toString(),
+                                               resData['rentAgreementFileName']?.toString() ??
+                                                   'Document',
+                                             ),
+                                             child: const Text(
+                                               'View Rent Agreement',
+                                               style: TextStyle(
+                                                   color: Colors.deepPurple,
+                                                   decoration: TextDecoration.underline),
+                                             ),
+                                           ),
+                                         ),
+                                     ],
+                                   ),
                                   trailing: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
