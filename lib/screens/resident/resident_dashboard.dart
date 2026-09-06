@@ -1,11 +1,10 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'tabs/community_feed_tab.dart';
-import '../../widgets/pdf_iframe.dart';
+import '../../utils/storage_utils.dart';
+import '../../widgets/document_preview_dialog.dart';
 
 class ResidentDashboard extends StatefulWidget {
   const ResidentDashboard({super.key});
@@ -17,20 +16,68 @@ class ResidentDashboard extends StatefulWidget {
 class _ResidentDashboardState extends State<ResidentDashboard> {
   int _currentIndex = 0;
 
-  final List<Widget> _pages = [
-    const HomeTab(),
-    const CommunityFeedTab(),
-    const NotificationsTab(),
-    const ResidentHelpdeskTab(),
-    const MaintenanceTab(),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final pages = [
+      const HomeTab(),
+      const CommunityFeedTab(),
+      NotificationsTab(
+        onNavigateTab: (idx) => setState(() => _currentIndex = idx),
+      ),
+      const ResidentHelpdeskTab(),
+      const MaintenanceTab(),
+    ];
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Resident Dashboard'),
         actions: [
+          if (user != null)
+            StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('notifications')
+                  .where('targetUid', isEqualTo: user.uid)
+                  .snapshots(),
+              builder: (context, snap) {
+                final count = snap.data?.docs.length ?? 0;
+                return Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.notifications),
+                      tooltip: 'Alerts',
+                      onPressed: () => setState(() => _currentIndex = 2),
+                    ),
+                    if (count > 0)
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Text(
+                            '$count',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
           TextButton.icon(
             icon: const Icon(Icons.logout),
             label: const Text('Log out'),
@@ -38,19 +85,37 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           ),
         ],
       ),
-      body: _pages[_currentIndex],
+      body: pages[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         type: BottomNavigationBarType.fixed,
         selectedItemColor: Colors.teal,
         unselectedItemColor: Colors.grey,
         onTap: (index) => setState(() => _currentIndex = index),
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-          BottomNavigationBarItem(icon: Icon(Icons.forum), label: 'Community'),
-          BottomNavigationBarItem(icon: Icon(Icons.notifications), label: 'Alerts'),
-          BottomNavigationBarItem(icon: Icon(Icons.support_agent), label: 'Helpdesk'),
-          BottomNavigationBarItem(icon: Icon(Icons.payment), label: 'Maintenance'),
+        items: [
+          const BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
+          const BottomNavigationBarItem(icon: Icon(Icons.forum), label: 'Community'),
+          BottomNavigationBarItem(
+            icon: user != null
+                ? StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('notifications')
+                        .where('targetUid', isEqualTo: user.uid)
+                        .snapshots(),
+                    builder: (context, snap) {
+                      final count = snap.data?.docs.length ?? 0;
+                      return Badge(
+                        isLabelVisible: count > 0,
+                        label: Text('$count'),
+                        child: const Icon(Icons.notifications),
+                      );
+                    },
+                  )
+                : const Icon(Icons.notifications),
+            label: 'Alerts',
+          ),
+          const BottomNavigationBarItem(icon: Icon(Icons.support_agent), label: 'Helpdesk'),
+          const BottomNavigationBarItem(icon: Icon(Icons.payment), label: 'Maintenance'),
         ],
       ),
       floatingActionButton: _currentIndex == 0
@@ -97,9 +162,44 @@ class _HomeTabState extends State<HomeTab> {
     }
   }
 
-  void _editDetailsDialog(BuildContext context, String docId, Map<String, dynamic> data) {
+  Future<void> _editDetailsDialog(BuildContext context, String docId, Map<String, dynamic> data) async {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final formKey = GlobalKey<FormState>();
+
+    // Calculate flat vehicle quota across other members of this flat
+    final flatId = data['flatNumber']?.toString() ?? '';
+    int flatOtherCars = 0;
+    int flatOtherBikes = 0;
+    try {
+      final querySnap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('flatNumber', isEqualTo: flatId)
+          .get();
+      for (final doc in querySnap.docs) {
+        if (doc.id == docId) continue;
+        final d = doc.data();
+        if (d['isCarOwner'] == true && (d['carReg']?.toString().trim().isNotEmpty ?? false)) {
+          flatOtherCars++;
+        } else if (d['pendingCarReg']?.toString().trim().isNotEmpty ?? false) {
+          flatOtherCars++;
+        }
+        if (d['isBikeOwner'] == true && (d['bikeReg']?.toString().trim().isNotEmpty ?? false)) {
+          flatOtherBikes++;
+        } else if (d['pendingBikeReg']?.toString().trim().isNotEmpty ?? false) {
+          flatOtherBikes++;
+        }
+        if (d['hasBike2'] == true && (d['bike2Reg']?.toString().trim().isNotEmpty ?? false)) {
+          flatOtherBikes++;
+        } else if (d['pendingBike2Reg']?.toString().trim().isNotEmpty ?? false) {
+          flatOtherBikes++;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error calculating flat vehicle quota: $e');
+    }
+
+    final bool canAddCar = flatOtherCars < 1;
+    final int maxBikesAddable = 2 - flatOtherBikes;
 
     String rawPhone = data['phone']?.toString() ?? '';
     if (rawPhone.startsWith('+91')) rawPhone = rawPhone.substring(3);
@@ -108,33 +208,36 @@ class _HomeTabState extends State<HomeTab> {
     final waCtrl = TextEditingController(text: data['whatsapp']?.toString() ?? '');
     final emailCtrl = TextEditingController(text: data['email']?.toString() ?? '');
 
-    bool isCarOwner = data['isCarOwner'] == true;
-    bool isBikeOwner = data['isBikeOwner'] == true;
+    final pendingCarReg = data['pendingCarReg']?.toString().trim() ?? '';
+    final pendingBikeReg = data['pendingBikeReg']?.toString().trim() ?? '';
+    final pendingBike2Reg = data['pendingBike2Reg']?.toString().trim() ?? '';
+
+    bool isCarOwner = data['isCarOwner'] == true || pendingCarReg.isNotEmpty;
+    bool isBikeOwner = data['isBikeOwner'] == true || pendingBikeReg.isNotEmpty;
+    bool hasBike2 = data['hasBike2'] == true || pendingBike2Reg.isNotEmpty;
+
     final currentCarReg = data['carReg']?.toString().trim() ?? '';
     final currentBikeReg = data['bikeReg']?.toString().trim() ?? '';
-    final carRegCtrl = TextEditingController(text: currentCarReg);
-    final bikeRegCtrl = TextEditingController(text: currentBikeReg);
+    final currentBike2Reg = data['bike2Reg']?.toString().trim() ?? '';
+
+    final carRegCtrl = TextEditingController(
+        text: currentCarReg.isNotEmpty ? currentCarReg : pendingCarReg);
+    final bikeRegCtrl = TextEditingController(
+        text: currentBikeReg.isNotEmpty ? currentBikeReg : pendingBikeReg);
+    final bike2RegCtrl = TextEditingController(
+        text: currentBike2Reg.isNotEmpty ? currentBike2Reg : pendingBike2Reg);
 
     PlatformFile? carRcFile;
     PlatformFile? bikeRcFile;
+    PlatformFile? bike2RcFile;
     bool isSaving = false;
 
     Future<String?> uploadRcDoc(PlatformFile file, String prefix) async {
       final fileName = file.name;
-      final ref = FirebaseStorage.instance
-          .ref('vehicle_rc/${prefix}_${DateTime.now().millisecondsSinceEpoch}_$fileName');
-      final contentType = fileName.toLowerCase().endsWith('.pdf')
-          ? 'application/pdf'
-          : fileName.toLowerCase().endsWith('.png')
-              ? 'image/png'
-              : 'image/jpeg';
-      final bytes = await file.readAsBytes();
-      await ref.putString(
-        base64Encode(bytes),
-        format: PutStringFormat.base64,
-        metadata: SettableMetadata(contentType: contentType),
+      return uploadFile(
+        file,
+        'vehicle_rc/${prefix}_${DateTime.now().millisecondsSinceEpoch}_$fileName',
       );
-      return ref.getDownloadURL();
     }
 
     showDialog(
@@ -219,7 +322,7 @@ class _HomeTabState extends State<HomeTab> {
                     const Divider(),
                     const SizedBox(height: 4),
                     const Text(
-                      'Vehicle Details',
+                      'Vehicle Details (Max 1 Car & 2 Bikes per Flat)',
                       style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.teal),
                     ),
                     const SizedBox(height: 4),
@@ -228,15 +331,41 @@ class _HomeTabState extends State<HomeTab> {
                       style: TextStyle(fontSize: 12, color: Colors.black54, fontStyle: FontStyle.italic),
                     ),
                     const SizedBox(height: 8),
+                    if (!canAddCar && !isCarOwner)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.red.shade200),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(Icons.info_outline, size: 16, color: Colors.red),
+                              SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'This flat already has 1 Car assigned (Quota full).',
+                                  style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       title: const Text('Do you own a 4-Wheeler (Car)?'),
                       secondary: const Icon(Icons.directions_car, color: Colors.teal),
                       value: isCarOwner,
                       activeThumbColor: Colors.teal,
-                      onChanged: (val) {
-                        setDS(() => isCarOwner = val);
-                      },
+                      onChanged: (canAddCar || isCarOwner)
+                          ? (val) {
+                              setDS(() => isCarOwner = val);
+                            }
+                          : null,
                     ),
                     if (isCarOwner) ...[
                       const SizedBox(height: 4),
@@ -282,12 +411,9 @@ class _HomeTabState extends State<HomeTab> {
                                   icon: const Icon(Icons.attach_file, size: 16),
                                   label: Text(carRcFile == null ? 'Select File' : 'Change'),
                                   onPressed: () async {
-                                    final res = await FilePicker.pickFiles(
-                                      type: FileType.custom,
-                                      allowedExtensions: ['pdf', 'png', 'jpg', 'jpeg'],
-                                    );
-                                    if (res.isNotEmpty) {
-                                      setDS(() => carRcFile = res.first);
+                                    final file = await pickFile();
+                                    if (file != null) {
+                                      setDS(() => carRcFile = file);
                                     }
                                   },
                                 ),
@@ -314,22 +440,51 @@ class _HomeTabState extends State<HomeTab> {
                       ),
                       const SizedBox(height: 12),
                     ],
+                    if (maxBikesAddable <= 0 && !isBikeOwner)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.red.shade200),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(Icons.info_outline, size: 16, color: Colors.red),
+                              SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'This flat already has 2 Bikes assigned (Quota full).',
+                                  style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       title: const Text('Do you own a 2-Wheeler (Bike/Scooter)?'),
                       secondary: const Icon(Icons.two_wheeler, color: Colors.teal),
                       value: isBikeOwner,
                       activeThumbColor: Colors.teal,
-                      onChanged: (val) {
-                        setDS(() => isBikeOwner = val);
-                      },
+                      onChanged: (maxBikesAddable > 0 || isBikeOwner)
+                          ? (val) {
+                              setDS(() {
+                                isBikeOwner = val;
+                                if (!val) hasBike2 = false;
+                              });
+                            }
+                          : null,
                     ),
                     if (isBikeOwner) ...[
                       const SizedBox(height: 4),
                       TextFormField(
                         controller: bikeRegCtrl,
                         decoration: const InputDecoration(
-                          labelText: 'Bike Registration No. *',
+                          labelText: 'Bike 1 Registration No. *',
                           hintText: 'e.g. WB 02 CD 5678',
                           prefixIcon: Icon(Icons.pin),
                           border: OutlineInputBorder(),
@@ -343,7 +498,7 @@ class _HomeTabState extends State<HomeTab> {
                         },
                       ),
                       const SizedBox(height: 8),
-                      // RC upload button for Bike
+                      // RC upload button for Bike 1
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
@@ -360,7 +515,7 @@ class _HomeTabState extends State<HomeTab> {
                                 const SizedBox(width: 8),
                                 const Expanded(
                                   child: Text(
-                                    'Upload Bike RC / Blue Book Copy *',
+                                    'Upload Bike 1 RC / Blue Book Copy *',
                                     style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
                                   ),
                                 ),
@@ -368,12 +523,9 @@ class _HomeTabState extends State<HomeTab> {
                                   icon: const Icon(Icons.attach_file, size: 16),
                                   label: Text(bikeRcFile == null ? 'Select File' : 'Change'),
                                   onPressed: () async {
-                                    final res = await FilePicker.pickFiles(
-                                      type: FileType.custom,
-                                      allowedExtensions: ['pdf', 'png', 'jpg', 'jpeg'],
-                                    );
-                                    if (res.isNotEmpty) {
-                                      setDS(() => bikeRcFile = res.first);
+                                    final file = await pickFile();
+                                    if (file != null) {
+                                      setDS(() => bikeRcFile = file);
                                     }
                                   },
                                 ),
@@ -398,6 +550,109 @@ class _HomeTabState extends State<HomeTab> {
                           ],
                         ),
                       ),
+                      const SizedBox(height: 8),
+                      if (!hasBike2 && maxBikesAddable >= 1)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            icon: const Icon(Icons.add_circle_outline, size: 18, color: Colors.teal),
+                            label: const Text(
+                              'Add Another Bike (Max 2)',
+                              style: TextStyle(color: Colors.teal, fontWeight: FontWeight.w600),
+                            ),
+                            onPressed: () => setDS(() => hasBike2 = true),
+                          ),
+                        ),
+                      if (hasBike2) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: bike2RegCtrl,
+                                decoration: const InputDecoration(
+                                  labelText: 'Bike 2 Registration No. *',
+                                  hintText: 'e.g. WB 02 EF 9012',
+                                  prefixIcon: Icon(Icons.pin),
+                                  border: OutlineInputBorder(),
+                                ),
+                                textCapitalization: TextCapitalization.characters,
+                                validator: (v) {
+                                  if (isBikeOwner && hasBike2 && (v == null || v.trim().isEmpty)) {
+                                    return 'Please enter Bike 2 registration number';
+                                  }
+                                  return null;
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              icon: const Icon(Icons.remove_circle, color: Colors.red),
+                              tooltip: 'Remove Bike 2',
+                              onPressed: () {
+                                setDS(() {
+                                  hasBike2 = false;
+                                  bike2RegCtrl.clear();
+                                  bike2RcFile = null;
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.teal.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.teal.shade200),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.upload_file, size: 20, color: Colors.teal),
+                                  const SizedBox(width: 8),
+                                  const Expanded(
+                                    child: Text(
+                                      'Upload Bike 2 RC / Blue Book Copy *',
+                                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                                    ),
+                                  ),
+                                  TextButton.icon(
+                                    icon: const Icon(Icons.attach_file, size: 16),
+                                    label: Text(bike2RcFile == null ? 'Select File' : 'Change'),
+                                    onPressed: () async {
+                                      final file = await pickFile();
+                                      if (file != null) {
+                                        setDS(() => bike2RcFile = file);
+                                      }
+                                    },
+                                  ),
+                                ],
+                              ),
+                              if (bike2RcFile != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    'Selected: ${bike2RcFile!.name}',
+                                    style: const TextStyle(fontSize: 12, color: Colors.teal, fontWeight: FontWeight.bold),
+                                  ),
+                                )
+                              else if (data['pendingBike2Reg'] != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    'Pending approval: ${data['pendingBike2Reg']}',
+                                    style: const TextStyle(fontSize: 12, color: Colors.orange, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ],
                 ),
@@ -429,8 +684,19 @@ class _HomeTabState extends State<HomeTab> {
 
                       final newCarReg = isCarOwner ? carRegCtrl.text.trim().toUpperCase() : '';
                       final newBikeReg = isBikeOwner ? bikeRegCtrl.text.trim().toUpperCase() : '';
-                      final carChanged = newCarReg.isNotEmpty && newCarReg != currentCarReg;
-                      final bikeChanged = newBikeReg.isNotEmpty && newBikeReg != currentBikeReg;
+                      final newBike2Reg = (isBikeOwner && hasBike2) ? bike2RegCtrl.text.trim().toUpperCase() : '';
+
+                      final existingPendingCar = data['pendingCarReg']?.toString().trim() ?? '';
+                      final isNewCarSubmission = newCarReg.isNotEmpty && (newCarReg != currentCarReg || carRcFile != null);
+                      final carChanged = isNewCarSubmission && (newCarReg != existingPendingCar || carRcFile != null);
+
+                      final existingPendingBike = data['pendingBikeReg']?.toString().trim() ?? '';
+                      final isNewBikeSubmission = newBikeReg.isNotEmpty && (newBikeReg != currentBikeReg || bikeRcFile != null);
+                      final bikeChanged = isNewBikeSubmission && (newBikeReg != existingPendingBike || bikeRcFile != null);
+
+                      final existingPendingBike2 = data['pendingBike2Reg']?.toString().trim() ?? '';
+                      final isNewBike2Submission = newBike2Reg.isNotEmpty && (newBike2Reg != currentBike2Reg || bike2RcFile != null);
+                      final bike2Changed = isNewBike2Submission && (newBike2Reg != existingPendingBike2 || bike2RcFile != null);
 
                       if (carChanged && carRcFile == null && data['pendingCarRcUrl'] == null) {
                         scaffoldMessenger.showSnackBar(
@@ -440,7 +706,28 @@ class _HomeTabState extends State<HomeTab> {
                       }
                       if (bikeChanged && bikeRcFile == null && data['pendingBikeRcUrl'] == null) {
                         scaffoldMessenger.showSnackBar(
-                          const SnackBar(content: Text('Please upload RC / Blue Book copy for Bike update.')),
+                          const SnackBar(content: Text('Please upload RC / Blue Book copy for Bike 1 update.')),
+                        );
+                        return;
+                      }
+                      if (bike2Changed && bike2RcFile == null && data['pendingBike2RcUrl'] == null) {
+                        scaffoldMessenger.showSnackBar(
+                          const SnackBar(content: Text('Please upload RC / Blue Book copy for Bike 2 update.')),
+                        );
+                        return;
+                      }
+
+                      // Quota enforcement
+                      if (isCarOwner && !canAddCar && currentCarReg.isEmpty && (data['pendingCarReg'] == null || data['pendingCarReg'].toString().isEmpty)) {
+                        scaffoldMessenger.showSnackBar(
+                          const SnackBar(content: Text('Cannot add Car: Flat quota of 1 car already reached.')),
+                        );
+                        return;
+                      }
+                      int requestedBikes = (isBikeOwner ? 1 : 0) + ((isBikeOwner && hasBike2) ? 1 : 0);
+                      if (flatOtherBikes + requestedBikes > 2) {
+                        scaffoldMessenger.showSnackBar(
+                          const SnackBar(content: Text('Cannot exceed flat quota of 2 bikes.')),
                         );
                         return;
                       }
@@ -500,30 +787,73 @@ class _HomeTabState extends State<HomeTab> {
                           updatePayload['pendingBikeRcUrl'] = FieldValue.delete();
                           updatePayload['pendingBikeRcFileName'] = FieldValue.delete();
                           updatePayload['bikeRejectionReason'] = FieldValue.delete();
-                        } else if (bikeChanged) {
-                          String? bikeRcUrl;
-                          if (bikeRcFile != null) {
-                            bikeRcUrl = await uploadRcDoc(bikeRcFile!, 'bike');
-                          }
-                          updatePayload['pendingBikeReg'] = newBikeReg;
-                          if (bikeRcUrl != null) {
-                            updatePayload['pendingBikeRcUrl'] = bikeRcUrl;
-                            updatePayload['pendingBikeRcFileName'] = bikeRcFile!.name;
-                          }
-                          updatePayload['bikeRejectionReason'] = FieldValue.delete();
 
-                          // Notify admin
-                          await FirebaseFirestore.instance.collection('notifications').add({
-                            'targetRole': 'ADMIN',
-                            'type': 'VEHICLE_UPDATE_REQUEST',
-                            'title': 'Bike Number Update Request',
-                            'message': '$residentName ($flatDisplay) requested to update Bike number to $newBikeReg with RC copy.',
-                            'flatNumber': flatDisplay,
-                            'userId': docId,
-                            'vehicleType': 'Bike',
-                            'requestedReg': newBikeReg,
-                            'createdAt': FieldValue.serverTimestamp(),
-                          });
+                          updatePayload['hasBike2'] = false;
+                          updatePayload['bike2Reg'] = '';
+                          updatePayload['pendingBike2Reg'] = FieldValue.delete();
+                          updatePayload['pendingBike2RcUrl'] = FieldValue.delete();
+                          updatePayload['pendingBike2RcFileName'] = FieldValue.delete();
+                          updatePayload['bike2RejectionReason'] = FieldValue.delete();
+                        } else {
+                          if (bikeChanged) {
+                            String? bikeRcUrl;
+                            if (bikeRcFile != null) {
+                              bikeRcUrl = await uploadRcDoc(bikeRcFile!, 'bike');
+                            }
+                            updatePayload['pendingBikeReg'] = newBikeReg;
+                            if (bikeRcUrl != null) {
+                              updatePayload['pendingBikeRcUrl'] = bikeRcUrl;
+                              updatePayload['pendingBikeRcFileName'] = bikeRcFile!.name;
+                            }
+                            updatePayload['bikeRejectionReason'] = FieldValue.delete();
+
+                            // Notify admin
+                            await FirebaseFirestore.instance.collection('notifications').add({
+                              'targetRole': 'ADMIN',
+                              'type': 'VEHICLE_UPDATE_REQUEST',
+                              'title': 'Bike 1 Number Update Request',
+                              'message': '$residentName ($flatDisplay) requested to update Bike 1 number to $newBikeReg with RC copy.',
+                              'flatNumber': flatDisplay,
+                              'userId': docId,
+                              'vehicleType': 'Bike 1',
+                              'requestedReg': newBikeReg,
+                              'createdAt': FieldValue.serverTimestamp(),
+                            });
+                          }
+
+                          if (!hasBike2) {
+                            updatePayload['hasBike2'] = false;
+                            updatePayload['bike2Reg'] = '';
+                            updatePayload['pendingBike2Reg'] = FieldValue.delete();
+                            updatePayload['pendingBike2RcUrl'] = FieldValue.delete();
+                            updatePayload['pendingBike2RcFileName'] = FieldValue.delete();
+                            updatePayload['bike2RejectionReason'] = FieldValue.delete();
+                          } else if (bike2Changed) {
+                            String? bike2RcUrl;
+                            if (bike2RcFile != null) {
+                              bike2RcUrl = await uploadRcDoc(bike2RcFile!, 'bike2');
+                            }
+                            updatePayload['hasBike2'] = true;
+                            updatePayload['pendingBike2Reg'] = newBike2Reg;
+                            if (bike2RcUrl != null) {
+                              updatePayload['pendingBike2RcUrl'] = bike2RcUrl;
+                              updatePayload['pendingBike2RcFileName'] = bike2RcFile!.name;
+                            }
+                            updatePayload['bike2RejectionReason'] = FieldValue.delete();
+
+                            // Notify admin
+                            await FirebaseFirestore.instance.collection('notifications').add({
+                              'targetRole': 'ADMIN',
+                              'type': 'VEHICLE_UPDATE_REQUEST',
+                              'title': 'Bike 2 Number Update Request',
+                              'message': '$residentName ($flatDisplay) requested to update Bike 2 number to $newBike2Reg with RC copy.',
+                              'flatNumber': flatDisplay,
+                              'userId': docId,
+                              'vehicleType': 'Bike 2',
+                              'requestedReg': newBike2Reg,
+                              'createdAt': FieldValue.serverTimestamp(),
+                            });
+                          }
                         }
 
                         // If user only checked isCarOwner/isBikeOwner without reg change
@@ -542,7 +872,7 @@ class _HomeTabState extends State<HomeTab> {
                         scaffoldMessenger.showSnackBar(
                           SnackBar(
                             content: Text(
-                              carChanged || bikeChanged
+                              carChanged || bikeChanged || bike2Changed
                                   ? 'Details saved! Vehicle update submitted for Admin approval.'
                                   : 'Details updated successfully!',
                             ),
@@ -661,6 +991,8 @@ class _HomeTabState extends State<HomeTab> {
     final String carReg = data?['carReg']?.toString().trim() ?? '';
     final bool isBikeOwner = data?['isBikeOwner'] == true;
     final String bikeReg = data?['bikeReg']?.toString().trim() ?? '';
+    final bool hasBike2 = data?['hasBike2'] == true;
+    final String bike2Reg = data?['bike2Reg']?.toString().trim() ?? '';
 
     final String? pendingCarReg = data?['pendingCarReg']?.toString().trim();
     final String? pendingCarRcUrl = data?['pendingCarRcUrl']?.toString();
@@ -670,53 +1002,21 @@ class _HomeTabState extends State<HomeTab> {
     final String? pendingBikeRcUrl = data?['pendingBikeRcUrl']?.toString();
     final String? bikeRejectionReason = data?['bikeRejectionReason']?.toString();
 
-    void showRcDocDialog(String url, String title) {
-      final lower = url.toLowerCase();
-      final isPdf = lower.contains('.pdf');
-      final isImage = lower.contains('.png') || lower.contains('.jpg') || lower.contains('.jpeg');
+    final String? pendingBike2Reg = data?['pendingBike2Reg']?.toString().trim();
+    final String? pendingBike2RcUrl = data?['pendingBike2RcUrl']?.toString();
+    final String? bike2RejectionReason = data?['bike2RejectionReason']?.toString();
 
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(title),
-          content: SizedBox(
-            width: MediaQuery.of(context).size.width * 0.8,
-            height: MediaQuery.of(context).size.height * 0.6,
-            child: isImage
-                ? InteractiveViewer(
-                    child: Image.network(
-                      url,
-                      fit: BoxFit.contain,
-                      loadingBuilder: (_, child, progress) =>
-                          progress == null ? child : const Center(child: CircularProgressIndicator()),
-                      errorBuilder: (_, e, _) =>
-                          const Center(child: Text('Error loading image')),
-                    ),
-                  )
-                : isPdf
-                    ? buildPdfIframe(url)
-                    : Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.description, size: 64, color: Colors.grey),
-                          const SizedBox(height: 16),
-                          const Text('RC Document uploaded.', style: TextStyle(fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
-          ],
-        ),
-      );
+    void showRcDocDialog(String url, String title) {
+      showDocumentPreviewDialog(context, url, title);
     }
 
     String vehicleSummary;
-    if (isCarOwner && isBikeOwner) {
+    final hasAnyBike = isBikeOwner || hasBike2 || (pendingBike2Reg != null && pendingBike2Reg.isNotEmpty);
+    if (isCarOwner && hasAnyBike) {
       vehicleSummary = 'Both (4-Wheeler & 2-Wheeler)';
     } else if (isCarOwner) {
       vehicleSummary = 'Car (4-Wheeler)';
-    } else if (isBikeOwner) {
+    } else if (hasAnyBike) {
       vehicleSummary = 'Bike (2-Wheeler)';
     } else {
       vehicleSummary = 'None';
@@ -833,7 +1133,7 @@ class _HomeTabState extends State<HomeTab> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                if (!isCarOwner && !isBikeOwner)
+                if (!isCarOwner && !isBikeOwner && !hasBike2 && (pendingCarReg == null || pendingCarReg.isEmpty) && (pendingBikeReg == null || pendingBikeReg.isEmpty) && (pendingBike2Reg == null || pendingBike2Reg.isEmpty))
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 4.0),
                     child: Text(
@@ -842,7 +1142,7 @@ class _HomeTabState extends State<HomeTab> {
                     ),
                   )
                 else ...[
-                  if (isCarOwner)
+                  if (isCarOwner || (pendingCarReg != null && pendingCarReg.isNotEmpty))
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 4.0),
                       child: Column(
@@ -921,7 +1221,7 @@ class _HomeTabState extends State<HomeTab> {
                         ],
                       ),
                     ),
-                  if (isBikeOwner)
+                  if (isBikeOwner || (pendingBikeReg != null && pendingBikeReg.isNotEmpty))
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 4.0),
                       child: Column(
@@ -936,7 +1236,7 @@ class _HomeTabState extends State<HomeTab> {
                                   TextSpan(
                                     children: [
                                       TextSpan(
-                                        text: 'Bike: ${bikeReg.isNotEmpty ? bikeReg : "Registered (No Reg. No.)"}',
+                                        text: 'Bike 1: ${bikeReg.isNotEmpty ? bikeReg : "Registered (No Reg. No.)"}',
                                         style: const TextStyle(fontWeight: FontWeight.w500),
                                       ),
                                       if (pendingBikeReg != null && pendingBikeReg.isNotEmpty)
@@ -966,7 +1266,7 @@ class _HomeTabState extends State<HomeTab> {
                                   if (pendingBikeRcUrl != null) ...[
                                     const SizedBox(width: 8),
                                     InkWell(
-                                      onTap: () => showRcDocDialog(pendingBikeRcUrl, 'Bike RC / Blue Book'),
+                                      onTap: () => showRcDocDialog(pendingBikeRcUrl, 'Bike 1 RC / Blue Book'),
                                       child: const Text(
                                         'View Uploaded RC',
                                         style: TextStyle(
@@ -1000,6 +1300,85 @@ class _HomeTabState extends State<HomeTab> {
                         ],
                       ),
                     ),
+                  if (hasBike2 || (pendingBike2Reg != null && pendingBike2Reg.isNotEmpty))
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.two_wheeler, size: 18, color: Colors.teal),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: 'Bike 2: ${bike2Reg.isNotEmpty ? bike2Reg : "Registered (No Reg. No.)"}',
+                                        style: const TextStyle(fontWeight: FontWeight.w500),
+                                      ),
+                                      if (pendingBike2Reg != null && pendingBike2Reg.isNotEmpty)
+                                        const TextSpan(
+                                          text: ' (Update pending Admin approval)',
+                                          style: TextStyle(
+                                            color: Colors.orange,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (pendingBike2Reg != null && pendingBike2Reg.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 26, top: 2),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    'Requested: $pendingBike2Reg',
+                                    style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
+                                  ),
+                                  if (pendingBike2RcUrl != null) ...[
+                                    const SizedBox(width: 8),
+                                    InkWell(
+                                      onTap: () => showRcDocDialog(pendingBike2RcUrl, 'Bike 2 RC / Blue Book'),
+                                      child: const Text(
+                                        'View Uploaded RC',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.teal,
+                                          decoration: TextDecoration.underline,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          if (bike2RejectionReason != null && bike2RejectionReason.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 26, top: 4),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Text(
+                                  'Last request rejected: $bike2RejectionReason',
+                                  style: TextStyle(color: Colors.red.shade800, fontSize: 12),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                 ],
               ],
             ),
@@ -1024,72 +1403,264 @@ class _HomeTabState extends State<HomeTab> {
 }
 
 class NotificationsTab extends StatelessWidget {
-  const NotificationsTab({super.key});
+  final Function(int)? onNavigateTab;
+  const NotificationsTab({super.key, this.onNavigateTab});
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('announcements')
-          .orderBy('createdAt', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(child: Text('Error: ${snapshot.error}'));
-        }
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        var docs = snapshot.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return const Center(child: Text('No announcements yet.'));
-        }
+    final user = FirebaseAuth.instance.currentUser;
+    final userUid = user?.uid ?? '';
 
-        docs.sort((a, b) {
-          final aPinned = (a.data() as Map<String, dynamic>)['isPinned'] ?? false;
-          final bPinned = (b.data() as Map<String, dynamic>)['isPinned'] ?? false;
-          if (aPinned && !bPinned) return -1;
-          if (!aPinned && bPinned) return 1;
-          return 0; // retain createdAt sort order
-        });
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        if (userUid.isNotEmpty) ...[
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('notifications')
+                .where('targetUid', isEqualTo: userUid)
+                .snapshots(),
+            builder: (context, snap) {
+              if (snap.hasError) {
+                return Text('Error loading alerts: ${snap.error}',
+                    style: const TextStyle(color: Colors.red));
+              }
+              final docs = (snap.data?.docs ?? []).toList();
+              // Sort in memory by createdAt descending
+              docs.sort((a, b) {
+                final aData = a.data() as Map<String, dynamic>;
+                final bData = b.data() as Map<String, dynamic>;
+                final aTime = (aData['createdAt'] as Timestamp?)?.toDate() ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
+                final bTime = (bData['createdAt'] as Timestamp?)?.toDate() ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
+                return bTime.compareTo(aTime);
+              });
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: docs.length,
-          itemBuilder: (context, index) {
-            final data = docs[index].data() as Map<String, dynamic>;
-            final isPinned = data['isPinned'] ?? false;
-            
-            return Card(
-              elevation: isPinned ? 4 : 1,
-              color: isPinned ? Colors.teal.shade50 : null,
-              margin: const EdgeInsets.only(bottom: 12),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        if (isPinned) const Icon(Icons.push_pin, color: Colors.teal, size: 20),
-                        if (isPinned) const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            data['title'] ?? '',
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              if (docs.isEmpty) return const SizedBox.shrink();
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.notifications_active,
+                          color: Colors.teal, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Personal Alerts (${docs.length})',
+                        style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.teal),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ...docs.map((doc) {
+                    final notif = doc.data() as Map<String, dynamic>;
+                    final title = notif['title'] ?? 'Notification';
+                    final msg = notif['message'] ?? '';
+                    final type =
+                        (notif['type'] ?? '').toString().toUpperCase();
+
+                    final isApproved = type == 'VEHICLE_APPROVED';
+                    final isRejected = type == 'VEHICLE_REJECTED';
+                    final isVehicle =
+                        isApproved || isRejected || type.contains('VEHICLE');
+                    final isComplaint = type.contains('COMPLAINT');
+                    final isMaintenance =
+                        type.contains('MAINTENANCE') || type.contains('PAYMENT');
+
+                    return Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        side: BorderSide(
+                          color: isApproved
+                              ? Colors.green.shade200
+                              : isRejected
+                                  ? Colors.red.shade200
+                                  : Colors.teal.shade200,
+                        ),
+                      ),
+                      color: isApproved
+                          ? Colors.green.shade50
+                          : isRejected
+                              ? Colors.red.shade50
+                              : Colors.teal.shade50,
+                      margin: const EdgeInsets.only(bottom: 10),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: isApproved
+                              ? Colors.green.shade100
+                              : isRejected
+                                  ? Colors.red.shade100
+                                  : Colors.teal.shade100,
+                          child: Icon(
+                            isApproved
+                                ? Icons.check_circle
+                                : isRejected
+                                    ? Icons.cancel
+                                    : Icons.info,
+                            color: isApproved
+                                ? Colors.green.shade800
+                                : isRejected
+                                    ? Colors.red.shade800
+                                    : Colors.teal.shade800,
                           ),
                         ),
+                        title: Text(title,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 14)),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(height: 2),
+                            Text(msg, style: const TextStyle(fontSize: 12)),
+                            const SizedBox(height: 4),
+                            Text(
+                              isVehicle
+                                  ? 'Tap to view in Vehicle Details'
+                                  : isComplaint
+                                      ? 'Tap to open Helpdesk'
+                                      : isMaintenance
+                                          ? 'Tap to view Maintenance'
+                                          : 'Tap to view',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isApproved
+                                    ? Colors.green.shade800
+                                    : isRejected
+                                        ? Colors.red.shade800
+                                        : Colors.teal.shade800,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.close,
+                                  size: 18, color: Colors.grey),
+                              onPressed: () => doc.reference.delete(),
+                              tooltip: 'Dismiss',
+                            ),
+                            const Icon(Icons.chevron_right, color: Colors.grey),
+                          ],
+                        ),
+                        onTap: () {
+                          if (isVehicle) {
+                            onNavigateTab?.call(0); // Home tab
+                          } else if (isComplaint) {
+                            onNavigateTab?.call(3); // Helpdesk tab
+                          } else if (isMaintenance) {
+                            onNavigateTab?.call(4); // Maintenance tab
+                          }
+                        },
+                      ),
+                    );
+                  }),
+                  const Divider(height: 24),
+                ],
+              );
+            },
+          ),
+        ],
+        Row(
+          children: const [
+            Icon(Icons.campaign, color: Colors.teal, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Society Announcements',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.teal),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('announcements')
+              .orderBy('createdAt', descending: true)
+              .snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return Center(child: Text('Error: ${snapshot.error}'));
+            }
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            var docs = snapshot.data?.docs ?? [];
+            if (docs.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: Text('No announcements yet.',
+                      style: TextStyle(color: Colors.grey)),
+                ),
+              );
+            }
+
+            docs.sort((a, b) {
+              final aPinned =
+                  (a.data() as Map<String, dynamic>)['isPinned'] ?? false;
+              final bPinned =
+                  (b.data() as Map<String, dynamic>)['isPinned'] ?? false;
+              if (aPinned && !bPinned) return -1;
+              if (!aPinned && bPinned) return 1;
+              return 0; // retain createdAt sort order
+            });
+
+            return ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: docs.length,
+              itemBuilder: (context, index) {
+                final data = docs[index].data() as Map<String, dynamic>;
+                final isPinned = data['isPinned'] ?? false;
+
+                return Card(
+                  elevation: isPinned ? 4 : 1,
+                  color: isPinned ? Colors.teal.shade50 : null,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            if (isPinned)
+                              const Icon(Icons.push_pin,
+                                  color: Colors.teal, size: 20),
+                            if (isPinned) const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                data['title'] ?? '',
+                                style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(data['message'] ?? '',
+                            style: const TextStyle(fontSize: 16)),
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    Text(data['message'] ?? '', style: const TextStyle(fontSize: 16)),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             );
           },
-        );
-      },
+        ),
+      ],
     );
   }
 }
@@ -1162,14 +1733,48 @@ class MaintenanceTab extends StatelessWidget {
                                   ),
                                   ElevatedButton(
                                     onPressed: () {
-                                      // Mock Online Payment
+                                      // Online Payment
+                                      final dueId = docs[index].id;
                                       FirebaseFirestore.instance
                                           .collection('maintenance_dues')
-                                          .doc(docs[index].id)
+                                          .doc(dueId)
                                           .update({'status': 'PAID_ONLINE'});
+
+                                      final flat = (data['flatNumber'] ?? 'Unknown').toString();
+                                      final month = (data['month'] ?? '').toString();
+                                      final double amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
+
+                                      String head = 'Monthly Maintenance - Block A';
+                                      final cleanUpper = flat.toUpperCase();
+                                      if (cleanUpper.startsWith('B')) {
+                                        head = 'Monthly Maintenance - Block B';
+                                      } else if (cleanUpper.startsWith('C')) {
+                                        head = 'Monthly Maintenance - Block C';
+                                      } else if (cleanUpper.startsWith('D')) {
+                                        head = 'Monthly Maintenance - Block D';
+                                      }
+
+                                      final timestamp = DateTime.now().millisecondsSinceEpoch;
+                                      final voucherCode = 'INC-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
+                                      FirebaseFirestore.instance.collection('society_transactions').add({
+                                        'type': 'INCOME',
+                                        'voucherNumber': voucherCode,
+                                        'accountHead': head,
+                                        'category': 'Maintenance Collection',
+                                        'amount': amt,
+                                        'paidToOrReceivedFrom': 'Flat $flat',
+                                        'paymentDate': FieldValue.serverTimestamp(),
+                                        'paymentMode': 'Online (Payment Gateway)',
+                                        'referenceNumber': 'TXN_${DateTime.now().millisecondsSinceEpoch}',
+                                        'description': 'Online maintenance payment for $month by Flat $flat',
+                                        'linkedDueId': dueId,
+                                        'recordedBy': 'Resident ($flat)',
+                                        'createdAt': FieldValue.serverTimestamp(),
+                                      });
+
                                       Navigator.pop(ctx);
                                       ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Online payment successful!')),
+                                        SnackBar(content: Text('Online payment successful! Receipt: $voucherCode')),
                                       );
                                     },
                                     child: const Text('Pay Online'),

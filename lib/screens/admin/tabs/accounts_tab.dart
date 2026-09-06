@@ -1,0 +1,2234 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:intl/intl.dart';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
+
+import '../../../models/accounting_heads.dart';
+import '../../../utils/storage_utils.dart';
+import '../../../widgets/document_preview_dialog.dart';
+
+class AccountsTab extends StatefulWidget {
+  const AccountsTab({super.key});
+
+  @override
+  State<AccountsTab> createState() => _AccountsTabState();
+}
+
+class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  final currencyFmt = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+  final dateFmt = DateFormat('dd MMM yyyy');
+
+  String _searchQuery = '';
+  String? _filterHead;
+  String? _filterType; // 'ALL', 'INCOME', 'EXPENDITURE'
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 5, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  // ─── Helpers: File Upload ──────────────────────────────────────────────────
+  Future<String?> _uploadVoucherFile(PlatformFile file, String voucherId) async {
+    return uploadFile(file, 'society_accounts_vouchers/${voucherId}_${file.name}');
+  }
+
+  Future<String?> _uploadMomFile(PlatformFile file, String headName) async {
+    final headSlug = headName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    return uploadFile(file, 'society_budget_moms/${headSlug}_${timestamp}_${file.name}');
+  }
+
+  // ─── Dialog: Document Preview ──────────────────────────────────────────────
+  void _showDocumentPreview(String url, String fileName) {
+    showDocumentPreviewDialog(context, url, fileName);
+  }
+
+  // ─── Dialog: Edit Budget Head (Requires MoM) ──────────────────────────────
+  void _openEditBudgetHeadDialog(BudgetHead head) {
+    final formKey = GlobalKey<FormState>();
+    final yearlyCtrl = TextEditingController(text: head.yearlyBudget.toStringAsFixed(0));
+    final monthlyCtrl = TextEditingController(text: head.monthlyBudget.toStringAsFixed(0));
+    final reasonCtrl = TextEditingController(text: head.revisionReason ?? '');
+    String meetingType = head.meetingType ?? AccountingConfig.meetingTypes.first;
+    DateTime meetingDate = head.meetingDate ?? DateTime.now();
+    PlatformFile? momFile;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDS) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.deepPurple.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.edit_calendar, color: Colors.deepPurple, size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Revise Budget: ${head.name}',
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis),
+                      Text('Category: ${head.category} • Base: ₹${head.yearlyBudget.toStringAsFixed(0)}/yr',
+                          style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 600,
+              child: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Alert Banner regarding MoM requirement
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.amber.shade300),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.gavel, color: Colors.brown, size: 20),
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Society Governance Rule: Any revision to approved budget allocations strictly requires an attached Minutes of Meeting (MoM) resolution copy.',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.brown),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Allocation Inputs
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: yearlyCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'New Annual Budget (₹) *',
+                                prefixIcon: Icon(Icons.currency_rupee),
+                                border: OutlineInputBorder(),
+                              ),
+                              validator: (val) {
+                                if (val == null || val.trim().isEmpty) return 'Enter annual budget';
+                                final num? n = num.tryParse(val.trim());
+                                if (n == null || n < 0) return 'Enter valid positive amount';
+                                return null;
+                              },
+                              onChanged: (val) {
+                                final n = double.tryParse(val.trim());
+                                if (n != null) {
+                                  setDS(() {
+                                    monthlyCtrl.text = (n / 12).round().toString();
+                                  });
+                                }
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: monthlyCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'New Monthly Outlay (₹) *',
+                                prefixIcon: Icon(Icons.calendar_month),
+                                border: OutlineInputBorder(),
+                              ),
+                              validator: (val) {
+                                if (val == null || val.trim().isEmpty) return 'Enter monthly budget';
+                                final num? n = num.tryParse(val.trim());
+                                if (n == null || n < 0) return 'Enter valid positive amount';
+                                return null;
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Meeting Details
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: DropdownButtonFormField<String>(
+                              initialValue: meetingType,
+                              decoration: const InputDecoration(
+                                labelText: 'Meeting / Resolution Authority *',
+                                prefixIcon: Icon(Icons.groups),
+                                border: OutlineInputBorder(),
+                              ),
+                              items: AccountingConfig.meetingTypes
+                                  .map((t) => DropdownMenuItem(value: t, child: Text(t, style: const TextStyle(fontSize: 12))))
+                                  .toList(),
+                              onChanged: (val) {
+                                if (val != null) setDS(() => meetingType = val);
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 2,
+                            child: InkWell(
+                              onTap: () async {
+                                final picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: meetingDate,
+                                  firstDate: DateTime(2025, 1, 1),
+                                  lastDate: DateTime(2030, 12, 31),
+                                );
+                                if (picked != null) {
+                                  setDS(() => meetingDate = picked);
+                                }
+                              },
+                              child: InputDecorator(
+                                decoration: const InputDecoration(
+                                  labelText: 'Meeting Date *',
+                                  prefixIcon: Icon(Icons.date_range),
+                                  border: OutlineInputBorder(),
+                                ),
+                                child: Text(
+                                  DateFormat('dd MMM yyyy').format(meetingDate),
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Reason / Justification
+                      TextFormField(
+                        controller: reasonCtrl,
+                        maxLines: 2,
+                        decoration: const InputDecoration(
+                          labelText: 'Reason & Resolution Summary *',
+                          prefixIcon: Icon(Icons.notes),
+                          border: OutlineInputBorder(),
+                          hintText: 'e.g. Pump breakdown requiring emergency pump rewinding approved in AGM #14',
+                        ),
+                        validator: (val) {
+                          if (val == null || val.trim().length < 8) {
+                            return 'Please explain the reason for this budget revision (min 8 chars)';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+
+                      // ─── Mandatory Minutes of Meeting (MoM) Upload ─────────
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: momFile == null ? Colors.red.shade50 : Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: momFile == null ? Colors.red.shade300 : Colors.green.shade300,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  momFile == null ? Icons.assignment_late : Icons.assignment_turned_in,
+                                  color: momFile == null ? Colors.red.shade900 : Colors.green.shade900,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Minutes of Meeting (MoM) / Resolution Document *',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
+                                          color: momFile == null ? Colors.red.shade900 : Colors.green.shade900,
+                                        ),
+                                      ),
+                                      const Text(
+                                        'Upload PDF, scanned copy, or photo of signed meeting minutes.',
+                                        style: TextStyle(fontSize: 11, color: Colors.black54),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: momFile == null ? Colors.red.shade800 : Colors.teal,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  icon: const Icon(Icons.upload_file, size: 16),
+                                  label: Text(momFile == null ? 'Upload MoM *' : 'Change MoM'),
+                                  onPressed: () async {
+                                    final file = await pickFile();
+                                    if (file != null) {
+                                      setDS(() => momFile = file);
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                            if (momFile != null) ...[
+                              const Divider(height: 16),
+                              Row(
+                                children: [
+                                  Icon(
+                                    momFile!.name.toLowerCase().endsWith('.pdf')
+                                        ? Icons.picture_as_pdf
+                                        : Icons.image,
+                                    size: 20,
+                                    color: Colors.green.shade800,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      momFile!.name,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green.shade900,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.close, size: 16, color: Colors.red),
+                                    tooltip: 'Remove',
+                                    onPressed: () => setDS(() => momFile = null),
+                                  ),
+                                ],
+                              ),
+                            ] else ...[
+                              const SizedBox(height: 6),
+                              const Text(
+                                '⚠️ Cannot revise budget without uploading supporting MoM document.',
+                                style: TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                            if (head.isRevised && head.momDocumentUrl != null && momFile == null) ...[
+                              const SizedBox(height: 6),
+                              InkWell(
+                                onTap: () => _showDocumentPreview(head.momDocumentUrl!, head.momFileName ?? 'MoM_Resolution.pdf'),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.link, size: 14, color: Colors.deepPurple),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Current Active MoM: ${head.momFileName ?? "View Document"}',
+                                      style: const TextStyle(fontSize: 11, color: Colors.deepPurple, decoration: TextDecoration.underline),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurple.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                icon: isSubmitting
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white))
+                    : const Icon(Icons.check),
+                label: const Text('Save Budget Revision'),
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        if (!formKey.currentState!.validate()) return;
+                        final scaffoldMessenger = ScaffoldMessenger.of(context);
+                        final dialogNav = Navigator.of(ctx);
+
+                        // STRICT RULE: If no new momFile AND no existing momDocumentUrl, block!
+                        if (momFile == null && head.momDocumentUrl == null) {
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.red.shade800,
+                              content: const Text('Minutes of Meeting (MoM) document is strictly mandatory to revise budget allocations.'),
+                            ),
+                          );
+                          return;
+                        }
+
+                        setDS(() => isSubmitting = true);
+                        try {
+                          final double newYearly = double.parse(yearlyCtrl.text.trim());
+                          final double newMonthly = double.parse(monthlyCtrl.text.trim());
+                          final adminUser = FirebaseAuth.instance.currentUser;
+
+                          String? momUrl = head.momDocumentUrl;
+                          String? momName = head.momFileName;
+                          if (momFile != null) {
+                            momName = momFile!.name;
+                            momUrl = await _uploadMomFile(momFile!, head.name);
+                          }
+
+                          // 1. Update society_budget_heads
+                          await FirebaseFirestore.instance
+                              .collection('society_budget_heads')
+                              .doc(head.name)
+                              .set({
+                            'name': head.name,
+                            'category': head.category,
+                            'yearlyBudget': newYearly,
+                            'monthlyBudget': newMonthly,
+                            'isDocRequired': head.isDocRequired,
+                            'description': head.description,
+                            'isRevised': true,
+                            'momDocumentUrl': momUrl,
+                            'momFileName': momName,
+                            'meetingType': meetingType,
+                            'meetingDate': Timestamp.fromDate(meetingDate),
+                            'revisionReason': reasonCtrl.text.trim(),
+                            'revisedBy': adminUser?.email ?? adminUser?.uid ?? 'Admin',
+                            'updatedAt': FieldValue.serverTimestamp(),
+                          }, SetOptions(merge: true));
+
+                          // 2. Audit Trail in society_budget_revisions
+                          await FirebaseFirestore.instance
+                              .collection('society_budget_revisions')
+                              .add({
+                            'headName': head.name,
+                            'category': head.category,
+                            'oldYearlyBudget': head.yearlyBudget,
+                            'oldMonthlyBudget': head.monthlyBudget,
+                            'newYearlyBudget': newYearly,
+                            'newMonthlyBudget': newMonthly,
+                            'momDocumentUrl': momUrl,
+                            'momFileName': momName,
+                            'meetingType': meetingType,
+                            'meetingDate': Timestamp.fromDate(meetingDate),
+                            'revisionReason': reasonCtrl.text.trim(),
+                            'revisedBy': adminUser?.email ?? adminUser?.uid ?? 'Admin',
+                            'createdAt': FieldValue.serverTimestamp(),
+                          });
+
+                          dialogNav.pop();
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.green.shade700,
+                              content: Text('Budget for "${head.name}" successfully revised with MoM attached!'),
+                            ),
+                          );
+                        } catch (e) {
+                          setDS(() => isSubmitting = false);
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(content: Text('Failed to update budget: $e')),
+                          );
+                        }
+                      },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ─── Dialog: Record New Expenditure ────────────────────────────────────────
+  void _openRecordExpenseDialog(Map<String, double> currentSpentMap, [List<BudgetHead>? availableHeads]) {
+    final formKey = GlobalKey<FormState>();
+    final headsList = availableHeads ?? AccountingConfig.expenditureHeads;
+    String selectedHead = headsList.first.name;
+    final amountCtrl = TextEditingController();
+    final paidToCtrl = TextEditingController();
+    DateTime paymentDate = DateTime.now();
+    String paymentMode = AccountingConfig.paymentModes.first;
+    final refCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    PlatformFile? voucherFile;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDS) {
+          final isDocMandatory = AccountingConfig.requiresSupportingDocument(selectedHead);
+          final headInfo = headsList.cast<BudgetHead?>().firstWhere(
+                (h) => h?.name == selectedHead,
+                orElse: () => AccountingConfig.getBudgetHead(selectedHead),
+              );
+          final double allocated = headInfo?.yearlyBudget ?? 0.0;
+          final double alreadySpent = currentSpentMap[selectedHead] ?? 0.0;
+          final double remaining = allocated - alreadySpent;
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.arrow_upward, color: Colors.red, size: 24),
+                ),
+                const SizedBox(width: 12),
+                const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Record Society Expenditure',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    Text('Budget 2026-27 Payment Voucher',
+                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  ],
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 580,
+              child: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Budget Head Selector
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedHead,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Head of Account *',
+                          prefixIcon: Icon(Icons.account_tree),
+                          border: OutlineInputBorder(),
+                        ),
+                        items: headsList.map((head) {
+                          return DropdownMenuItem<String>(
+                            value: head.name,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    head.name,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                                Text(
+                                  ' (Budget: ${currencyFmt.format(head.yearlyBudget)}${head.isRevised ? " • Revised" : ""})',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: head.isRevised ? Colors.deepPurple : Colors.grey.shade600,
+                                    fontWeight: head.isRevised ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setDS(() => selectedHead = val);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 8),
+
+                      // Budget Status Indicator for chosen head
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: remaining < 0
+                              ? Colors.red.shade50
+                              : (remaining < allocated * 0.2
+                                  ? Colors.amber.shade50
+                                  : Colors.blue.shade50),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: remaining < 0
+                                ? Colors.red.shade200
+                                : (remaining < allocated * 0.2
+                                    ? Colors.amber.shade300
+                                    : Colors.blue.shade200),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              remaining < 0
+                                  ? Icons.warning_amber
+                                  : Icons.pie_chart_outline,
+                              size: 18,
+                              color: remaining < 0 ? Colors.red : Colors.blue.shade900,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Budget: ${currencyFmt.format(allocated)}  |  Spent so far: ${currencyFmt.format(alreadySpent)}  |  Remaining: ${currencyFmt.format(remaining)}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: remaining < 0 ? Colors.red.shade900 : Colors.black87,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Amount & Paid To
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 5,
+                            child: TextFormField(
+                              controller: amountCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: const InputDecoration(
+                                labelText: 'Amount (₹) *',
+                                prefixIcon: Icon(Icons.currency_rupee),
+                                border: OutlineInputBorder(),
+                              ),
+                              validator: (val) {
+                                if (val == null || val.trim().isEmpty) {
+                                  return 'Enter amount';
+                                }
+                                final num = double.tryParse(val.trim());
+                                if (num == null || num <= 0) {
+                                  return 'Valid amount';
+                                }
+                                return null;
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 7,
+                            child: TextFormField(
+                              controller: paidToCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'Paid To (Payee / Vendor / Staff) *',
+                                prefixIcon: Icon(Icons.person),
+                                border: OutlineInputBorder(),
+                              ),
+                              validator: (val) {
+                                if (val == null || val.trim().isEmpty) {
+                                  return 'Payee name required';
+                                }
+                                return null;
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Payment Date & Payment Mode
+                      Row(
+                        children: [
+                          Expanded(
+                            child: InkWell(
+                              onTap: () async {
+                                final picked = await showDatePicker(
+                                  context: ctx,
+                                  initialDate: paymentDate,
+                                  firstDate: DateTime(2025, 4, 1),
+                                  lastDate: DateTime(2028, 3, 31),
+                                );
+                                if (picked != null) {
+                                  setDS(() => paymentDate = picked);
+                                }
+                              },
+                              child: InputDecorator(
+                                decoration: const InputDecoration(
+                                  labelText: 'Payment Date *',
+                                  prefixIcon: Icon(Icons.calendar_today),
+                                  border: OutlineInputBorder(),
+                                ),
+                                child: Text(dateFmt.format(paymentDate),
+                                    style: const TextStyle(fontSize: 14)),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: paymentMode,
+                              decoration: const InputDecoration(
+                                labelText: 'Payment Mode *',
+                                prefixIcon: Icon(Icons.payments),
+                                border: OutlineInputBorder(),
+                              ),
+                              items: AccountingConfig.paymentModes
+                                  .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13))))
+                                  .toList(),
+                              onChanged: (val) {
+                                if (val != null) setDS(() => paymentMode = val);
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Transaction Ref & Description
+                      TextFormField(
+                        controller: refCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Cheque No. / UTR / Transaction ID (Optional)',
+                          prefixIcon: Icon(Icons.numbers),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: descCtrl,
+                        maxLines: 2,
+                        decoration: const InputDecoration(
+                          labelText: 'Notes / Bill Description',
+                          prefixIcon: Icon(Icons.notes),
+                          border: OutlineInputBorder(),
+                          hintText: 'e.g. Pump rewinding service bill no. 452',
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // ─── Mandatory Supporting Document Section ─────────────────
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isDocMandatory
+                              ? (voucherFile == null ? Colors.red.shade50 : Colors.green.shade50)
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: isDocMandatory
+                                ? (voucherFile == null ? Colors.red.shade300 : Colors.green.shade300)
+                                : Colors.grey.shade400,
+                            width: isDocMandatory && voucherFile == null ? 1.5 : 1,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  isDocMandatory ? Icons.attach_file : Icons.attachment_outlined,
+                                  color: isDocMandatory
+                                      ? (voucherFile == null ? Colors.red.shade900 : Colors.green.shade900)
+                                      : Colors.grey.shade700,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        isDocMandatory
+                                            ? 'Supporting Bill / Receipt / Voucher (MANDATORY) *'
+                                            : 'Supporting Document (Optional for Misc Head)',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
+                                          color: isDocMandatory
+                                              ? (voucherFile == null ? Colors.red.shade900 : Colors.green.shade900)
+                                              : Colors.black87,
+                                        ),
+                                      ),
+                                      Text(
+                                        isDocMandatory
+                                            ? 'Every payment from society must have supporting bill attached.'
+                                            : 'Miscellaneous expenses can be saved without receipt if unavailable.',
+                                        style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: voucherFile == null ? Colors.deepPurple : Colors.teal,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  icon: const Icon(Icons.upload_file, size: 16),
+                                  label: Text(voucherFile == null ? 'Attach File' : 'Change'),
+                                  onPressed: () async {
+                                    final file = await pickFile();
+                                    if (file != null) {
+                                      setDS(() => voucherFile = file);
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                            if (voucherFile != null) ...[
+                              const Divider(height: 16),
+                              Row(
+                                children: [
+                                  const Icon(Icons.check_circle, color: Colors.green, size: 16),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      'Selected: ${voucherFile!.name}',
+                                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.close, size: 16, color: Colors.red),
+                                    tooltip: 'Remove',
+                                    onPressed: () => setDS(() => voucherFile = null),
+                                  ),
+                                ],
+                              ),
+                            ] else if (isDocMandatory) ...[
+                              const SizedBox(height: 6),
+                              const Text(
+                                '⚠️ Cannot proceed without supporting invoice/receipt.',
+                                style: TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                icon: isSubmitting
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white))
+                    : const Icon(Icons.check),
+                label: const Text('Confirm & Post Payment'),
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        if (!formKey.currentState!.validate()) return;
+                        final scaffoldMessenger = ScaffoldMessenger.of(context);
+                        final dialogNav = Navigator.of(ctx);
+
+                        // STRICT RULE VALIDATION
+                        if (isDocMandatory && voucherFile == null) {
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.red.shade800,
+                              content: Text(
+                                  'Supporting document is strictly mandatory for "$selectedHead". Please attach a receipt/bill.'),
+                            ),
+                          );
+                          return;
+                        }
+
+                        setDS(() => isSubmitting = true);
+                        try {
+                          final double amount = double.parse(amountCtrl.text.trim());
+                          final timestamp = DateTime.now().millisecondsSinceEpoch;
+                          final voucherCode = 'EXP-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
+
+                          String? docUrl;
+                          String? docFileName;
+                          if (voucherFile != null) {
+                            docFileName = voucherFile!.name;
+                            docUrl = await _uploadVoucherFile(voucherFile!, voucherCode);
+                          }
+
+                          final adminUser = FirebaseAuth.instance.currentUser;
+                          await FirebaseFirestore.instance.collection('society_transactions').add({
+                            'type': 'EXPENDITURE',
+                            'voucherNumber': voucherCode,
+                            'accountHead': selectedHead,
+                            'category': headInfo?.category ?? 'General',
+                            'amount': amount,
+                            'paidToOrReceivedFrom': paidToCtrl.text.trim(),
+                            'paymentDate': Timestamp.fromDate(paymentDate),
+                            'paymentMode': paymentMode,
+                            'referenceNumber': refCtrl.text.trim(),
+                            'description': descCtrl.text.trim(),
+                            'documentUrl': docUrl,
+                            'documentFileName': docFileName,
+                            'recordedBy': adminUser?.email ?? adminUser?.uid ?? 'Admin',
+                            'createdAt': FieldValue.serverTimestamp(),
+                          });
+
+                          dialogNav.pop();
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.green.shade700,
+                              content: Text('Expenditure $voucherCode (₹$amount) recorded successfully!'),
+                            ),
+                          );
+                        } catch (e) {
+                          setDS(() => isSubmitting = false);
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(content: Text('Failed to save expenditure: $e')),
+                          );
+                        }
+                      },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ─── Dialog: Record Other Income ───────────────────────────────────────────
+  void _openRecordIncomeDialog() {
+    final formKey = GlobalKey<FormState>();
+    String selectedHead = AccountingConfig.incomeHeads.first;
+    final amountCtrl = TextEditingController();
+    final receivedFromCtrl = TextEditingController();
+    DateTime receivedDate = DateTime.now();
+    String paymentMode = 'Bank Transfer / NEFT / IMPS';
+    final refCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    PlatformFile? receiptFile;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDS) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.arrow_downward, color: Colors.green, size: 24),
+              ),
+              const SizedBox(width: 12),
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Record Society Income / Collection',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text('Tower Rent / CESC Rent / Parking / Other Inflow',
+                      style: TextStyle(fontSize: 12, color: Colors.grey)),
+                ],
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 580,
+            child: SingleChildScrollView(
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedHead,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Income Head *',
+                        prefixIcon: Icon(Icons.savings),
+                        border: OutlineInputBorder(),
+                      ),
+                      items: AccountingConfig.incomeHeads
+                          .map((h) => DropdownMenuItem(value: h, child: Text(h)))
+                          .toList(),
+                      onChanged: (val) {
+                        if (val != null) setDS(() => selectedHead = val);
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 5,
+                          child: TextFormField(
+                            controller: amountCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            decoration: const InputDecoration(
+                              labelText: 'Amount (₹) *',
+                              prefixIcon: Icon(Icons.currency_rupee),
+                              border: OutlineInputBorder(),
+                            ),
+                            validator: (val) {
+                              if (val == null || val.trim().isEmpty) return 'Enter amount';
+                              final num = double.tryParse(val.trim());
+                              if (num == null || num <= 0) return 'Valid amount';
+                              return null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 7,
+                          child: TextFormField(
+                            controller: receivedFromCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Received From (Company / Tenant / Resident) *',
+                              prefixIcon: Icon(Icons.business),
+                              border: OutlineInputBorder(),
+                            ),
+                            validator: (val) => val == null || val.trim().isEmpty ? 'Required' : null,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: InkWell(
+                            onTap: () async {
+                              final picked = await showDatePicker(
+                                context: ctx,
+                                initialDate: receivedDate,
+                                firstDate: DateTime(2025, 4, 1),
+                                lastDate: DateTime(2028, 3, 31),
+                              );
+                              if (picked != null) setDS(() => receivedDate = picked);
+                            },
+                            child: InputDecorator(
+                              decoration: const InputDecoration(
+                                labelText: 'Received Date *',
+                                prefixIcon: Icon(Icons.calendar_today),
+                                border: OutlineInputBorder(),
+                              ),
+                              child: Text(dateFmt.format(receivedDate)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: paymentMode,
+                            decoration: const InputDecoration(
+                              labelText: 'Payment Mode *',
+                              prefixIcon: Icon(Icons.payments),
+                              border: OutlineInputBorder(),
+                            ),
+                            items: AccountingConfig.paymentModes
+                                .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13))))
+                                .toList(),
+                            onChanged: (val) {
+                              if (val != null) setDS(() => paymentMode = val);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: refCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Transaction Ref / Cheque No. (Optional)',
+                        prefixIcon: Icon(Icons.numbers),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: descCtrl,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Description / Month reference',
+                        prefixIcon: Icon(Icons.notes),
+                        border: OutlineInputBorder(),
+                        hintText: 'e.g. Tower rent for month of August 2026',
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            receiptFile == null
+                                ? 'Upload Deposit Slip / Acknowledgement (Optional)'
+                                : 'Selected: ${receiptFile!.name}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: receiptFile == null ? Colors.grey.shade700 : Colors.teal,
+                              fontWeight: receiptFile == null ? FontWeight.normal : FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
+                          icon: const Icon(Icons.attach_file, size: 16),
+                          label: Text(receiptFile == null ? 'Attach' : 'Change'),
+                          onPressed: () async {
+                            final file = await pickFile();
+                            if (file != null) {
+                              setDS(() => receiptFile = file);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green.shade700,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              ),
+              icon: isSubmitting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white))
+                  : const Icon(Icons.check),
+              label: const Text('Record Income'),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+                      final scaffoldMessenger = ScaffoldMessenger.of(context);
+                      final dialogNav = Navigator.of(ctx);
+
+                      setDS(() => isSubmitting = true);
+                      try {
+                        final double amount = double.parse(amountCtrl.text.trim());
+                        final timestamp = DateTime.now().millisecondsSinceEpoch;
+                        final voucherCode = 'INC-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
+
+                        String? docUrl;
+                        String? docFileName;
+                        if (receiptFile != null) {
+                          docFileName = receiptFile!.name;
+                          docUrl = await _uploadVoucherFile(receiptFile!, voucherCode);
+                        }
+
+                        final adminUser = FirebaseAuth.instance.currentUser;
+                        await FirebaseFirestore.instance.collection('society_transactions').add({
+                          'type': 'INCOME',
+                          'voucherNumber': voucherCode,
+                          'accountHead': selectedHead,
+                          'category': 'Income',
+                          'amount': amount,
+                          'paidToOrReceivedFrom': receivedFromCtrl.text.trim(),
+                          'paymentDate': Timestamp.fromDate(receivedDate),
+                          'paymentMode': paymentMode,
+                          'referenceNumber': refCtrl.text.trim(),
+                          'description': descCtrl.text.trim(),
+                          'documentUrl': docUrl,
+                          'documentFileName': docFileName,
+                          'recordedBy': adminUser?.email ?? adminUser?.uid ?? 'Admin',
+                          'createdAt': FieldValue.serverTimestamp(),
+                        });
+
+                        dialogNav.pop();
+                        scaffoldMessenger.showSnackBar(
+                          SnackBar(
+                            backgroundColor: Colors.green.shade700,
+                            content: Text('Income $voucherCode (₹$amount) recorded successfully!'),
+                          ),
+                        );
+                      } catch (e) {
+                        setDS(() => isSubmitting = false);
+                        scaffoldMessenger.showSnackBar(
+                          SnackBar(content: Text('Failed to save income: $e')),
+                        );
+                      }
+                    },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── Delete Transaction ────────────────────────────────────────────────────
+  Future<void> _deleteTransaction(String docId, Map<String, dynamic> data) async {
+    final voucher = data['voucherNumber'] ?? 'Transaction';
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.warning, color: Colors.red),
+            const SizedBox(width: 8),
+            Text('Void / Delete $voucher?'),
+          ],
+        ),
+        content: Text(
+          'Are you sure you want to void $voucher (${data['type']}: ₹${data['amount']})?\n\n'
+          'This will permanently remove this entry from the society accounts ledger.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Void Transaction'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final docUrl = data['documentUrl']?.toString();
+      if (docUrl != null && docUrl.isNotEmpty) {
+        try {
+          await FirebaseStorage.instance.refFromURL(docUrl).delete();
+        } catch (_) {}
+      }
+      await FirebaseFirestore.instance.collection('society_transactions').doc(docId).delete();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$voucher voided successfully.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error voiding transaction: $e')),
+        );
+      }
+    }
+  }
+
+  // ─── Export CSV ────────────────────────────────────────────────────────────
+  void _exportTransactionsCsv(List<QueryDocumentSnapshot> docs) {
+    if (docs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No transactions to export.')),
+      );
+      return;
+    }
+
+    final buffer = StringBuffer();
+    buffer.writeln(
+        'Voucher No,Type,Date,Head of Account,Category,Amount (INR),Paid To / Received From,Payment Mode,Reference No,Description,Supporting Document URL,Recorded By');
+
+    for (final doc in docs) {
+      final d = doc.data() as Map<String, dynamic>;
+      final voucher = d['voucherNumber'] ?? '';
+      final type = d['type'] ?? '';
+      final pDate = (d['paymentDate'] as Timestamp?)?.toDate();
+      final dateStr = pDate != null ? DateFormat('yyyy-MM-dd').format(pDate) : '';
+      final head = '"${(d['accountHead'] ?? '').toString().replaceAll('"', '""')}"';
+      final category = '"${(d['category'] ?? '').toString().replaceAll('"', '""')}"';
+      final amount = (d['amount'] ?? 0).toString();
+      final entity = '"${(d['paidToOrReceivedFrom'] ?? '').toString().replaceAll('"', '""')}"';
+      final mode = '"${(d['paymentMode'] ?? '').toString().replaceAll('"', '""')}"';
+      final ref = '"${(d['referenceNumber'] ?? '').toString().replaceAll('"', '""')}"';
+      final desc = '"${(d['description'] ?? '').toString().replaceAll('"', '""')}"';
+      final docUrl = d['documentUrl'] ?? '';
+      final recordedBy = d['recordedBy'] ?? '';
+
+      buffer.writeln(
+          '$voucher,$type,$dateStr,$head,$category,$amount,$entity,$mode,$ref,$desc,$docUrl,$recordedBy');
+    }
+
+    final bytes = utf8.encode(buffer.toString());
+    final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.AnchorElement(href: url)
+      ..setAttribute(
+          'download', 'Ramkrishnapuram_Accounts_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv')
+      ..click();
+    html.Url.revokeObjectUrl(url);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Transactions exported to CSV successfully!')),
+    );
+  }
+
+  // ─── Main Build ────────────────────────────────────────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('society_budget_heads').snapshots(),
+      builder: (context, budgetSnapshot) {
+        final Map<String, BudgetHead> revisedHeadsMap = {};
+        for (final doc in budgetSnapshot.data?.docs ?? []) {
+          final d = doc.data() as Map<String, dynamic>;
+          final name = d['name'] ?? doc.id;
+          final yearly = (d['yearlyBudget'] as num?)?.toDouble() ?? 0.0;
+          final monthly = (d['monthlyBudget'] as num?)?.toDouble() ?? (yearly / 12);
+          revisedHeadsMap[name] = BudgetHead(
+            name: name,
+            category: d['category'] ?? 'General',
+            yearlyBudget: yearly,
+            monthlyBudget: monthly,
+            isDocRequired: d['isDocRequired'] ?? true,
+            description: d['description'] ?? '',
+            isRevised: true,
+            momDocumentUrl: d['momDocumentUrl'],
+            momFileName: d['momFileName'],
+            meetingType: d['meetingType'],
+            meetingDate: (d['meetingDate'] as Timestamp?)?.toDate(),
+            revisionReason: d['revisionReason'],
+            revisedBy: d['revisedBy'],
+            revisedAt: (d['updatedAt'] as Timestamp?)?.toDate(),
+          );
+        }
+
+        final activeExpenditureHeads = AccountingConfig.expenditureHeads.map((defaultHead) {
+          if (revisedHeadsMap.containsKey(defaultHead.name)) {
+            final rev = revisedHeadsMap[defaultHead.name]!;
+            return defaultHead.copyWith(
+              yearlyBudget: rev.yearlyBudget,
+              monthlyBudget: rev.monthlyBudget,
+              isRevised: true,
+              momDocumentUrl: rev.momDocumentUrl,
+              momFileName: rev.momFileName,
+              meetingType: rev.meetingType,
+              meetingDate: rev.meetingDate,
+              revisionReason: rev.revisionReason,
+              revisedBy: rev.revisedBy,
+              revisedAt: rev.revisedAt,
+            );
+          }
+          return defaultHead;
+        }).toList();
+
+        final totalApprovedAnnualBudget = activeExpenditureHeads.fold(0.0, (acc, h) => acc + h.yearlyBudget);
+        final totalApprovedMonthlyBudget = activeExpenditureHeads.fold(0.0, (acc, h) => acc + h.monthlyBudget);
+
+        return StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('society_transactions')
+              .orderBy('paymentDate', descending: true)
+              .snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final allDocs = snapshot.data?.docs ?? [];
+
+            // Aggregations
+            double totalIncome = 0;
+            double totalExpense = 0;
+            final Map<String, double> headExpenditures = {};
+            final Map<String, double> headIncomes = {};
+
+            for (final doc in allDocs) {
+              final data = doc.data() as Map<String, dynamic>;
+              final double amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
+              final String type = (data['type'] ?? '').toString().toUpperCase();
+              final String head = data['accountHead'] ?? 'Uncategorized';
+
+              if (type == 'EXPENDITURE') {
+                totalExpense += amt;
+                headExpenditures[head] = (headExpenditures[head] ?? 0.0) + amt;
+              } else if (type == 'INCOME') {
+                totalIncome += amt;
+                headIncomes[head] = (headIncomes[head] ?? 0.0) + amt;
+              }
+            }
+
+            final double netSurplus = totalIncome - totalExpense;
+
+            return Scaffold(
+              body: Column(
+                children: [
+                  // Top Financial Summary Bar
+                  _buildTopSummaryBar(totalIncome, totalExpense, netSurplus),
+
+                  // Tab Selector
+                  Container(
+                    color: Colors.white,
+                    child: TabBar(
+                      controller: _tabController,
+                      isScrollable: true,
+                      labelColor: Colors.deepPurple,
+                      unselectedLabelColor: Colors.grey.shade700,
+                      indicatorColor: Colors.deepPurple,
+                      indicatorWeight: 3,
+                      tabs: const [
+                        Tab(icon: Icon(Icons.dashboard_outlined), text: 'Overview'),
+                        Tab(icon: Icon(Icons.arrow_upward, color: Colors.red), text: 'Expenditures'),
+                        Tab(icon: Icon(Icons.arrow_downward, color: Colors.green), text: 'Incomes'),
+                        Tab(icon: Icon(Icons.pie_chart_outline), text: 'Budget vs Actual (2026-27)'),
+                        Tab(icon: Icon(Icons.menu_book), text: 'Daybook & Ledger'),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+
+                  // Tab Views
+                  Expanded(
+                    child: TabBarView(
+                      controller: _tabController,
+                      children: [
+                        // Tab 1: Overview
+                        _buildOverviewTab(allDocs, totalIncome, totalExpense, netSurplus, headExpenditures, activeExpenditureHeads, totalApprovedAnnualBudget),
+
+                        // Tab 2: Expenditures
+                        _buildExpendituresTab(allDocs, headExpenditures, activeExpenditureHeads),
+
+                        // Tab 3: Incomes
+                        _buildIncomesTab(allDocs, headIncomes),
+
+                        // Tab 4: Budget vs Actual
+                        _buildBudgetVsActualTab(headExpenditures, activeExpenditureHeads, totalApprovedAnnualBudget, totalApprovedMonthlyBudget),
+
+                        // Tab 5: Daybook
+                        _buildDaybookTab(allDocs),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ─── UI Component: Top Financial Summary ───────────────────────────────────
+  Widget _buildTopSummaryBar(double totalIncome, double totalExpense, double netSurplus) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.deepPurple.shade900,
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.account_balance, color: Colors.white, size: 28),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Society Accounts & Treasury',
+                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  Text('Ramkrishnapuram Welfare Association (FY ${AccountingConfig.currentFinancialYear})',
+                      style: TextStyle(color: Colors.deepPurple.shade100, fontSize: 11)),
+                ],
+              ),
+            ],
+          ),
+          Wrap(
+            spacing: 16,
+            children: [
+              _buildSummaryPill('Total Collections', currencyFmt.format(totalIncome), Colors.greenAccent),
+              _buildSummaryPill('Total Expenditures', currencyFmt.format(totalExpense), Colors.redAccent),
+              _buildSummaryPill(
+                'Net Balance / Surplus',
+                currencyFmt.format(netSurplus),
+                netSurplus >= 0 ? Colors.cyanAccent : Colors.orangeAccent,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryPill(String title, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(title, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+          Text(value, style: TextStyle(color: color, fontSize: 15, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  // ─── UI Tab 1: Overview ────────────────────────────────────────────────────
+  Widget _buildOverviewTab(
+    List<QueryDocumentSnapshot> allDocs,
+    double totalIncome,
+    double totalExpense,
+    double netSurplus,
+    Map<String, double> headExpenditures,
+    List<BudgetHead> activeHeads,
+    double approvedAnnualBudget,
+  ) {
+    final recentDocs = allDocs.take(8).toList();
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Action Buttons Bar
+          Row(
+            children: [
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                ),
+                icon: const Icon(Icons.add_shopping_cart),
+                label: const Text('Record New Expense (Outflow)',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                onPressed: () => _openRecordExpenseDialog(headExpenditures, activeHeads),
+              ),
+              const SizedBox(width: 14),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                ),
+                icon: const Icon(Icons.savings_outlined),
+                label: const Text('Record Other Income (Inflow)',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                onPressed: _openRecordIncomeDialog,
+              ),
+              const Spacer(),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.download),
+                label: const Text('Export Accounts CSV'),
+                onPressed: () => _exportTransactionsCsv(allDocs),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+
+          // High Priority Budget Warning Alert (if any head exceeded)
+          _buildBudgetAlertBanner(headExpenditures, activeHeads),
+          const SizedBox(height: 20),
+
+          // Quick Stat Cards
+          Row(
+            children: [
+              Expanded(
+                child: _buildMetricCard(
+                  'Projected Budget (2026-27)',
+                  currencyFmt.format(approvedAnnualBudget),
+                  'Annual expenditure outlay approved',
+                  Icons.account_balance_wallet,
+                  Colors.blue,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildMetricCard(
+                  'Actual Spent Outlay',
+                  currencyFmt.format(totalExpense),
+                  '${(approvedAnnualBudget > 0 ? ((totalExpense / approvedAnnualBudget) * 100) : 0.0).toStringAsFixed(1)}% of annual budget utilized',
+                  Icons.trending_up,
+                  Colors.red,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildMetricCard(
+                  'Total Collections',
+                  currencyFmt.format(totalIncome),
+                  'Maintenance & commercial inflows',
+                  Icons.payments,
+                  Colors.green,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 28),
+
+          // Recent Activity Table
+          const Text('Recent Accounting Vouchers & Ledger Entries',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: recentDocs.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Center(child: Text('No accounting transactions recorded yet.')),
+                  )
+                : ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: recentDocs.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (ctx, i) => _buildTransactionListTile(recentDocs[i]),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBudgetAlertBanner(Map<String, double> headExpenditures, List<BudgetHead> activeHeads) {
+    final exceededHeads = <String>[];
+    for (final head in activeHeads) {
+      final spent = headExpenditures[head.name] ?? 0.0;
+      if (spent > head.yearlyBudget) {
+        exceededHeads.add('${head.name} (Spent: ₹$spent / Budget: ₹${head.yearlyBudget.toInt()})');
+      }
+    }
+
+    if (exceededHeads.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.green.shade50,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.green.shade200),
+        ),
+        child: const Row(
+          children: [
+            Icon(Icons.check_circle_outline, color: Colors.green),
+            SizedBox(width: 12),
+            Text(
+              'All society expenses are currently within budgeted allocations for FY 2026-27.',
+              style: TextStyle(color: Colors.green, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.red.shade300, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.warning, color: Colors.red, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'CRITICAL: ${exceededHeads.length} Budget Head(s) Exceeded Allocation Limit!',
+                style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ...exceededHeads.map((h) => Text('• $h', style: const TextStyle(fontSize: 12, color: Colors.black87))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricCard(String title, String value, String subtitle, IconData icon, Color color) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.12), shape: BoxShape.circle),
+              child: Icon(icon, color: color, size: 28),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  const SizedBox(height: 2),
+                  Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── UI Tab 2: Expenditures ────────────────────────────────────────────────
+  Widget _buildExpendituresTab(
+    List<QueryDocumentSnapshot> allDocs,
+    Map<String, double> headExpenditures,
+    List<BudgetHead> activeHeads,
+  ) {
+    final expenseDocs = allDocs.where((d) {
+      final data = d.data() as Map<String, dynamic>;
+      return (data['type'] ?? '').toString().toUpperCase() == 'EXPENDITURE';
+    }).toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Text('Society Expenditures & Outflows',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                icon: const Icon(Icons.add),
+                label: const Text('Record New Expense'),
+                onPressed: () => _openRecordExpenseDialog(headExpenditures, activeHeads),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: expenseDocs.isEmpty
+                ? const Center(child: Text('No expenditures recorded yet.'))
+                : Card(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    child: ListView.separated(
+                      itemCount: expenseDocs.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (ctx, i) => _buildTransactionListTile(expenseDocs[i]),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── UI Tab 3: Incomes ─────────────────────────────────────────────────────
+  Widget _buildIncomesTab(
+    List<QueryDocumentSnapshot> allDocs,
+    Map<String, double> headIncomes,
+  ) {
+    final incomeDocs = allDocs.where((d) {
+      final data = d.data() as Map<String, dynamic>;
+      return (data['type'] ?? '').toString().toUpperCase() == 'INCOME';
+    }).toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Text('Society Collections & Inflows',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                icon: const Icon(Icons.add),
+                label: const Text('Record Other Income'),
+                onPressed: _openRecordIncomeDialog,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: incomeDocs.isEmpty
+                ? const Center(child: Text('No income or collections recorded yet.'))
+                : Card(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    child: ListView.separated(
+                      itemCount: incomeDocs.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (ctx, i) => _buildTransactionListTile(incomeDocs[i]),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── UI Tab 4: Budget vs Actual Analysis ───────────────────────────────────
+  Widget _buildBudgetVsActualTab(
+    Map<String, double> headExpenditures,
+    List<BudgetHead> activeHeads,
+    double approvedAnnualBudget,
+    double approvedMonthlyBudget,
+  ) {
+    final liveSurplus = AccountingConfig.totalProjectedIncomeMonthly - approvedMonthlyBudget;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Budget vs Actual Outlay Tracker (2026-27)',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  Text(
+                    'Annual Approved Outlay: ${currencyFmt.format(approvedAnnualBudget)} (${currencyFmt.format(approvedMonthlyBudget)}/mo) • Net Surplus: ₹${liveSurplus.toStringAsFixed(0)}/mo',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.w500),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              Chip(
+                backgroundColor: Colors.green.shade50,
+                avatar: const Icon(Icons.circle, size: 12, color: Colors.green),
+                label: const Text('< 80% Spent', style: TextStyle(fontSize: 11)),
+              ),
+              const SizedBox(width: 8),
+              Chip(
+                backgroundColor: Colors.amber.shade50,
+                avatar: const Icon(Icons.circle, size: 12, color: Colors.amber),
+                label: const Text('80% - 100% Spent', style: TextStyle(fontSize: 11)),
+              ),
+              const SizedBox(width: 8),
+              Chip(
+                backgroundColor: Colors.red.shade50,
+                avatar: const Icon(Icons.circle, size: 12, color: Colors.red),
+                label: const Text('> 100% Over Budget', style: TextStyle(fontSize: 11)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // Budget Heads Grid
+          LayoutBuilder(
+            builder: (ctx, constraints) {
+              final crossAxisCount = constraints.maxWidth > 900 ? 2 : 1;
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: crossAxisCount,
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                  mainAxisExtent: 175,
+                ),
+                itemCount: activeHeads.length,
+                itemBuilder: (ctx, i) {
+                  final head = activeHeads[i];
+                  final double allocated = head.yearlyBudget;
+                  final double spent = headExpenditures[head.name] ?? 0.0;
+                  final double remaining = allocated - spent;
+                  final double pct = allocated > 0 ? (spent / allocated) : 0.0;
+
+                  Color statusColor = Colors.green;
+                  String statusLabel = 'On Track';
+                  if (pct > 1.0) {
+                    statusColor = Colors.red;
+                    statusLabel = 'OVER BUDGET';
+                  } else if (pct >= 0.8) {
+                    statusColor = Colors.amber.shade800;
+                    statusLabel = 'Near Limit';
+                  }
+
+                  return Card(
+                    elevation: 1.5,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(
+                        color: pct > 1.0 ? Colors.red.shade300 : (head.isRevised ? Colors.blue.shade300 : Colors.grey.shade200),
+                        width: pct > 1.0 || head.isRevised ? 1.5 : 1,
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        head.name,
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    if (head.isRevised) ...[
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blue.shade50,
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: Colors.blue.shade200),
+                                        ),
+                                        child: const Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.verified, size: 11, color: Colors.blue),
+                                            SizedBox(width: 3),
+                                            Text('Revised', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.blue)),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              if (head.isRevised && head.momDocumentUrl != null)
+                                IconButton(
+                                  icon: const Icon(Icons.description_outlined, size: 20, color: Colors.deepPurple),
+                                  tooltip: 'View Minutes of Meeting (MoM) Resolution',
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () => _showDocumentPreview(head.momDocumentUrl!, head.momFileName ?? 'MoM_Resolution.pdf'),
+                                ),
+                              IconButton(
+                                icon: const Icon(Icons.edit, size: 17, color: Colors.blueGrey),
+                                tooltip: 'Edit Budget Head (MoM Required)',
+                                padding: const EdgeInsets.symmetric(horizontal: 4),
+                                constraints: const BoxConstraints(),
+                                onPressed: () => _openEditBudgetHeadDialog(head),
+                              ),
+                              const SizedBox(width: 4),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: statusColor.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  statusLabel,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: statusColor,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            head.description,
+                            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const Spacer(),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text('Budget: ${currencyFmt.format(allocated)} (${currencyFmt.format(head.monthlyBudget)}/mo)',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                              Text('Spent: ${currencyFmt.format(spent)} (${(pct * 100).toStringAsFixed(1)}%)',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: statusColor,
+                                  )),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: pct.clamp(0.0, 1.0),
+                              backgroundColor: Colors.grey.shade200,
+                              valueColor: AlwaysStoppedAnimation<Color>(statusColor),
+                              minHeight: 8,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                remaining >= 0
+                                    ? 'Remaining: ${currencyFmt.format(remaining)}'
+                                    : 'Deficit / Overspent: ${currencyFmt.format(-remaining)}',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: remaining >= 0 ? Colors.grey.shade700 : Colors.red,
+                                ),
+                              ),
+                              if (head.isRevised)
+                                Flexible(
+                                  child: Text(
+                                    head.meetingType != null ? 'Resolution: ${head.meetingType}' : 'MoM Resolution Attached',
+                                    style: const TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: Colors.deepPurple),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── UI Tab 5: Daybook & Audit Trail ───────────────────────────────────────
+  Widget _buildDaybookTab(List<QueryDocumentSnapshot> allDocs) {
+    // Apply Filters
+    final filtered = allDocs.where((doc) {
+      final d = doc.data() as Map<String, dynamic>;
+      final type = (d['type'] ?? '').toString().toUpperCase();
+      final head = (d['accountHead'] ?? '').toString();
+      final entity = (d['paidToOrReceivedFrom'] ?? '').toString().toLowerCase();
+      final voucher = (d['voucherNumber'] ?? '').toString().toLowerCase();
+      final ref = (d['referenceNumber'] ?? '').toString().toLowerCase();
+
+      if (_filterType != null && _filterType != 'ALL' && type != _filterType) {
+        return false;
+      }
+      if (_filterHead != null && _filterHead != 'ALL' && head != _filterHead) {
+        return false;
+      }
+      if (_searchQuery.isNotEmpty) {
+        final q = _searchQuery.toLowerCase();
+        if (!entity.contains(q) && !voucher.contains(q) && !ref.contains(q) && !head.toLowerCase().contains(q)) {
+          return false;
+        }
+      }
+      return true;
+    }).toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          // Filter Bar
+          Card(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        hintText: 'Search by voucher, payee, head, ref...',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (val) => setState(() => _searchQuery = val.trim()),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  DropdownButton<String>(
+                    value: _filterType ?? 'ALL',
+                    items: const [
+                      DropdownMenuItem(value: 'ALL', child: Text('All Transactions')),
+                      DropdownMenuItem(value: 'EXPENDITURE', child: Text('Expenditures Only')),
+                      DropdownMenuItem(value: 'INCOME', child: Text('Incomes Only')),
+                    ],
+                    onChanged: (val) => setState(() => _filterType = val),
+                  ),
+                  const SizedBox(width: 16),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.deepPurple,
+                      foregroundColor: Colors.white,
+                    ),
+                    icon: const Icon(Icons.download),
+                    label: const Text('Export Daybook CSV'),
+                    onPressed: () => _exportTransactionsCsv(filtered),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Transactions List
+          Expanded(
+            child: filtered.isEmpty
+                ? const Center(child: Text('No matching transactions found in Daybook.'))
+                : Card(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    child: ListView.separated(
+                      itemCount: filtered.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (ctx, i) => _buildTransactionListTile(filtered[i]),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Reusable Tile: Transaction Row ────────────────────────────────────────
+  Widget _buildTransactionListTile(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final isExpense = (data['type'] ?? '').toString().toUpperCase() == 'EXPENDITURE';
+    final pDate = (data['paymentDate'] as Timestamp?)?.toDate() ?? DateTime.now();
+    final voucher = data['voucherNumber'] ?? 'VOUCHER';
+    final head = data['accountHead'] ?? 'General';
+    final entity = data['paidToOrReceivedFrom'] ?? 'N/A';
+    final mode = data['paymentMode'] ?? 'N/A';
+    final ref = data['referenceNumber']?.toString() ?? '';
+    final amount = (data['amount'] as num?)?.toDouble() ?? 0.0;
+    final docUrl = data['documentUrl']?.toString();
+    final docFileName = data['documentFileName']?.toString() ?? 'Document';
+
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      leading: CircleAvatar(
+        backgroundColor: isExpense ? Colors.red.shade100 : Colors.green.shade100,
+        child: Icon(
+          isExpense ? Icons.arrow_upward : Icons.arrow_downward,
+          color: isExpense ? Colors.red.shade800 : Colors.green.shade800,
+        ),
+      ),
+      title: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade200,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              voucher,
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              head,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Text(
+            '${isExpense ? '-' : '+'} ${currencyFmt.format(amount)}',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 15,
+              color: isExpense ? Colors.red.shade800 : Colors.green.shade800,
+            ),
+          ),
+        ],
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${isExpense ? 'Paid To:' : 'From:'} $entity  •  Date: ${dateFmt.format(pDate)}  •  Mode: $mode ${ref.isNotEmpty ? "($ref)" : ""}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  if ((data['description']?.toString() ?? '').isNotEmpty)
+                    Text(
+                      'Note: ${data['description']}',
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
+                    ),
+                ],
+              ),
+            ),
+            if (docUrl != null && docUrl.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  foregroundColor: Colors.teal.shade800,
+                  side: BorderSide(color: Colors.teal.shade400),
+                ),
+                icon: const Icon(Icons.receipt_long, size: 14),
+                label: const Text('View Bill / Receipt', style: TextStyle(fontSize: 11)),
+                onPressed: () => _showDocumentPreview(docUrl, docFileName),
+              ),
+            ],
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.grey, size: 20),
+              tooltip: 'Void / Delete Entry',
+              onPressed: () => _deleteTransaction(doc.id, data),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
