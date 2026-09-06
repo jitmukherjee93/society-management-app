@@ -104,7 +104,6 @@ class AccountingConfig {
     'CESC (Transformer Room Rent)': 5088.0, // ₹424/mo
     'Car Parking Fees (Two-Wheelers)': 84000.0, // 70 nos @ ₹100 = ₹7,000/mo
     'Car Parking Fees (Four-Wheelers)': 299280.0, // 58 nos @ ₹430 = ₹24,940/mo
-    'Puja Subscriptions & Allocations': 237600.0, // 220 flats @ ₹90 = ₹19,800/mo
   };
 
   static const Map<String, double> projectedIncomeMonthly = {
@@ -116,7 +115,6 @@ class AccountingConfig {
     'CESC (Transformer Room Rent)': 424.0,
     'Car Parking Fees (Two-Wheelers)': 7000.0,
     'Car Parking Fees (Four-Wheelers)': 24940.0,
-    'Puja Subscriptions & Allocations': 19800.0,
   };
 
   // Block maintenance and puja rate break-up (2026-27)
@@ -213,13 +211,6 @@ class AccountingConfig {
       yearlyBudget: 5000.0,
       monthlyBudget: 417.0,
       description: 'Income Tax return filing charges',
-    ),
-    BudgetHead(
-      name: 'Local Puja Donation',
-      category: 'Events & Culture',
-      yearlyBudget: 0.0,
-      monthlyBudget: 0.0,
-      description: 'Neighborhood cultural / social donations (nil in 2026-27)',
     ),
     BudgetHead(
       name: 'Meeting Expenses',
@@ -414,4 +405,112 @@ class AccountingConfig {
     'Cash',
     'Demand Draft',
   ];
+
+  /// Calculate itemized maintenance breakdown for FY 2026-27 strictly as per approved budget
+  static FlatMaintenanceBreakdown calculateMaintenanceBreakdown({
+    required String flatNumber,
+    int carCount = 0,
+    int bikeCount = 0,
+  }) {
+    final clean = flatNumber.trim().toUpperCase();
+    String block = 'A';
+    if (clean.startsWith('B') || clean.contains('B-') || clean.contains('B ')) {
+      block = 'B';
+    } else if (clean.startsWith('C') || clean.contains('C-') || clean.contains('C ')) {
+      block = 'C';
+    } else if (clean.startsWith('D') || clean.contains('D-') || clean.contains('D ')) {
+      block = 'D';
+    } else if (clean.startsWith('A') || clean.contains('A-') || clean.contains('A ')) {
+      block = 'A';
+    }
+
+    final rateData = blockRateBreakup[block] ?? blockRateBreakup['A']!;
+    final double baseMaint = (rateData['maintenance'] ?? 360).toDouble();
+    final double pujaSub = (rateData['puja'] ?? 90).toDouble();
+    final double carCharges = carCount * (parkingRates['Four-Wheeler'] ?? 430).toDouble();
+    final double bikeCharges = bikeCount * (parkingRates['Two-Wheeler'] ?? 100).toDouble();
+    final double total = baseMaint + pujaSub + carCharges + bikeCharges;
+
+    return FlatMaintenanceBreakdown(
+      block: block,
+      flatNumber: flatNumber,
+      baseMaintenance: baseMaint,
+      pujaSubscription: pujaSub,
+      carCount: carCount,
+      carParkingCharges: carCharges,
+      bikeCount: bikeCount,
+      bikeParkingCharges: bikeCharges,
+      totalMonthlyDue: total,
+    );
+  }
+
+  /// Calculate maintenance breakdown from user profile document data
+  static FlatMaintenanceBreakdown calculateFromUserData(Map<String, dynamic> userData) {
+    final flatNumber = (userData['flatNumber'] ?? 'A-101').toString();
+    final block = (userData['block'] ?? '').toString().trim().toUpperCase();
+    
+    // Count active approved cars
+    int carCount = 0;
+    if (userData['isCarOwner'] == true && (userData['carReg']?.toString().trim().isNotEmpty ?? false)) {
+      carCount = 1;
+    }
+
+    // Count active approved bikes
+    int bikeCount = 0;
+    if (userData['isBikeOwner'] == true && (userData['bikeReg']?.toString().trim().isNotEmpty ?? false)) {
+      bikeCount++;
+    }
+    if (userData['hasBike2'] == true && (userData['bike2Reg']?.toString().trim().isNotEmpty ?? false)) {
+      bikeCount++;
+    }
+
+    // If block is specified directly in user document, use it
+    final effectiveFlat = (block.isNotEmpty && !flatNumber.toUpperCase().startsWith(block))
+        ? '$block-$flatNumber'
+        : flatNumber;
+
+    return calculateMaintenanceBreakdown(
+      flatNumber: effectiveFlat,
+      carCount: carCount,
+      bikeCount: bikeCount,
+    );
+  }
+}
+
+/// Itemized Flat Maintenance Breakdown for FY 2026-27
+class FlatMaintenanceBreakdown {
+  final String block;
+  final String flatNumber;
+  final double baseMaintenance;
+  final double pujaSubscription;
+  final int carCount;
+  final double carParkingCharges;
+  final int bikeCount;
+  final double bikeParkingCharges;
+  final double totalMonthlyDue;
+
+  const FlatMaintenanceBreakdown({
+    required this.block,
+    required this.flatNumber,
+    required this.baseMaintenance,
+    required this.pujaSubscription,
+    required this.carCount,
+    required this.carParkingCharges,
+    required this.bikeCount,
+    required this.bikeParkingCharges,
+    required this.totalMonthlyDue,
+  });
+
+  Map<String, dynamic> toMap() => {
+    'block': block,
+    'flatNumber': flatNumber,
+    'baseMaintenance': baseMaintenance,
+    'pujaSubscription': pujaSubscription,
+    'carCount': carCount,
+    'carParkingCharges': carParkingCharges,
+    'bikeCount': bikeCount,
+    'bikeParkingCharges': bikeParkingCharges,
+    'totalMonthlyDue': totalMonthlyDue,
+    'financialYear': AccountingConfig.currentFinancialYear,
+  };
 }

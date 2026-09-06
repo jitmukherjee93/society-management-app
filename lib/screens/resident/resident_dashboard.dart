@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:intl/intl.dart';
+import '../../models/accounting_heads.dart';
 import 'tabs/community_feed_tab.dart';
 import '../../utils/storage_utils.dart';
 import '../../widgets/document_preview_dialog.dart';
@@ -134,6 +136,31 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           : null,
     );
   }
+}
+
+Future<DocumentReference?> _resolveUserDocRef(String uid, String? userEmail, String? flatPrefix) async {
+  final usersRef = FirebaseFirestore.instance.collection('users');
+
+  // 1. Direct doc by UID
+  final directDoc = await usersRef.doc(uid).get();
+  if (directDoc.exists) return usersRef.doc(uid);
+
+  // 2. Query by email
+  if (userEmail != null && userEmail.isNotEmpty) {
+    final emailSnap = await usersRef.where('email', isEqualTo: userEmail).limit(1).get();
+    if (emailSnap.docs.isNotEmpty) return emailSnap.docs.first.reference;
+  }
+
+  // 3. Query by flatPrefix / flatNumber
+  if (flatPrefix != null && flatPrefix.isNotEmpty) {
+    final flatSnap = await usersRef.where('flatNumber', isEqualTo: flatPrefix.toUpperCase()).limit(1).get();
+    if (flatSnap.docs.isNotEmpty) return flatSnap.docs.first.reference;
+
+    final docByFlat = await usersRef.doc(flatPrefix.toUpperCase()).get();
+    if (docByFlat.exists) return usersRef.doc(flatPrefix.toUpperCase());
+  }
+
+  return usersRef.doc(uid);
 }
 
 class HomeTab extends StatefulWidget {
@@ -1665,134 +1692,934 @@ class NotificationsTab extends StatelessWidget {
   }
 }
 
-class MaintenanceTab extends StatelessWidget {
+class MaintenanceTab extends StatefulWidget {
   const MaintenanceTab({super.key});
 
   @override
+  State<MaintenanceTab> createState() => _MaintenanceTabState();
+}
+
+class _MaintenanceTabState extends State<MaintenanceTab> {
+  final _currencyFmt = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+
+  void _showReceiptDialog(BuildContext context, Map<String, dynamic> dueData, String receiptNumber, String? paidDateStr) {
+    final flat = (dueData['flatNumber'] ?? 'Unknown').toString();
+    final month = (dueData['month'] ?? '').toString();
+    final amount = (dueData['amount'] as num?)?.toDouble() ?? 0.0;
+    final baseMaint = (dueData['baseMaintenance'] as num?)?.toDouble();
+    final puja = (dueData['pujaSubscription'] as num?)?.toDouble() ?? 90.0;
+    final carCharges = (dueData['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
+    final bikeCharges = (dueData['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0;
+    final paymentMode = dueData['paymentMode'] ?? 'Online Payment';
+    final txnRef = dueData['transactionRef'] ?? dueData['offlineRef'] ?? 'N/A';
+    final block = dueData['block'] ?? (flat.isNotEmpty ? flat[0] : 'A');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        contentPadding: const EdgeInsets.all(20),
+        content: SizedBox(
+          width: 440,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Header
+                const Icon(Icons.verified_outlined, color: Colors.teal, size: 40),
+                const SizedBox(height: 6),
+                const Text(
+                  'RAMKRISHNAPURAM WELFARE ASSOCIATION',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.teal),
+                ),
+                const Text(
+                  'Official Maintenance Payment Receipt',
+                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+                const Text(
+                  'Financial Year 2026-27',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black87),
+                ),
+                const Divider(height: 20),
+
+                // Meta Info
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Receipt No: $receiptNumber', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    Text('Date: $paidDateStr', style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Flat: $flat (Block $block)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    Text('Billing Month: $month', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  ],
+                ),
+                const Divider(height: 20),
+
+                // Itemized Table
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Base Maintenance (Block $block)'),
+                          Text(_currencyFmt.format(baseMaint ?? (amount - puja - carCharges - bikeCharges))),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Puja Subscription Allocation'),
+                          Text(_currencyFmt.format(puja)),
+                        ],
+                      ),
+                      if (carCharges > 0) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('4-Wheeler (Car) Parking'),
+                            Text(_currencyFmt.format(carCharges)),
+                          ],
+                        ),
+                      ],
+                      if (bikeCharges > 0) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('2-Wheeler (Bike) Parking'),
+                            Text(_currencyFmt.format(bikeCharges)),
+                          ],
+                        ),
+                      ],
+                      const Divider(),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Total Amount Paid', style: TextStyle(fontWeight: FontWeight.bold)),
+                          Text(
+                            _currencyFmt.format(amount),
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.teal),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Payment Meta
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Payment Mode: $paymentMode\nRef / Txn ID: $txnRef\nStatus: PAID & VERIFIED IN FULL',
+                    style: const TextStyle(fontSize: 11, color: Colors.black87, height: 1.4),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text('Authorized Signatory', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                        Text('RWA Accounts Committee', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPaymentModal(BuildContext context, String dueId, Map<String, dynamic> dueData, Map<String, dynamic> userData) {
+    final flat = (dueData['flatNumber'] ?? userData['flatNumber'] ?? 'Unknown').toString();
+    final month = (dueData['month'] ?? 'Current Month').toString();
+    final double amount = (dueData['amount'] as num?)?.toDouble() ?? 0.0;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => _PaymentModalSheet(
+        dueId: dueId,
+        dueData: dueData,
+        userData: userData,
+        flat: flat,
+        month: month,
+        amount: amount,
+        currencyFmt: _currencyFmt,
+        onPaymentComplete: (receiptNo) {
+          Navigator.pop(ctx);
+          final nowStr = DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.now());
+          _showReceiptDialog(context, dueData, receiptNo, nowStr);
+        },
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser!;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return const Center(child: Text('Please log in.'));
 
-    return FutureBuilder<DocumentSnapshot>(
-      future: FirebaseFirestore.instance.collection('users').doc(user.uid).get(),
-      builder: (context, userSnapshot) {
-        if (!userSnapshot.hasData) return const Center(child: CircularProgressIndicator());
-        
-        final flatNumber = userSnapshot.data?.get('flatNumber');
-        
-        return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('maintenance_dues')
-              .where('flatNumber', isEqualTo: flatNumber)
-              .snapshots(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
+    final userEmail = user.email?.toLowerCase();
+    final flatPrefix = userEmail?.contains('@') == true
+        ? userEmail!.split('@').first.toLowerCase()
+        : null;
 
-            final docs = snapshot.data?.docs ?? [];
-            if (docs.isEmpty) {
-              return const Center(child: Text('No maintenance dues found.'));
-            }
+    return FutureBuilder<DocumentReference?>(
+      future: _resolveUserDocRef(user.uid, userEmail, flatPrefix),
+      builder: (context, docRefSnap) {
+        if (docRefSnap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
 
-            return ListView.builder(
-              itemCount: docs.length,
-              itemBuilder: (context, index) {
-                final data = docs[index].data() as Map<String, dynamic>;
-                final status = data['status'];
-                final amount = data['amount'];
-                
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: ListTile(
-                    leading: const Icon(Icons.receipt_long, size: 40, color: Colors.teal),
-                    title: Text('Month: ${data['month']}'),
-                    subtitle: Text('Amount: ₹$amount\nStatus: $status'),
-                    isThreeLine: true,
-                    trailing: status == 'UNPAID' 
-                      ? ElevatedButton(
-                          onPressed: () {
-                            showDialog(
-                              context: context,
-                              builder: (ctx) => AlertDialog(
-                                title: const Text('Pay Maintenance'),
-                                content: const Text('Choose payment method:'),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () {
-                                      // Mock Offline Payment Submission
-                                      FirebaseFirestore.instance
-                                          .collection('maintenance_dues')
-                                          .doc(docs[index].id)
-                                          .update({'status': 'PAID_OFFLINE_PENDING'});
-                                      Navigator.pop(ctx);
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Offline payment submitted for verification.')),
-                                      );
-                                    },
-                                    child: const Text('Offline (Cash/Cheque)'),
-                                  ),
-                                  ElevatedButton(
-                                    onPressed: () {
-                                      // Online Payment
-                                      final dueId = docs[index].id;
-                                      FirebaseFirestore.instance
-                                          .collection('maintenance_dues')
-                                          .doc(dueId)
-                                          .update({'status': 'PAID_ONLINE'});
+        final docRef = docRefSnap.data;
+        if (docRef == null) {
+          return const Center(child: Text('User profile not found.'));
+        }
 
-                                      final flat = (data['flatNumber'] ?? 'Unknown').toString();
-                                      final month = (data['month'] ?? '').toString();
-                                      final double amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
+        return StreamBuilder<DocumentSnapshot>(
+          stream: docRef.snapshots(),
+          builder: (context, userSnapshot) {
+            if (!userSnapshot.hasData) return const Center(child: CircularProgressIndicator());
 
-                                      String head = 'Monthly Maintenance - Block A';
-                                      final cleanUpper = flat.toUpperCase();
-                                      if (cleanUpper.startsWith('B')) {
-                                        head = 'Monthly Maintenance - Block B';
-                                      } else if (cleanUpper.startsWith('C')) {
-                                        head = 'Monthly Maintenance - Block C';
-                                      } else if (cleanUpper.startsWith('D')) {
-                                        head = 'Monthly Maintenance - Block D';
-                                      }
+            final userData = userSnapshot.data?.data() as Map<String, dynamic>? ?? {};
+            final breakdown = AccountingConfig.calculateFromUserData(userData);
+            final userFlat = (userData['flatNumber'] ?? 'A-101').toString().trim().toUpperCase();
+            final blockStr = (userData['block'] ?? '').toString().trim().toUpperCase();
+            final flatDisplay = (blockStr.isNotEmpty && !userFlat.startsWith(blockStr))
+                ? '$blockStr-$userFlat'
+                : userFlat;
 
-                                      final timestamp = DateTime.now().millisecondsSinceEpoch;
-                                      final voucherCode = 'INC-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
-                                      FirebaseFirestore.instance.collection('society_transactions').add({
-                                        'type': 'INCOME',
-                                        'voucherNumber': voucherCode,
-                                        'accountHead': head,
-                                        'category': 'Maintenance Collection',
-                                        'amount': amt,
-                                        'paidToOrReceivedFrom': 'Flat $flat',
-                                        'paymentDate': FieldValue.serverTimestamp(),
-                                        'paymentMode': 'Online (Payment Gateway)',
-                                        'referenceNumber': 'TXN_${DateTime.now().millisecondsSinceEpoch}',
-                                        'description': 'Online maintenance payment for $month by Flat $flat',
-                                        'linkedDueId': dueId,
-                                        'recordedBy': 'Resident ($flat)',
-                                        'createdAt': FieldValue.serverTimestamp(),
-                                      });
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // FY 2026-27 Approved Maintenance Schedule Card
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Colors.teal.shade800, Colors.teal.shade600],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.teal.withOpacity(0.3),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'MY MONTHLY MAINTENANCE',
+                                  style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Flat $flatDisplay (Block ${breakdown.block})',
+                                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                'FY ${AccountingConfig.currentFinancialYear}',
+                                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        const Divider(color: Colors.white24),
+                        const SizedBox(height: 8),
 
-                                      Navigator.pop(ctx);
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Online payment successful! Receipt: $voucherCode')),
-                                      );
-                                    },
-                                    child: const Text('Pay Online'),
+                        // Itemized Breakdown
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text('• Base Flat Maintenance (Block ${breakdown.block})', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                            Text(_currencyFmt.format(breakdown.baseMaintenance), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('• Puja Subscription Allocation', style: TextStyle(color: Colors.white, fontSize: 13)),
+                            Text(_currencyFmt.format(breakdown.pujaSubscription), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          ],
+                        ),
+                        if (breakdown.carCount > 0) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text('• 4-Wheeler Parking (${breakdown.carCount} Car @ ₹430)', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                              Text(_currencyFmt.format(breakdown.carParkingCharges), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                            ],
+                          ),
+                        ],
+                        if (breakdown.bikeCount > 0) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text('• 2-Wheeler Parking (${breakdown.bikeCount} Bike @ ₹100)', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                              Text(_currencyFmt.format(breakdown.bikeParkingCharges), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                            ],
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        const Divider(color: Colors.white24),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Total Fixed Monthly Bill', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                            Text(
+                              '${_currencyFmt.format(breakdown.totalMonthlyDue)} / month',
+                              style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 18),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 24),
+
+                  // Dues Stream Section
+                  StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('maintenance_dues')
+                        .where('flatNumber', whereIn: [userFlat, flatDisplay, userFlat.replaceAll('-', '')])
+                        .snapshots(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+
+                      final allDocs = snapshot.data?.docs ?? [];
+                      final unpaidDocs = allDocs.where((d) => (d.data() as Map<String, dynamic>)['status'] == 'UNPAID').toList();
+                      final pendingOfflineDocs = allDocs.where((d) => (d.data() as Map<String, dynamic>)['status'] == 'PAID_OFFLINE_PENDING').toList();
+                      final paidDocs = allDocs.where((d) {
+                        final st = (d.data() as Map<String, dynamic>)['status'];
+                        return st == 'PAID_ONLINE' || st == 'PAID_OFFLINE_VERIFIED';
+                      }).toList();
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Outstanding Dues Section
+                          const Text(
+                            'Outstanding Maintenance Dues',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 10),
+
+                          if (unpaidDocs.isEmpty && pendingOfflineDocs.isEmpty)
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade50,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.green.shade200),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.check_circle, color: Colors.green.shade700, size: 36),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'All Dues Cleared!',
+                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green.shade900),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'You have no pending maintenance bills for Flat $flatDisplay.',
+                                          style: TextStyle(color: Colors.green.shade800, fontSize: 13),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ],
-                              )
-                            );
-                          },
-                          child: const Text('Pay Now'),
-                        )
-                      : const Icon(Icons.check_circle, color: Colors.green),
+                              ),
+                            )
+                          else ...[
+                            // Unpaid Bills
+                            ...unpaidDocs.map((doc) {
+                              final data = doc.data() as Map<String, dynamic>;
+                              final dueId = doc.id;
+                              final month = data['month'] ?? 'Current Month';
+                              final amt = (data['amount'] as num?)?.toDouble() ?? breakdown.totalMonthlyDue;
+
+                              return Card(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  side: BorderSide(color: Colors.red.shade200),
+                                ),
+                                elevation: 2,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Container(
+                                                padding: const EdgeInsets.all(8),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.red.shade50,
+                                                  borderRadius: BorderRadius.circular(8),
+                                                ),
+                                                child: const Icon(Icons.receipt_long, color: Colors.red),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    'Maintenance Bill: $month',
+                                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                                  ),
+                                                  Text(
+                                                    'FY ${data['financialYear'] ?? AccountingConfig.currentFinancialYear}',
+                                                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                          Text(
+                                            _currencyFmt.format(amt),
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.red),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      const Divider(),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color: Colors.red.shade50,
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: const Text(
+                                              'PAYMENT DUE',
+                                              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 11),
+                                            ),
+                                          ),
+                                          ElevatedButton.icon(
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: Colors.teal,
+                                              foregroundColor: Colors.white,
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                            ),
+                                            icon: const Icon(Icons.payment, size: 18),
+                                            label: const Text('Pay Now', style: TextStyle(fontWeight: FontWeight.bold)),
+                                            onPressed: () => _showPaymentModal(context, dueId, data, userData),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }),
+
+                            // Pending Offline Verification Bills
+                            ...pendingOfflineDocs.map((doc) {
+                              final data = doc.data() as Map<String, dynamic>;
+                              final month = data['month'] ?? '';
+                              final amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
+
+                              return Card(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  side: BorderSide(color: Colors.orange.shade200),
+                                ),
+                                child: ListTile(
+                                  leading: const CircleAvatar(
+                                    backgroundColor: Colors.orange,
+                                    child: Icon(Icons.hourglass_top, color: Colors.white),
+                                  ),
+                                  title: Text('Bill: $month — ${_currencyFmt.format(amt)}',
+                                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  subtitle: const Text('Offline payment submitted. Awaiting Admin verification.'),
+                                ),
+                              );
+                            }),
+                          ],
+
+                          const SizedBox(height: 24),
+
+                          // Payment History & Receipts Section
+                          const Text(
+                            'Payment History & Receipts',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 10),
+
+                          if (paidDocs.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: Text('No previous payment receipts recorded yet.', style: TextStyle(color: Colors.grey)),
+                            )
+                          else
+                            ListView.builder(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              itemCount: paidDocs.length,
+                              itemBuilder: (context, index) {
+                                final data = paidDocs[index].data() as Map<String, dynamic>;
+                                final month = data['month'] ?? '';
+                                final amount = data['amount'] ?? 0;
+                                final status = data['status'] ?? 'PAID';
+                                final receiptNo = data['receiptNumber'] ?? 'REC-2627-${(data['paidAt'] != null ? data['paidAt'].hashCode % 10000 : 1001)}';
+                                
+                                String dateStr = 'Recently Paid';
+                                if (data['paidAt'] is Timestamp) {
+                                  dateStr = DateFormat('dd MMM yyyy').format((data['paidAt'] as Timestamp).toDate());
+                                }
+
+                                return Card(
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  child: ListTile(
+                                    leading: const CircleAvatar(
+                                      backgroundColor: Colors.green,
+                                      child: Icon(Icons.check, color: Colors.white),
+                                    ),
+                                    title: Text('$month — ${_currencyFmt.format(amount)}',
+                                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                                    subtitle: Text('Receipt: $receiptNo • $dateStr\nStatus: ${status == 'PAID_ONLINE' ? 'Paid Online' : 'Offline Verified'}'),
+                                    isThreeLine: true,
+                                    trailing: OutlinedButton.icon(
+                                      icon: const Icon(Icons.receipt, size: 16),
+                                      label: const Text('Receipt'),
+                                      style: OutlinedButton.styleFrom(foregroundColor: Colors.teal),
+                                      onPressed: () => _showReceiptDialog(context, data, receiptNo, dateStr),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                        ],
+                      );
+                    },
                   ),
-                );
-              },
+                ],
+              ),
             );
           },
         );
+      },
+    );
+  }
+}
+
+class _PaymentModalSheet extends StatefulWidget {
+  final String dueId;
+  final Map<String, dynamic> dueData;
+  final Map<String, dynamic> userData;
+  final String flat;
+  final String month;
+  final double amount;
+  final NumberFormat currencyFmt;
+  final Function(String receiptNo) onPaymentComplete;
+
+  const _PaymentModalSheet({
+    required this.dueId,
+    required this.dueData,
+    required this.userData,
+    required this.flat,
+    required this.month,
+    required this.amount,
+    required this.currencyFmt,
+    required this.onPaymentComplete,
+  });
+
+  @override
+  State<_PaymentModalSheet> createState() => _PaymentModalSheetState();
+}
+
+class _PaymentModalSheetState extends State<_PaymentModalSheet> {
+  int _selectedPaymentTab = 0; // 0: Online (UPI / Card), 1: Offline (Cheque / Cash / Bank Transfer)
+  String _selectedOnlineMethod = 'UPI'; // UPI, CARD, NETBANKING
+  final _offlineRefController = TextEditingController();
+  final _offlineModeController = TextEditingController(text: 'Bank Transfer / NEFT');
+  bool _isProcessing = false;
+
+  @override
+  void dispose() {
+    _offlineRefController.dispose();
+    _offlineModeController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _processOnlinePayment() async {
+    setState(() => _isProcessing = true);
+
+    try {
+      // Simulate gateway processing delay
+      await Future.delayed(const Duration(milliseconds: 1200));
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final receiptNo = 'REC-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
+      final txnRef = 'TXN_UPI_${timestamp.toString().substring(5)}';
+
+      // 1. Determine budget head
+      String head = 'Monthly Maintenance - Block A';
+      final cleanUpper = widget.flat.toUpperCase();
+      if (cleanUpper.startsWith('B') || cleanUpper.contains('B-')) {
+        head = 'Monthly Maintenance - Block B';
+      } else if (cleanUpper.startsWith('C') || cleanUpper.contains('C-')) {
+        head = 'Monthly Maintenance - Block C';
+      } else if (cleanUpper.startsWith('D') || cleanUpper.contains('D-')) {
+        head = 'Monthly Maintenance - Block D';
       }
+
+      // 2. Update maintenance due doc
+      await FirebaseFirestore.instance.collection('maintenance_dues').doc(widget.dueId).update({
+        'status': 'PAID_ONLINE',
+        'paidAt': FieldValue.serverTimestamp(),
+        'receiptNumber': receiptNo,
+        'paymentMode': 'Online ($_selectedOnlineMethod)',
+        'transactionRef': txnRef,
+      });
+
+      // 3. Post income transaction into society accounting ledger
+      await FirebaseFirestore.instance.collection('society_transactions').add({
+        'type': 'INCOME',
+        'voucherNumber': receiptNo,
+        'accountHead': head,
+        'category': 'Maintenance Collection',
+        'amount': widget.amount,
+        'paidToOrReceivedFrom': 'Flat ${widget.flat}',
+        'paymentDate': FieldValue.serverTimestamp(),
+        'paymentMode': 'Online ($_selectedOnlineMethod)',
+        'referenceNumber': txnRef,
+        'description': 'Online maintenance payment for ${widget.month} by Flat ${widget.flat} (FY 2026-27)',
+        'linkedDueId': widget.dueId,
+        'recordedBy': 'Resident (${widget.flat})',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      widget.onPaymentComplete(receiptNo);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: Colors.red, content: Text('Payment error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  Future<void> _processOfflinePayment() async {
+    final ref = _offlineRefController.text.trim();
+    if (ref.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter Cheque No. or Bank UTR / Reference No.')),
+      );
+      return;
+    }
+
+    setState(() => _isProcessing = true);
+
+    try {
+      await FirebaseFirestore.instance.collection('maintenance_dues').doc(widget.dueId).update({
+        'status': 'PAID_OFFLINE_PENDING',
+        'paymentMode': _offlineModeController.text,
+        'offlineRef': ref,
+        'submittedAt': FieldValue.serverTimestamp(),
+      });
+
+      // Send admin notification
+      await FirebaseFirestore.instance.collection('notifications').add({
+        'targetRole': 'ADMIN',
+        'type': 'OFFLINE_PAYMENT_SUBMITTED',
+        'title': 'Offline Maintenance Payment Submitted',
+        'message': 'Flat ${widget.flat} submitted offline payment of ${widget.currencyFmt.format(widget.amount)} for ${widget.month} (Ref: $ref).',
+        'flatNumber': widget.flat,
+        'dueId': widget.dueId,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Colors.teal,
+            content: Text('Offline payment details submitted for Admin verification.'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: Colors.red, content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Pay Maintenance Bill', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // Bill Summary
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.teal.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.teal.shade200),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Flat ${widget.flat} • ${widget.month}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    const Text('FY 2026-27 Approved Rates', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                  ],
+                ),
+                Text(
+                  widget.currencyFmt.format(widget.amount),
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Segment Selector
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _selectedPaymentTab == 0 ? Colors.teal : Colors.grey.shade200,
+                    foregroundColor: _selectedPaymentTab == 0 ? Colors.white : Colors.black87,
+                    elevation: _selectedPaymentTab == 0 ? 2 : 0,
+                  ),
+                  icon: const Icon(Icons.flash_on, size: 18),
+                  label: const Text('Instant Online Pay'),
+                  onPressed: () => setState(() => _selectedPaymentTab = 0),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _selectedPaymentTab == 1 ? Colors.teal : Colors.grey.shade200,
+                    foregroundColor: _selectedPaymentTab == 1 ? Colors.white : Colors.black87,
+                    elevation: _selectedPaymentTab == 1 ? 2 : 0,
+                  ),
+                  icon: const Icon(Icons.account_balance, size: 18),
+                  label: const Text('Offline / Transfer'),
+                  onPressed: () => setState(() => _selectedPaymentTab = 1),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Online Payment View
+          if (_selectedPaymentTab == 0) ...[
+            const Text('Select Online Payment Channel:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+            const SizedBox(height: 8),
+            RadioListTile<String>(
+              value: 'UPI',
+              groupValue: _selectedOnlineMethod,
+              title: const Row(
+                children: [
+                  Icon(Icons.qr_code, color: Colors.teal),
+                  SizedBox(width: 8),
+                  Text('UPI / QR Code / GPay / PhonePe / Paytm'),
+                ],
+              ),
+              onChanged: (val) => setState(() => _selectedOnlineMethod = val!),
+            ),
+            RadioListTile<String>(
+              value: 'CARD',
+              groupValue: _selectedOnlineMethod,
+              title: const Row(
+                children: [
+                  Icon(Icons.credit_card, color: Colors.teal),
+                  SizedBox(width: 8),
+                  Text('Debit / Credit Card'),
+                ],
+              ),
+              onChanged: (val) => setState(() => _selectedOnlineMethod = val!),
+            ),
+            RadioListTile<String>(
+              value: 'NETBANKING',
+              groupValue: _selectedOnlineMethod,
+              title: const Row(
+                children: [
+                  Icon(Icons.account_balance, color: Colors.teal),
+                  SizedBox(width: 8),
+                  Text('Net Banking (SBI / HDFC / ICICI / Axis)'),
+                ],
+              ),
+              onChanged: (val) => setState(() => _selectedOnlineMethod = val!),
+            ),
+            const SizedBox(height: 16),
+
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: _isProcessing ? null : _processOnlinePayment,
+                icon: _isProcessing
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.lock),
+                label: Text(
+                  _isProcessing ? 'Processing Payment...' : 'Pay ${widget.currencyFmt.format(widget.amount)} Now',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ] else ...[
+            // Offline Payment View
+            DropdownButtonFormField<String>(
+              value: _offlineModeController.text,
+              decoration: const InputDecoration(labelText: 'Payment Mode', border: OutlineInputBorder()),
+              items: const [
+                DropdownMenuItem(value: 'Bank Transfer / NEFT', child: Text('Bank Transfer / NEFT / IMPS')),
+                DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
+                DropdownMenuItem(value: 'Cash', child: Text('Cash to Treasurer')),
+                DropdownMenuItem(value: 'Demand Draft', child: Text('Demand Draft')),
+              ],
+              onChanged: (val) {
+                if (val != null) setState(() => _offlineModeController.text = val);
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _offlineRefController,
+              decoration: const InputDecoration(
+                labelText: 'Cheque No. / Transaction UTR / Ref No. *',
+                hintText: 'e.g. UTR12345678 or Cheque #987654',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: _isProcessing ? null : _processOfflinePayment,
+                icon: _isProcessing
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.check_circle_outline),
+                label: Text(
+                  _isProcessing ? 'Submitting...' : 'Submit Offline Payment for Verification',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

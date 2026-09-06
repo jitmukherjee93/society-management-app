@@ -56,6 +56,679 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     showDocumentPreviewDialog(context, url, fileName);
   }
 
+  // ─── Annual Budget Plan: Lock Check & Dialogs ──────────────────────────────
+  void _handleAnnualBudgetUpload(
+    dynamic annualBudgetDocOrData,
+    double totalApprovedAnnualBudget,
+    double totalApprovedMonthlyBudget,
+  ) {
+    Map<String, dynamic>? data;
+    if (annualBudgetDocOrData is DocumentSnapshot) {
+      data = annualBudgetDocOrData.data() as Map<String, dynamic>?;
+    } else if (annualBudgetDocOrData is Map<String, dynamic>) {
+      data = annualBudgetDocOrData;
+    }
+
+    if (data != null && (data['isLocked'] == true || data.isNotEmpty)) {
+      _showBudgetAlreadyLockedDialog(data);
+    } else {
+      _openUploadAnnualBudgetDialog(totalApprovedAnnualBudget, totalApprovedMonthlyBudget);
+    }
+  }
+
+  // ─── Dialog: Annual Budget Already Locked (Nice Error / Notice) ─────────────
+  void _showBudgetAlreadyLockedDialog(Map<String, dynamic> budgetData) {
+    final uploadedAt = (budgetData['uploadedAt'] as Timestamp?)?.toDate();
+    final meetingDate = (budgetData['meetingDate'] as Timestamp?)?.toDate();
+    final meetingAuthority = budgetData['approvedInMeeting'] ?? 'Annual General Meeting (AGM)';
+    final uploadedBy = budgetData['uploadedBy'] ?? 'Admin';
+    final resolutionNotes = budgetData['resolutionNotes'] ?? '';
+    final budgetDocUrl = budgetData['budgetDocumentUrl'] as String?;
+    final budgetDocName = budgetData['budgetDocumentName'] as String?;
+    final double outlay = (budgetData['totalExpenditureOutlay'] as num?)?.toDouble() ?? 0.0;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        contentPadding: EdgeInsets.zero,
+        content: SizedBox(
+          width: 620,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Premium Header with Lock Icon
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.amber.shade900, Colors.orange.shade800],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.22),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.lock_person_rounded, color: Colors.white, size: 28),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Annual Budget Plan Already Uploaded',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'FY ${AccountingConfig.currentFinancialYear} • One-Time Annual Master Budget',
+                            style: TextStyle(
+                              color: Colors.amber.shade100,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white70),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Prominent Error & Policy Notice Banner
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.amber.shade400, width: 1.5),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.warning_amber_rounded, color: Colors.amber.shade900, size: 26),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Budget upload is a one-time job for a year.',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    color: Colors.brown.shade900,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'The master annual budget plan for FY ${AccountingConfig.currentFinancialYear} has already been registered and locked in the system. Re-uploading an entire annual plan is restricted to preserve financial consistency and audit history.',
+                                  style: TextStyle(fontSize: 12, color: Colors.brown.shade800, height: 1.4),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Current Locked Plan Details
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Registered Master Budget Details',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade100,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  'STATUS: LOCKED & ACTIVE',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.green.shade900,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('Approved In / Authority', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                                    Text(meetingAuthority, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                                    if (meetingDate != null)
+                                      Text('Date: ${dateFmt.format(meetingDate)}', style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
+                                  ],
+                                ),
+                              ),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('Approved Annual Outlay', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                                    Text(
+                                      outlay > 0
+                                          ? currencyFmt.format(outlay)
+                                          : currencyFmt.format(AccountingConfig.totalAnnualBudget),
+                                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                                    ),
+                                    if (uploadedAt != null)
+                                      Text('Uploaded: ${dateFmt.format(uploadedAt)} by $uploadedBy', style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (resolutionNotes.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              'Resolution: "$resolutionNotes"',
+                              style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.grey.shade800),
+                            ),
+                          ],
+                          if (budgetDocUrl != null && budgetDocUrl.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            InkWell(
+                              onTap: () => _showDocumentPreview(budgetDocUrl, budgetDocName ?? 'Annual_Budget_Plan.pdf'),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.picture_as_pdf, size: 16, color: Colors.deepPurple),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      'View Master Document (${budgetDocName ?? "Annual_Budget.pdf"})',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.deepPurple,
+                                        fontWeight: FontWeight.bold,
+                                        decoration: TextDecoration.underline,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Next Steps Guide Callout
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.deepPurple.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.deepPurple.shade200),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.info_outline, color: Colors.deepPurple, size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Please make updates from the Update Budget page:',
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'To revise allocations or adjust funds for any specific head, navigate to the "Budget vs Actual" tab. Click the edit icon on the relevant budget head and attach the supporting Minutes of Meeting (MoM) resolution.',
+                                  style: TextStyle(fontSize: 11, color: Colors.deepPurple.shade900, height: 1.3),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Action Buttons Bar
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(20)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Close'),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.deepPurple,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                      ),
+                      icon: const Icon(Icons.pie_chart_outline, size: 18),
+                      label: const Text('Go to Update Budget Page'),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _tabController.animateTo(3); // Switch to Tab 4: Budget vs Actual
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Dialog: One-Time Annual Budget Plan Upload ─────────────────────────────
+  void _openUploadAnnualBudgetDialog(
+    double totalApprovedAnnualBudget,
+    double totalApprovedMonthlyBudget,
+  ) {
+    final formKey = GlobalKey<FormState>();
+    String selectedFY = AccountingConfig.currentFinancialYear;
+    String meetingType = AccountingConfig.meetingTypes.first;
+    DateTime meetingDate = DateTime.now();
+    final notesCtrl = TextEditingController(text: 'Annual budget plan for FY 2026-27 approved in AGM');
+    PlatformFile? masterDocFile;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDS) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.deepPurple.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.upload_file, color: Colors.deepPurple, size: 24),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Upload Annual Budget Plan (One-Time)',
+                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                      Text('Register & Lock Master Financial Budget for the Year',
+                          style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 580,
+              child: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Financial Year & Authority
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              initialValue: selectedFY,
+                              readOnly: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Financial Year',
+                                prefixIcon: Icon(Icons.calendar_today),
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 2,
+                            child: DropdownButtonFormField<String>(
+                              initialValue: meetingType,
+                              decoration: const InputDecoration(
+                                labelText: 'Approval Authority *',
+                                prefixIcon: Icon(Icons.groups),
+                                border: OutlineInputBorder(),
+                              ),
+                              items: AccountingConfig.meetingTypes
+                                  .map((t) => DropdownMenuItem(value: t, child: Text(t, style: const TextStyle(fontSize: 12))))
+                                  .toList(),
+                              onChanged: (val) {
+                                if (val != null) setDS(() => meetingType = val);
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Meeting Date
+                      InkWell(
+                        onTap: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: meetingDate,
+                            firstDate: DateTime(2025, 1, 1),
+                            lastDate: DateTime(2030, 12, 31),
+                          );
+                          if (picked != null) {
+                            setDS(() => meetingDate = picked);
+                          }
+                        },
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Approval / Meeting Date *',
+                            prefixIcon: Icon(Icons.date_range),
+                            border: OutlineInputBorder(),
+                          ),
+                          child: Text(
+                            dateFmt.format(meetingDate),
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Remarks / Resolution Notes
+                      TextFormField(
+                        controller: notesCtrl,
+                        maxLines: 2,
+                        decoration: const InputDecoration(
+                          labelText: 'Resolution Summary / Notes *',
+                          prefixIcon: Icon(Icons.notes),
+                          border: OutlineInputBorder(),
+                          hintText: 'e.g. Annual Budget 2026-27 approved in Annual General Meeting #14',
+                        ),
+                        validator: (v) {
+                          if (v == null || v.trim().length < 5) {
+                            return 'Please enter a brief resolution note';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Master Budget Document Upload (PDF / Image / Excel)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: masterDocFile == null ? Colors.deepPurple.shade50 : Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: masterDocFile == null ? Colors.deepPurple.shade200 : Colors.green.shade300,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  masterDocFile == null ? Icons.attach_file : Icons.check_circle,
+                                  color: masterDocFile == null ? Colors.deepPurple : Colors.green.shade800,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Master Budget Document (PDF / Image / Excel)',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
+                                          color: masterDocFile == null ? Colors.deepPurple.shade900 : Colors.green.shade900,
+                                        ),
+                                      ),
+                                      const Text(
+                                        'Attach the official signed budget document or AGM resolution copy.',
+                                        style: TextStyle(fontSize: 11, color: Colors.black54),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: masterDocFile == null ? Colors.deepPurple : Colors.teal,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  icon: const Icon(Icons.upload_file, size: 16),
+                                  label: Text(masterDocFile == null ? 'Attach Document' : 'Change'),
+                                  onPressed: () async {
+                                    final file = await pickFile(extensions: ['pdf', 'png', 'jpg', 'jpeg', 'csv', 'xlsx']);
+                                    if (file != null) {
+                                      setDS(() => masterDocFile = file);
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                            if (masterDocFile != null) ...[
+                              const Divider(height: 16),
+                              Row(
+                                children: [
+                                  Icon(
+                                    masterDocFile!.name.toLowerCase().endsWith('.pdf') ? Icons.picture_as_pdf : Icons.description,
+                                    size: 18,
+                                    color: Colors.green.shade800,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      masterDocFile!.name,
+                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green.shade900),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.close, size: 16, color: Colors.red),
+                                    onPressed: () => setDS(() => masterDocFile = null),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Budget Plan Summary Preview
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.grey.shade300),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Budget Plan Configuration (FY 2026-27)',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text('Total Expenditure Heads: ${AccountingConfig.expenditureHeads.length}',
+                                    style: const TextStyle(fontSize: 12)),
+                                Text('Annual Outlay: ${currencyFmt.format(totalApprovedAnnualBudget)}',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red)),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text('Projected Annual Inflow:', style: TextStyle(fontSize: 12)),
+                                Text(currencyFmt.format(AccountingConfig.totalProjectedIncomeYearly),
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green)),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      const Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 14, color: Colors.amber),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Note: Once submitted, the master budget plan is locked for the year. Subsequent adjustments must be done per-head with an MoM.',
+                              style: TextStyle(fontSize: 11, color: Colors.black87),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurple,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                icon: isSubmitting
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white))
+                    : const Icon(Icons.lock),
+                label: const Text('Save & Lock Annual Budget Plan'),
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        if (!formKey.currentState!.validate()) return;
+                        final scaffoldMessenger = ScaffoldMessenger.of(context);
+                        final dialogNav = Navigator.of(ctx);
+
+                        setDS(() => isSubmitting = true);
+                        try {
+                          final adminUser = FirebaseAuth.instance.currentUser;
+                          String? docUrl;
+                          String? docName;
+
+                          if (masterDocFile != null) {
+                            docName = masterDocFile!.name;
+                            final timestamp = DateTime.now().millisecondsSinceEpoch;
+                            docUrl = await uploadFile(
+                              masterDocFile!,
+                              'society_annual_budgets/budget_${selectedFY.replaceAll("-", "_")}_${timestamp}_${masterDocFile!.name}',
+                            );
+                          }
+
+                          // Save master annual budget document
+                          await FirebaseFirestore.instance
+                              .collection('society_annual_budgets')
+                              .doc(selectedFY)
+                              .set({
+                            'financialYear': selectedFY,
+                            'isLocked': true,
+                            'uploadedAt': FieldValue.serverTimestamp(),
+                            'uploadedBy': adminUser?.email ?? adminUser?.uid ?? 'Admin',
+                            'approvedInMeeting': meetingType,
+                            'meetingDate': Timestamp.fromDate(meetingDate),
+                            'resolutionNotes': notesCtrl.text.trim(),
+                            'budgetDocumentUrl': docUrl,
+                            'budgetDocumentName': docName,
+                            'totalExpenditureOutlay': totalApprovedAnnualBudget,
+                            'totalProjectedInflow': AccountingConfig.totalProjectedIncomeYearly,
+                            'headsCount': AccountingConfig.expenditureHeads.length,
+                            'status': 'ACTIVE',
+                          }, SetOptions(merge: true));
+
+                          dialogNav.pop();
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.green.shade700,
+                              content: Text('Annual Budget Plan for FY $selectedFY successfully registered and locked!'),
+                            ),
+                          );
+                        } catch (e, st) {
+                          debugPrint('Error uploading annual budget: $e\n$st');
+                          setDS(() => isSubmitting = false);
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.red.shade800,
+                              content: Text('Failed to upload budget plan: $e'),
+                              duration: const Duration(seconds: 6),
+                            ),
+                          );
+                        }
+                      },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   // ─── Dialog: Edit Budget Head (Requires MoM) ──────────────────────────────
   void _openEditBudgetHeadDialog(BudgetHead head) {
     final formKey = GlobalKey<FormState>();
@@ -1302,141 +1975,167 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
   // ─── Main Build ────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('society_budget_heads').snapshots(),
-      builder: (context, budgetSnapshot) {
-        final Map<String, BudgetHead> revisedHeadsMap = {};
-        for (final doc in budgetSnapshot.data?.docs ?? []) {
-          final d = doc.data() as Map<String, dynamic>;
-          final name = d['name'] ?? doc.id;
-          final yearly = (d['yearlyBudget'] as num?)?.toDouble() ?? 0.0;
-          final monthly = (d['monthlyBudget'] as num?)?.toDouble() ?? (yearly / 12);
-          revisedHeadsMap[name] = BudgetHead(
-            name: name,
-            category: d['category'] ?? 'General',
-            yearlyBudget: yearly,
-            monthlyBudget: monthly,
-            isDocRequired: d['isDocRequired'] ?? true,
-            description: d['description'] ?? '',
-            isRevised: true,
-            momDocumentUrl: d['momDocumentUrl'],
-            momFileName: d['momFileName'],
-            meetingType: d['meetingType'],
-            meetingDate: (d['meetingDate'] as Timestamp?)?.toDate(),
-            revisionReason: d['revisionReason'],
-            revisedBy: d['revisedBy'],
-            revisedAt: (d['updatedAt'] as Timestamp?)?.toDate(),
-          );
-        }
-
-        final activeExpenditureHeads = AccountingConfig.expenditureHeads.map((defaultHead) {
-          if (revisedHeadsMap.containsKey(defaultHead.name)) {
-            final rev = revisedHeadsMap[defaultHead.name]!;
-            return defaultHead.copyWith(
-              yearlyBudget: rev.yearlyBudget,
-              monthlyBudget: rev.monthlyBudget,
-              isRevised: true,
-              momDocumentUrl: rev.momDocumentUrl,
-              momFileName: rev.momFileName,
-              meetingType: rev.meetingType,
-              meetingDate: rev.meetingDate,
-              revisionReason: rev.revisionReason,
-              revisedBy: rev.revisedBy,
-              revisedAt: rev.revisedAt,
-            );
-          }
-          return defaultHead;
-        }).toList();
-
-        final totalApprovedAnnualBudget = activeExpenditureHeads.fold(0.0, (acc, h) => acc + h.yearlyBudget);
-        final totalApprovedMonthlyBudget = activeExpenditureHeads.fold(0.0, (acc, h) => acc + h.monthlyBudget);
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('society_annual_budgets')
+          .doc(AccountingConfig.currentFinancialYear)
+          .snapshots(),
+      builder: (context, annualBudgetSnap) {
+        final annualBudgetDoc = annualBudgetSnap.data;
 
         return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('society_transactions')
-              .orderBy('paymentDate', descending: true)
-              .snapshots(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
+          stream: FirebaseFirestore.instance.collection('society_budget_heads').snapshots(),
+          builder: (context, budgetSnapshot) {
+            final Map<String, BudgetHead> revisedHeadsMap = {};
+            for (final doc in budgetSnapshot.data?.docs ?? []) {
+              final d = doc.data() as Map<String, dynamic>;
+              final name = d['name'] ?? doc.id;
+              final yearly = (d['yearlyBudget'] as num?)?.toDouble() ?? 0.0;
+              final monthly = (d['monthlyBudget'] as num?)?.toDouble() ?? (yearly / 12);
+              revisedHeadsMap[name] = BudgetHead(
+                name: name,
+                category: d['category'] ?? 'General',
+                yearlyBudget: yearly,
+                monthlyBudget: monthly,
+                isDocRequired: d['isDocRequired'] ?? true,
+                description: d['description'] ?? '',
+                isRevised: true,
+                momDocumentUrl: d['momDocumentUrl'],
+                momFileName: d['momFileName'],
+                meetingType: d['meetingType'],
+                meetingDate: (d['meetingDate'] as Timestamp?)?.toDate(),
+                revisionReason: d['revisionReason'],
+                revisedBy: d['revisedBy'],
+                revisedAt: (d['updatedAt'] as Timestamp?)?.toDate(),
+              );
             }
 
-            final allDocs = snapshot.data?.docs ?? [];
-
-            // Aggregations
-            double totalIncome = 0;
-            double totalExpense = 0;
-            final Map<String, double> headExpenditures = {};
-            final Map<String, double> headIncomes = {};
-
-            for (final doc in allDocs) {
-              final data = doc.data() as Map<String, dynamic>;
-              final double amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
-              final String type = (data['type'] ?? '').toString().toUpperCase();
-              final String head = data['accountHead'] ?? 'Uncategorized';
-
-              if (type == 'EXPENDITURE') {
-                totalExpense += amt;
-                headExpenditures[head] = (headExpenditures[head] ?? 0.0) + amt;
-              } else if (type == 'INCOME') {
-                totalIncome += amt;
-                headIncomes[head] = (headIncomes[head] ?? 0.0) + amt;
+            final activeExpenditureHeads = AccountingConfig.expenditureHeads.map((defaultHead) {
+              if (revisedHeadsMap.containsKey(defaultHead.name)) {
+                final rev = revisedHeadsMap[defaultHead.name]!;
+                return defaultHead.copyWith(
+                  yearlyBudget: rev.yearlyBudget,
+                  monthlyBudget: rev.monthlyBudget,
+                  isRevised: true,
+                  momDocumentUrl: rev.momDocumentUrl,
+                  momFileName: rev.momFileName,
+                  meetingType: rev.meetingType,
+                  meetingDate: rev.meetingDate,
+                  revisionReason: rev.revisionReason,
+                  revisedBy: rev.revisedBy,
+                  revisedAt: rev.revisedAt,
+                );
               }
-            }
+              return defaultHead;
+            }).toList();
 
-            final double netSurplus = totalIncome - totalExpense;
+            final totalApprovedAnnualBudget = activeExpenditureHeads.fold(0.0, (acc, h) => acc + h.yearlyBudget);
+            final totalApprovedMonthlyBudget = activeExpenditureHeads.fold(0.0, (acc, h) => acc + h.monthlyBudget);
 
-            return Scaffold(
-              body: Column(
-                children: [
-                  // Top Financial Summary Bar
-                  _buildTopSummaryBar(totalIncome, totalExpense, netSurplus),
+            return StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('society_transactions')
+                  .orderBy('paymentDate', descending: true)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
 
-                  // Tab Selector
-                  Container(
-                    color: Colors.white,
-                    child: TabBar(
-                      controller: _tabController,
-                      isScrollable: true,
-                      labelColor: Colors.deepPurple,
-                      unselectedLabelColor: Colors.grey.shade700,
-                      indicatorColor: Colors.deepPurple,
-                      indicatorWeight: 3,
-                      tabs: const [
-                        Tab(icon: Icon(Icons.dashboard_outlined), text: 'Overview'),
-                        Tab(icon: Icon(Icons.arrow_upward, color: Colors.red), text: 'Expenditures'),
-                        Tab(icon: Icon(Icons.arrow_downward, color: Colors.green), text: 'Incomes'),
-                        Tab(icon: Icon(Icons.pie_chart_outline), text: 'Budget vs Actual (2026-27)'),
-                        Tab(icon: Icon(Icons.menu_book), text: 'Daybook & Ledger'),
-                      ],
-                    ),
+                final allDocs = snapshot.data?.docs ?? [];
+
+                // Aggregations
+                double totalIncome = 0;
+                double totalExpense = 0;
+                final Map<String, double> headExpenditures = {};
+                final Map<String, double> headIncomes = {};
+
+                for (final doc in allDocs) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final double amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
+                  final String type = (data['type'] ?? '').toString().toUpperCase();
+                  final String head = data['accountHead'] ?? 'Uncategorized';
+
+                  if (type == 'EXPENDITURE') {
+                    totalExpense += amt;
+                    headExpenditures[head] = (headExpenditures[head] ?? 0.0) + amt;
+                  } else if (type == 'INCOME') {
+                    totalIncome += amt;
+                    headIncomes[head] = (headIncomes[head] ?? 0.0) + amt;
+                  }
+                }
+
+                final double netSurplus = totalIncome - totalExpense;
+
+                return Scaffold(
+                  body: Column(
+                    children: [
+                      // Top Financial Summary Bar
+                      _buildTopSummaryBar(totalIncome, totalExpense, netSurplus),
+
+                      // Tab Selector
+                      Container(
+                        color: Colors.white,
+                        child: TabBar(
+                          controller: _tabController,
+                          isScrollable: true,
+                          labelColor: Colors.deepPurple,
+                          unselectedLabelColor: Colors.grey.shade700,
+                          indicatorColor: Colors.deepPurple,
+                          indicatorWeight: 3,
+                          tabs: const [
+                            Tab(icon: Icon(Icons.dashboard_outlined), text: 'Overview'),
+                            Tab(icon: Icon(Icons.arrow_upward, color: Colors.red), text: 'Expenditures'),
+                            Tab(icon: Icon(Icons.arrow_downward, color: Colors.green), text: 'Incomes'),
+                            Tab(icon: Icon(Icons.pie_chart_outline), text: 'Budget vs Actual (2026-27)'),
+                            Tab(icon: Icon(Icons.menu_book), text: 'Daybook & Ledger'),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1),
+
+                      // Tab Views
+                      Expanded(
+                        child: TabBarView(
+                          controller: _tabController,
+                          children: [
+                            // Tab 1: Overview
+                            _buildOverviewTab(
+                              allDocs,
+                              totalIncome,
+                              totalExpense,
+                              netSurplus,
+                              headExpenditures,
+                              activeExpenditureHeads,
+                              totalApprovedAnnualBudget,
+                              totalApprovedMonthlyBudget,
+                              annualBudgetDoc,
+                            ),
+
+                            // Tab 2: Expenditures
+                            _buildExpendituresTab(allDocs, headExpenditures, activeExpenditureHeads),
+
+                            // Tab 3: Incomes
+                            _buildIncomesTab(allDocs, headIncomes),
+
+                            // Tab 4: Budget vs Actual
+                            _buildBudgetVsActualTab(
+                              headExpenditures,
+                              activeExpenditureHeads,
+                              totalApprovedAnnualBudget,
+                              totalApprovedMonthlyBudget,
+                              annualBudgetDoc,
+                            ),
+
+                            // Tab 5: Daybook
+                            _buildDaybookTab(allDocs),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  const Divider(height: 1),
-
-                  // Tab Views
-                  Expanded(
-                    child: TabBarView(
-                      controller: _tabController,
-                      children: [
-                        // Tab 1: Overview
-                        _buildOverviewTab(allDocs, totalIncome, totalExpense, netSurplus, headExpenditures, activeExpenditureHeads, totalApprovedAnnualBudget),
-
-                        // Tab 2: Expenditures
-                        _buildExpendituresTab(allDocs, headExpenditures, activeExpenditureHeads),
-
-                        // Tab 3: Incomes
-                        _buildIncomesTab(allDocs, headIncomes),
-
-                        // Tab 4: Budget vs Actual
-                        _buildBudgetVsActualTab(headExpenditures, activeExpenditureHeads, totalApprovedAnnualBudget, totalApprovedMonthlyBudget),
-
-                        // Tab 5: Daybook
-                        _buildDaybookTab(allDocs),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+                );
+              },
             );
           },
         );
@@ -1514,8 +2213,12 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     Map<String, double> headExpenditures,
     List<BudgetHead> activeHeads,
     double approvedAnnualBudget,
+    double approvedMonthlyBudget,
+    DocumentSnapshot? annualBudgetDoc,
   ) {
     final recentDocs = allDocs.take(8).toList();
+    final annualBudgetData = annualBudgetDoc?.data() as Map<String, dynamic>?;
+    final bool isLocked = annualBudgetData?['isLocked'] == true;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -1523,35 +2226,58 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Action Buttons Bar
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red.shade700,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                 ),
-                icon: const Icon(Icons.add_shopping_cart),
+                icon: const Icon(Icons.add_shopping_cart, size: 18),
                 label: const Text('Record New Expense (Outflow)',
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 onPressed: () => _openRecordExpenseDialog(headExpenditures, activeHeads),
               ),
-              const SizedBox(width: 14),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green.shade700,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                 ),
-                icon: const Icon(Icons.savings_outlined),
+                icon: const Icon(Icons.savings_outlined, size: 18),
                 label: const Text('Record Other Income (Inflow)',
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 onPressed: _openRecordIncomeDialog,
               ),
-              const Spacer(),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isLocked ? Colors.deepPurple.shade700 : Colors.indigo.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                ),
+                icon: Icon(isLocked ? Icons.lock : Icons.upload_file, size: 18),
+                label: Text(
+                  isLocked
+                      ? 'Master Budget (${AccountingConfig.currentFinancialYear}) [Locked]'
+                      : 'Upload Annual Budget Plan',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                onPressed: () => _handleAnnualBudgetUpload(
+                  annualBudgetDoc,
+                  approvedAnnualBudget,
+                  approvedMonthlyBudget,
+                ),
+              ),
               OutlinedButton.icon(
-                icon: const Icon(Icons.download),
-                label: const Text('Export Accounts CSV'),
+                icon: const Icon(Icons.download, size: 18),
+                label: const Text('Export CSV'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
                 onPressed: () => _exportTransactionsCsv(allDocs),
               ),
             ],
@@ -1817,8 +2543,11 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     List<BudgetHead> activeHeads,
     double approvedAnnualBudget,
     double approvedMonthlyBudget,
+    DocumentSnapshot? annualBudgetDoc,
   ) {
     final liveSurplus = AccountingConfig.totalProjectedIncomeMonthly - approvedMonthlyBudget;
+    final annualBudgetData = annualBudgetDoc?.data() as Map<String, dynamic>?;
+    final bool isLocked = annualBudgetData?['isLocked'] == true;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -1826,31 +2555,172 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Budget vs Actual Outlay Tracker (2026-27)',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Annual Approved Outlay: ${currencyFmt.format(approvedAnnualBudget)} (${currencyFmt.format(approvedMonthlyBudget)}/mo) • Net Surplus: ₹${liveSurplus.toStringAsFixed(0)}/mo',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isLocked ? Colors.deepPurple.shade700 : Colors.indigo.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+                icon: Icon(isLocked ? Icons.lock : Icons.upload_file, size: 16),
+                label: Text(
+                  isLocked ? 'Master Plan (Locked)' : 'Upload Budget Plan',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                onPressed: () => _handleAnnualBudgetUpload(
+                  annualBudgetDoc,
+                  approvedAnnualBudget,
+                  approvedMonthlyBudget,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // Master Budget Status Banner
+          if (isLocked)
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.deepPurple.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.deepPurple.shade200),
+              ),
+              child: Row(
                 children: [
-                  const Text('Budget vs Actual Outlay Tracker (2026-27)',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                  Text(
-                    'Annual Approved Outlay: ${currencyFmt.format(approvedAnnualBudget)} (${currencyFmt.format(approvedMonthlyBudget)}/mo) • Net Surplus: ₹${liveSurplus.toStringAsFixed(0)}/mo',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.w500),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.deepPurple.shade100,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.lock, color: Colors.deepPurple, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              'Master Annual Budget Plan (FY ${AccountingConfig.currentFinancialYear}) Locked',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                                color: Colors.deepPurple.shade900,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.deepPurple.shade200,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                annualBudgetData?['approvedInMeeting'] ?? 'General Body / AGM',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.deepPurple.shade900,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Master plan is locked for the year. Individual heads can be adjusted below by attaching supporting Minutes of Meeting (MoM).',
+                          style: TextStyle(fontSize: 11, color: Colors.deepPurple.shade800),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (annualBudgetData?['budgetDocumentUrl'] != null) ...[
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.deepPurple,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      icon: const Icon(Icons.picture_as_pdf, size: 16),
+                      label: const Text('View Master Document', style: TextStyle(fontSize: 12)),
+                      onPressed: () => _showDocumentPreview(
+                        annualBudgetData!['budgetDocumentUrl'],
+                        annualBudgetData['budgetDocumentName'] ?? 'Annual_Budget_${AccountingConfig.currentFinancialYear}.pdf',
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            )
+          else
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Annual Budget Plan for FY ${AccountingConfig.currentFinancialYear} has not been officially locked yet. You can register and lock the master budget plan for the year.',
+                      style: TextStyle(fontSize: 12, color: Colors.blue.shade900),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue.shade700,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                    icon: const Icon(Icons.upload_file, size: 16),
+                    label: const Text('Lock Master Plan', style: TextStyle(fontSize: 12)),
+                    onPressed: () => _openUploadAnnualBudgetDialog(approvedAnnualBudget, approvedMonthlyBudget),
                   ),
                 ],
               ),
-              const Spacer(),
+            ),
+
+          // Legend chips
+          Wrap(
+            spacing: 8,
+            children: [
               Chip(
                 backgroundColor: Colors.green.shade50,
                 avatar: const Icon(Icons.circle, size: 12, color: Colors.green),
                 label: const Text('< 80% Spent', style: TextStyle(fontSize: 11)),
               ),
-              const SizedBox(width: 8),
               Chip(
                 backgroundColor: Colors.amber.shade50,
                 avatar: const Icon(Icons.circle, size: 12, color: Colors.amber),
                 label: const Text('80% - 100% Spent', style: TextStyle(fontSize: 11)),
               ),
-              const SizedBox(width: 8),
               Chip(
                 backgroundColor: Colors.red.shade50,
                 avatar: const Icon(Icons.circle, size: 12, color: Colors.red),
@@ -1858,7 +2728,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
 
           // Budget Heads Grid
           LayoutBuilder(
