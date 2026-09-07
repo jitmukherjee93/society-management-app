@@ -9,7 +9,6 @@ import '../../widgets/app_dialog.dart';
 import 'tabs/manage_society_tab.dart';
 import 'tabs/accounts_tab.dart';
 import 'tabs/generate_maintenance_tab.dart';
-import 'tabs/verify_payments_tab.dart';
 import 'tabs/manage_announcements_tab.dart';
 import 'tabs/manage_complaints_tab.dart';
 
@@ -160,12 +159,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
         title.contains('payment') ||
         message.contains('payment') ||
         title.contains('utr') ||
-        message.contains('utr')) {
-      setState(() => _currentIndex = 5); // Verify Payments Tab
-    } else if (type == 'MAINTENANCE' ||
+        message.contains('utr') ||
+        type == 'MAINTENANCE' ||
         title.contains('maintenance') ||
         message.contains('maintenance')) {
-      setState(() => _currentIndex = 4); // Generate Maintenance Tab
+      setState(() => _currentIndex = 4); // Bills Tab (Payment Verification & Billing)
     } else if (type == 'ANNOUNCEMENT' ||
         title.contains('announcement') ||
         message.contains('announcement')) {
@@ -804,7 +802,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
       const ManageAnnouncementsTab(),
       const ManageComplaintsTab(),
       const GenerateMaintenanceTab(),
-      const VerifyPaymentsTab(),
     ];
 
     return Scaffold(
@@ -937,11 +934,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
               icon: Icon(Icons.post_add_outlined, size: 20),
               selectedIcon: Icon(Icons.post_add_rounded, size: 20, color: AppColors.primary),
               label: 'Bills',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.verified_outlined, size: 20),
-              selectedIcon: Icon(Icons.verified_rounded, size: 20, color: AppColors.primary),
-              label: 'Verify',
             ),
           ],
         ),

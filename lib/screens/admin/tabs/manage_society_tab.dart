@@ -1817,7 +1817,10 @@ class _FlatTile extends StatelessWidget {
             
             int cars = 0;
             int bikes = 0;
+            final List<String> carRegs = [];
+            final List<String> bikeRegs = [];
             bool hasPendingReq = false;
+            final List<String> pendingReqs = [];
             String? primaryOccupantName;
 
             for (final doc in docs) {
@@ -1827,17 +1830,30 @@ class _FlatTile extends StatelessWidget {
               }
               if (data['isCarOwner'] == true && (data['carReg']?.toString().trim().isNotEmpty ?? false)) {
                 cars++;
+                final reg = data['carReg'].toString().trim();
+                if (!carRegs.contains(reg)) carRegs.add(reg);
               }
               if (data['isBikeOwner'] == true && (data['bikeReg']?.toString().trim().isNotEmpty ?? false)) {
                 bikes++;
+                final reg = data['bikeReg'].toString().trim();
+                if (!bikeRegs.contains(reg)) bikeRegs.add(reg);
               }
               if (data['hasBike2'] == true && (data['bike2Reg']?.toString().trim().isNotEmpty ?? false)) {
                 bikes++;
+                final reg = data['bike2Reg'].toString().trim();
+                if (!bikeRegs.contains(reg)) bikeRegs.add(reg);
               }
-              if ((data['pendingCarReg']?.toString().isNotEmpty ?? false) ||
-                  (data['pendingBikeReg']?.toString().isNotEmpty ?? false) ||
-                  (data['pendingBike2Reg']?.toString().isNotEmpty ?? false)) {
+              if (data['pendingCarReg']?.toString().isNotEmpty ?? false) {
                 hasPendingReq = true;
+                pendingReqs.add('Car: ${data['pendingCarReg']}');
+              }
+              if (data['pendingBikeReg']?.toString().isNotEmpty ?? false) {
+                hasPendingReq = true;
+                pendingReqs.add('Bike 1: ${data['pendingBikeReg']}');
+              }
+              if (data['pendingBike2Reg']?.toString().isNotEmpty ?? false) {
+                hasPendingReq = true;
+                pendingReqs.add('Bike 2: ${data['pendingBike2Reg']}');
               }
             }
 
@@ -1955,26 +1971,36 @@ class _FlatTile extends StatelessWidget {
                           Row(
                             children: [
                               if (cars > 0) ...[
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.cardSurfaceSecondary,
-                                    borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(color: AppColors.border, width: 0.7),
+                                Tooltip(
+                                  message: carRegs.length == 1
+                                      ? 'Car Reg: ${carRegs.first}'
+                                      : 'Car Regs (${carRegs.length}):\n${carRegs.map((r) => '• $r').join('\n')}',
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.cardSurfaceSecondary,
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(color: AppColors.border, width: 0.7),
+                                    ),
+                                    child: Text('🚗 $cars', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                                   ),
-                                  child: Text('🚗 $cars', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                                 ),
                                 const SizedBox(width: 4),
                               ],
                               if (bikes > 0) ...[
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.cardSurfaceSecondary,
-                                    borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(color: AppColors.border, width: 0.7),
+                                Tooltip(
+                                  message: bikeRegs.length == 1
+                                      ? 'Bike Reg: ${bikeRegs.first}'
+                                      : 'Bike Regs (${bikeRegs.length}):\n${bikeRegs.map((r) => '• $r').join('\n')}',
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.cardSurfaceSecondary,
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(color: AppColors.border, width: 0.7),
+                                    ),
+                                    child: Text('🏍️ $bikes', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                                   ),
-                                  child: Text('🏍️ $bikes', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                                 ),
                                 const SizedBox(width: 4),
                               ],
@@ -1986,14 +2012,17 @@ class _FlatTile extends StatelessWidget {
                             ],
                           ),
                           if (hasPendingReq)
-                            const AppBadge(
-                              label: 'Pending Req',
-                              icon: Icons.pending_actions,
-                              textColor: AppColors.warning,
-                              backgroundColor: AppColors.warningSurface,
-                              borderColor: AppColors.warningBorder,
-                              fontSize: 10,
-                              padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            Tooltip(
+                              message: 'Pending Approval:\n${pendingReqs.join('\n')}',
+                              child: const AppBadge(
+                                label: 'Pending Req',
+                                icon: Icons.pending_actions,
+                                textColor: AppColors.warning,
+                                backgroundColor: AppColors.warningSurface,
+                                borderColor: AppColors.warningBorder,
+                                fontSize: 10,
+                                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              ),
                             )
                           else
                             const Icon(Icons.arrow_forward_ios, size: 11, color: AppColors.textMuted),
