@@ -4,9 +4,51 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import '../../models/accounting_heads.dart';
+import '../../constants/society_config.dart';
+import '../../utils/app_formatters.dart';
+import '../../services/notification_service.dart';
 import 'tabs/community_feed_tab.dart';
 import '../../utils/storage_utils.dart';
 import '../../widgets/document_preview_dialog.dart';
+
+bool _isNotificationForResident(Map<String, dynamic> data, User? user, [String? userFlat, String? fullFlat]) {
+  if (user == null) return false;
+  final userUid = user.uid;
+  final userEmail = user.email?.toLowerCase() ?? '';
+  final flatPrefix = userEmail.contains('@') ? userEmail.split('@').first.toUpperCase() : '';
+
+  final targetRole = (data['targetRole'] ?? '').toString().toUpperCase();
+  if (targetRole == 'ADMIN' || targetRole == 'GUARD') return false;
+
+  final targetUid = data['targetUid']?.toString().toUpperCase();
+  if (targetUid != null) {
+    if (targetUid == userUid.toUpperCase()) return true;
+    if (flatPrefix.isNotEmpty && targetUid == flatPrefix) return true;
+    if (userFlat != null && userFlat.isNotEmpty && (targetUid == userFlat || targetUid.contains(userFlat))) return true;
+    if (fullFlat != null && fullFlat.isNotEmpty && (targetUid == fullFlat || targetUid.contains(fullFlat))) return true;
+  }
+
+  final targetUids = (data['targetUids'] as List<dynamic>?)?.map((e) => e.toString().toUpperCase()).toList() ?? [];
+  if (targetUids.isNotEmpty) {
+    if (targetUids.contains(userUid.toUpperCase())) return true;
+    if (flatPrefix.isNotEmpty && targetUids.contains(flatPrefix)) return true;
+    if (userFlat != null && userFlat.isNotEmpty && targetUids.contains(userFlat)) return true;
+    if (fullFlat != null && fullFlat.isNotEmpty && targetUids.contains(fullFlat)) return true;
+  }
+
+  final flatNum = (data['flatNumber'] ?? '').toString().toUpperCase();
+  if (flatNum.isNotEmpty) {
+    if (userFlat != null && userFlat.isNotEmpty && (flatNum == userFlat || flatNum.endsWith(userFlat) || flatNum.contains(userFlat))) return true;
+    if (fullFlat != null && fullFlat.isNotEmpty && (flatNum == fullFlat || flatNum.endsWith(fullFlat) || flatNum.contains(fullFlat))) return true;
+    if (flatPrefix.isNotEmpty && (flatNum == flatPrefix || flatNum.endsWith(flatPrefix))) return true;
+  }
+
+  if (targetRole == 'ALL' || targetRole == 'RESIDENT') {
+    if (flatNum.isEmpty) return true;
+  }
+
+  return false;
+}
 
 class ResidentDashboard extends StatefulWidget {
   const ResidentDashboard({super.key});
@@ -17,69 +59,118 @@ class ResidentDashboard extends StatefulWidget {
 
 class _ResidentDashboardState extends State<ResidentDashboard> {
   int _currentIndex = 0;
+  String? _selectedMaintenanceMonth;
 
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const Scaffold(body: Center(child: Text('Please log in.')));
+    }
+
+    final userEmail = user.email?.toLowerCase();
+    final flatPrefix = userEmail?.contains('@') == true
+        ? userEmail!.split('@').first.toLowerCase()
+        : null;
+
+    return FutureBuilder<DocumentReference?>(
+      future: _resolveUserDocRef(user.uid, userEmail, flatPrefix),
+      builder: (context, docRefSnap) {
+        final docRef = docRefSnap.data;
+        if (docRef == null) {
+          return _buildDashboardScaffold(context, user, null, null);
+        }
+        return StreamBuilder<DocumentSnapshot>(
+          stream: docRef.snapshots(),
+          builder: (context, userSnap) {
+            final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
+            final userFlat = (userData['flatNumber'] ?? '').toString().trim().toUpperCase();
+            final blockStr = (userData['block'] ?? '').toString().trim().toUpperCase();
+            final fullFlat = (blockStr.isNotEmpty && !userFlat.startsWith(blockStr))
+                ? '$blockStr-$userFlat'
+                : userFlat;
+
+            return _buildDashboardScaffold(context, user, userFlat, fullFlat);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildDashboardScaffold(BuildContext context, User user, String? userFlat, String? fullFlat) {
     final pages = [
       const HomeTab(),
       const CommunityFeedTab(),
       NotificationsTab(
-        onNavigateTab: (idx) => setState(() => _currentIndex = idx),
+        userFlat: userFlat,
+        fullFlat: fullFlat,
+        onNavigateTab: (idx, [payload]) {
+          setState(() {
+            _currentIndex = idx;
+            if (payload != null && idx == 4) {
+              _selectedMaintenanceMonth = payload;
+            }
+          });
+        },
       ),
       const ResidentHelpdeskTab(),
-      const MaintenanceTab(),
+      MaintenanceTab(
+        key: ValueKey(_selectedMaintenanceMonth ?? 'maint_default'),
+        initialSelectedMonth: _selectedMaintenanceMonth,
+      ),
     ];
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Resident Dashboard'),
         actions: [
-          if (user != null)
-            StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('notifications')
-                  .where('targetUid', isEqualTo: user.uid)
-                  .snapshots(),
-              builder: (context, snap) {
-                final count = snap.data?.docs.length ?? 0;
-                return Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.notifications),
-                      tooltip: 'Alerts',
-                      onPressed: () => setState(() => _currentIndex = 2),
-                    ),
-                    if (count > 0)
-                      Positioned(
-                        top: 8,
-                        right: 8,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('notifications')
+                .snapshots(),
+            builder: (context, snap) {
+              final docs = (snap.data?.docs ?? []).where((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                return _isNotificationForResident(data, user, userFlat, fullFlat);
+              }).toList();
+              final count = docs.length;
+              return Stack(
+                alignment: Alignment.center,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.notifications),
+                    tooltip: 'Alerts',
+                    onPressed: () => setState(() => _currentIndex = 2),
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: const BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 16,
+                          minHeight: 16,
+                        ),
+                        child: Text(
+                          '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
                           ),
-                          constraints: const BoxConstraints(
-                            minWidth: 16,
-                            minHeight: 16,
-                          ),
-                          child: Text(
-                            '$count',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
+                          textAlign: TextAlign.center,
                         ),
                       ),
-                  ],
-                );
-              },
-            ),
+                    ),
+                ],
+              );
+            },
+          ),
           TextButton.icon(
             icon: const Icon(Icons.logout),
             label: const Text('Log out'),
@@ -98,22 +189,23 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           const BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           const BottomNavigationBarItem(icon: Icon(Icons.forum), label: 'Community'),
           BottomNavigationBarItem(
-            icon: user != null
-                ? StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance
-                        .collection('notifications')
-                        .where('targetUid', isEqualTo: user.uid)
-                        .snapshots(),
-                    builder: (context, snap) {
-                      final count = snap.data?.docs.length ?? 0;
-                      return Badge(
-                        isLabelVisible: count > 0,
-                        label: Text('$count'),
-                        child: const Icon(Icons.notifications),
-                      );
-                    },
-                  )
-                : const Icon(Icons.notifications),
+            icon: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('notifications')
+                  .snapshots(),
+              builder: (context, snap) {
+                final docs = (snap.data?.docs ?? []).where((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  return _isNotificationForResident(data, user, userFlat, fullFlat);
+                }).toList();
+                final count = docs.length;
+                return Badge(
+                  isLabelVisible: count > 0,
+                  label: Text('$count'),
+                  child: const Icon(Icons.notifications),
+                );
+              },
+            ),
             label: 'Alerts',
           ),
           const BottomNavigationBarItem(icon: Icon(Icons.support_agent), label: 'Helpdesk'),
@@ -266,6 +358,8 @@ class _HomeTabState extends State<HomeTab> {
         'vehicle_rc/${prefix}_${DateTime.now().millisecondsSinceEpoch}_$fileName',
       );
     }
+
+    if (!context.mounted) return;
 
     showDialog(
       context: context,
@@ -1430,29 +1524,37 @@ class _HomeTabState extends State<HomeTab> {
 }
 
 class NotificationsTab extends StatelessWidget {
-  final Function(int)? onNavigateTab;
-  const NotificationsTab({super.key, this.onNavigateTab});
+  final Function(int, [String?])? onNavigateTab;
+  final String? userFlat;
+  final String? fullFlat;
+  const NotificationsTab({
+    super.key,
+    this.onNavigateTab,
+    this.userFlat,
+    this.fullFlat,
+  });
 
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
-    final userUid = user?.uid ?? '';
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        if (userUid.isNotEmpty) ...[
+        if (user != null) ...[
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('notifications')
-                .where('targetUid', isEqualTo: userUid)
                 .snapshots(),
             builder: (context, snap) {
               if (snap.hasError) {
                 return Text('Error loading alerts: ${snap.error}',
                     style: const TextStyle(color: Colors.red));
               }
-              final docs = (snap.data?.docs ?? []).toList();
+              final docs = (snap.data?.docs ?? []).where((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                return _isNotificationForResident(data, user, userFlat, fullFlat);
+              }).toList();
               // Sort in memory by createdAt descending
               docs.sort((a, b) {
                 final aData = a.data() as Map<String, dynamic>;
@@ -1552,7 +1654,7 @@ class NotificationsTab extends StatelessWidget {
                                   : isComplaint
                                       ? 'Tap to open Helpdesk'
                                       : isMaintenance
-                                          ? 'Tap to view Maintenance'
+                                          ? 'Tap to view & pay Maintenance'
                                           : 'Tap to view',
                               style: TextStyle(
                                 fontSize: 11,
@@ -1572,7 +1674,20 @@ class NotificationsTab extends StatelessWidget {
                             IconButton(
                               icon: const Icon(Icons.close,
                                   size: 18, color: Colors.grey),
-                              onPressed: () => doc.reference.delete(),
+                              onPressed: () async {
+                                try {
+                                  await doc.reference.delete();
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Failed to dismiss notification: $e'),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
                               tooltip: 'Dismiss',
                             ),
                             const Icon(Icons.chevron_right, color: Colors.grey),
@@ -1584,7 +1699,8 @@ class NotificationsTab extends StatelessWidget {
                           } else if (isComplaint) {
                             onNavigateTab?.call(3); // Helpdesk tab
                           } else if (isMaintenance) {
-                            onNavigateTab?.call(4); // Maintenance tab
+                            final month = notif['month']?.toString();
+                            onNavigateTab?.call(4, month); // Maintenance tab with month payload
                           }
                         },
                       ),
@@ -1693,7 +1809,8 @@ class NotificationsTab extends StatelessWidget {
 }
 
 class MaintenanceTab extends StatefulWidget {
-  const MaintenanceTab({super.key});
+  final String? initialSelectedMonth;
+  const MaintenanceTab({super.key, this.initialSelectedMonth});
 
   @override
   State<MaintenanceTab> createState() => _MaintenanceTabState();
@@ -1927,6 +2044,40 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Focused Notification Alert Banner if navigated from notification
+                  if (widget.initialSelectedMonth != null) ...[
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.teal.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.teal.shade300, width: 1.5),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.notifications_active, color: Colors.teal, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Active Bill Alert: ${widget.initialSelectedMonth}',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.teal),
+                                ),
+                                const Text(
+                                  'Viewing catered maintenance bill details including flat rate and vehicle parking charges.',
+                                  style: TextStyle(fontSize: 11, color: Colors.black87),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
                   // FY 2026-27 Approved Maintenance Schedule Card
                   Container(
                     width: double.infinity,
@@ -1940,7 +2091,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                       borderRadius: BorderRadius.circular(16),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.teal.withOpacity(0.3),
+                          color: Colors.teal.withValues(alpha: 0.3),
                           blurRadius: 10,
                           offset: const Offset(0, 4),
                         ),
@@ -1969,7 +2120,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                               decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.2),
+                                color: Colors.white.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: Text(
@@ -2039,23 +2190,64 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                   const SizedBox(height: 24),
 
                   // Dues Stream Section
-                  StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance
-                        .collection('maintenance_dues')
-                        .where('flatNumber', whereIn: [userFlat, flatDisplay, userFlat.replaceAll('-', '')])
-                        .snapshots(),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
+                  Builder(
+                    builder: (context) {
+                      final flatCandidates = <String>{
+                        userFlat,
+                        flatDisplay,
+                        userFlat.replaceAll('-', ''),
+                        flatDisplay.replaceAll('-', ''),
+                        if (blockStr.isNotEmpty) '$blockStr-$userFlat',
+                        if (blockStr.isNotEmpty) '$blockStr$userFlat',
+                        if (userFlat.contains('-')) userFlat.split('-').last,
+                      }.where((s) => s.trim().isNotEmpty).toList();
 
-                      final allDocs = snapshot.data?.docs ?? [];
-                      final unpaidDocs = allDocs.where((d) => (d.data() as Map<String, dynamic>)['status'] == 'UNPAID').toList();
-                      final pendingOfflineDocs = allDocs.where((d) => (d.data() as Map<String, dynamic>)['status'] == 'PAID_OFFLINE_PENDING').toList();
-                      final paidDocs = allDocs.where((d) {
-                        final st = (d.data() as Map<String, dynamic>)['status'];
-                        return st == 'PAID_ONLINE' || st == 'PAID_OFFLINE_VERIFIED';
-                      }).toList();
+                      return StreamBuilder<QuerySnapshot>(
+                        stream: FirebaseFirestore.instance
+                            .collection('maintenance_dues')
+                            .where('flatNumber', whereIn: flatCandidates)
+                            .snapshots(),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasError) {
+                            return Container(
+                              padding: const EdgeInsets.all(12),
+                              margin: const EdgeInsets.only(bottom: 12),
+                              decoration: BoxDecoration(
+                                color: Colors.red.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.red.shade200),
+                              ),
+                              child: Text(
+                                'Error loading maintenance dues: ${snapshot.error}',
+                                style: const TextStyle(color: Colors.red),
+                              ),
+                            );
+                          }
+                          if (snapshot.connectionState == ConnectionState.waiting) {
+                            return const Center(child: CircularProgressIndicator());
+                          }
+
+                          final allDocs = snapshot.data?.docs ?? [];
+                          var unpaidDocs = allDocs.where((d) => (d.data() as Map<String, dynamic>)['status'] == 'UNPAID').toList();
+                          final pendingApprovalDocs = allDocs.where((d) {
+                            final st = (d.data() as Map<String, dynamic>)['status'];
+                            return st == 'PAYMENT_PENDING_APPROVAL' || st == 'PAID_OFFLINE_PENDING';
+                          }).toList();
+                          final paidDocs = allDocs.where((d) {
+                            final st = (d.data() as Map<String, dynamic>)['status'];
+                            return st == 'PAID_VERIFIED' || st == 'PAID_ONLINE' || st == 'PAID_OFFLINE_VERIFIED';
+                          }).toList();
+
+                      // Prioritize initialSelectedMonth if provided
+                      if (widget.initialSelectedMonth != null) {
+                        unpaidDocs.sort((a, b) {
+                          final aMonth = (a.data() as Map<String, dynamic>)['month']?.toString() ?? '';
+                          final bMonth = (b.data() as Map<String, dynamic>)['month']?.toString() ?? '';
+                          if (aMonth == widget.initialSelectedMonth) return -1;
+                          if (bMonth == widget.initialSelectedMonth) return 1;
+                          return 0;
+                        });
+                      }
 
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2067,7 +2259,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                           ),
                           const SizedBox(height: 10),
 
-                          if (unpaidDocs.isEmpty && pendingOfflineDocs.isEmpty)
+                          if (unpaidDocs.isEmpty && pendingApprovalDocs.isEmpty)
                             Container(
                               width: double.infinity,
                               padding: const EdgeInsets.all(16),
@@ -2106,14 +2298,23 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                               final dueId = doc.id;
                               final month = data['month'] ?? 'Current Month';
                               final amt = (data['amount'] as num?)?.toDouble() ?? breakdown.totalMonthlyDue;
+                              final isFocusMonth = widget.initialSelectedMonth != null && month == widget.initialSelectedMonth;
+
+                              final baseMaint = (data['baseMaintenance'] as num?)?.toDouble() ?? breakdown.baseMaintenance;
+                              final puja = (data['pujaSubscription'] as num?)?.toDouble() ?? breakdown.pujaSubscription;
+                              final carCharges = (data['carParkingCharges'] as num?)?.toDouble() ?? breakdown.carParkingCharges;
+                              final bikeCharges = (data['bikeParkingCharges'] as num?)?.toDouble() ?? breakdown.bikeParkingCharges;
 
                               return Card(
                                 margin: const EdgeInsets.only(bottom: 12),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(color: Colors.red.shade200),
+                                  side: BorderSide(
+                                    color: isFocusMonth ? Colors.teal : Colors.red.shade200,
+                                    width: isFocusMonth ? 2 : 1,
+                                  ),
                                 ),
-                                elevation: 2,
+                                elevation: isFocusMonth ? 4 : 2,
                                 child: Padding(
                                   padding: const EdgeInsets.all(16),
                                   child: Column(
@@ -2127,18 +2328,36 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                               Container(
                                                 padding: const EdgeInsets.all(8),
                                                 decoration: BoxDecoration(
-                                                  color: Colors.red.shade50,
+                                                  color: isFocusMonth ? Colors.teal.shade50 : Colors.red.shade50,
                                                   borderRadius: BorderRadius.circular(8),
                                                 ),
-                                                child: const Icon(Icons.receipt_long, color: Colors.red),
+                                                child: Icon(
+                                                  isFocusMonth ? Icons.star_rate_rounded : Icons.receipt_long,
+                                                  color: isFocusMonth ? Colors.teal : Colors.red,
+                                                ),
                                               ),
                                               const SizedBox(width: 10),
                                               Column(
                                                 crossAxisAlignment: CrossAxisAlignment.start,
                                                 children: [
-                                                  Text(
-                                                    'Maintenance Bill: $month',
-                                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                                  Row(
+                                                    children: [
+                                                      Text(
+                                                        'Maintenance Bill: $month',
+                                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                                      ),
+                                                      if (isFocusMonth) ...[
+                                                        const SizedBox(width: 6),
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.teal.shade100,
+                                                            borderRadius: BorderRadius.circular(4),
+                                                          ),
+                                                          child: const Text('ALERTED', style: TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 9)),
+                                                        ),
+                                                      ],
+                                                    ],
                                                   ),
                                                   Text(
                                                     'FY ${data['financialYear'] ?? AccountingConfig.currentFinancialYear}',
@@ -2150,10 +2369,54 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                           ),
                                           Text(
                                             _currencyFmt.format(amt),
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.red),
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 18,
+                                              color: isFocusMonth ? Colors.teal.shade800 : Colors.red,
+                                            ),
                                           ),
                                         ],
                                       ),
+                                      const SizedBox(height: 10),
+
+                                      // Itemized Breakdown Line
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade50,
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: Colors.grey.shade200),
+                                        ),
+                                        child: Text(
+                                          'Breakdown: Maint: ${_currencyFmt.format(baseMaint)} • Puja: ${_currencyFmt.format(puja)}${carCharges > 0 ? ' • Car Parking: ${_currencyFmt.format(carCharges)}' : ''}${bikeCharges > 0 ? ' • Bike Parking: ${_currencyFmt.format(bikeCharges)}' : ''}',
+                                          style: TextStyle(fontSize: 11, color: Colors.grey.shade800, fontWeight: FontWeight.w500),
+                                        ),
+                                      ),
+
+                                      if (data['rejectionReason'] != null && data['rejectionReason'].toString().isNotEmpty) ...[
+                                        const SizedBox(height: 8),
+                                        Container(
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: Colors.red.shade50,
+                                            borderRadius: BorderRadius.circular(6),
+                                            border: Border.all(color: Colors.red.shade200),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              const Icon(Icons.info_outline, color: Colors.red, size: 16),
+                                              const SizedBox(width: 6),
+                                              Expanded(
+                                                child: Text(
+                                                  'Previous Submission Rejected: ${data['rejectionReason']}',
+                                                  style: const TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.w600),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+
                                       const SizedBox(height: 12),
                                       const Divider(),
                                       const SizedBox(height: 6),
@@ -2178,7 +2441,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                             ),
                                             icon: const Icon(Icons.payment, size: 18),
-                                            label: const Text('Pay Now', style: TextStyle(fontWeight: FontWeight.bold)),
+                                            label: const Text('Pay Maintenance Bill', style: TextStyle(fontWeight: FontWeight.bold)),
                                             onPressed: () => _showPaymentModal(context, dueId, data, userData),
                                           ),
                                         ],
@@ -2189,26 +2452,97 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                               );
                             }),
 
-                            // Pending Offline Verification Bills
-                            ...pendingOfflineDocs.map((doc) {
+                            // Pending Approval Bills (Displaying Unique ID: 16-Char UTR / Bank Ref / Cheque)
+                            ...pendingApprovalDocs.map((doc) {
                               final data = doc.data() as Map<String, dynamic>;
                               final month = data['month'] ?? '';
                               final amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
+                              final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? 'N/A').toString();
+                              final mode = data['paymentMode'] ?? 'Online Payment';
+                              final category = data['paymentCategory'] ?? (mode.contains('Cheque') || mode.contains('Cash') ? 'OFFLINE' : 'ONLINE');
 
                               return Card(
                                 margin: const EdgeInsets.only(bottom: 12),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(color: Colors.orange.shade200),
+                                  side: BorderSide(color: Colors.amber.shade400, width: 1.5),
                                 ),
-                                child: ListTile(
-                                  leading: const CircleAvatar(
-                                    backgroundColor: Colors.orange,
-                                    child: Icon(Icons.hourglass_top, color: Colors.white),
+                                color: Colors.amber.shade50.withValues(alpha: 0.5),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(14.0),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              const CircleAvatar(
+                                                radius: 18,
+                                                backgroundColor: Colors.amber,
+                                                child: Icon(Icons.hourglass_top, color: Colors.white, size: 20),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    'Maintenance Bill: $month',
+                                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                                  ),
+                                                  Text(
+                                                    '[$category] Submitted via $mode',
+                                                    style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                          Text(
+                                            _currencyFmt.format(amt),
+                                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: Colors.amber.shade900),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: Colors.amber.shade300),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            const Icon(Icons.tag, size: 16, color: Colors.blue),
+                                            const SizedBox(width: 6),
+                                            const Text('Unique ID: ', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                            Expanded(
+                                              child: Text(
+                                                uniqueId,
+                                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.blue, letterSpacing: 1.1),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: Colors.amber.shade100,
+                                                borderRadius: BorderRadius.circular(12),
+                                              ),
+                                              child: const Text('PAYMENT UNDER VERIFICATION', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.deepOrange)),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        'Payment reference submitted. Approval request has been sent to Admin.',
+                                        style: TextStyle(fontSize: 11, color: Colors.grey.shade700, fontStyle: FontStyle.italic),
+                                      ),
+                                    ],
                                   ),
-                                  title: Text('Bill: $month — ${_currencyFmt.format(amt)}',
-                                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                                  subtitle: const Text('Offline payment submitted. Awaiting Admin verification.'),
                                 ),
                               );
                             }),
@@ -2237,11 +2571,13 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                 final data = paidDocs[index].data() as Map<String, dynamic>;
                                 final month = data['month'] ?? '';
                                 final amount = data['amount'] ?? 0;
-                                final status = data['status'] ?? 'PAID';
                                 final receiptNo = data['receiptNumber'] ?? 'REC-2627-${(data['paidAt'] != null ? data['paidAt'].hashCode % 10000 : 1001)}';
+                                final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? '').toString();
                                 
                                 String dateStr = 'Recently Paid';
-                                if (data['paidAt'] is Timestamp) {
+                                if (data['verifiedAt'] is Timestamp) {
+                                  dateStr = DateFormat('dd MMM yyyy').format((data['verifiedAt'] as Timestamp).toDate());
+                                } else if (data['paidAt'] is Timestamp) {
                                   dateStr = DateFormat('dd MMM yyyy').format((data['paidAt'] as Timestamp).toDate());
                                 }
 
@@ -2255,7 +2591,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                     ),
                                     title: Text('$month — ${_currencyFmt.format(amount)}',
                                         style: const TextStyle(fontWeight: FontWeight.bold)),
-                                    subtitle: Text('Receipt: $receiptNo • $dateStr\nStatus: ${status == 'PAID_ONLINE' ? 'Paid Online' : 'Offline Verified'}'),
+                                    subtitle: Text('Receipt: $receiptNo • $dateStr\n${uniqueId.isNotEmpty ? 'Unique ID: $uniqueId • ' : ''}Status: Verified in Accounts'),
                                     isThreeLine: true,
                                     trailing: OutlinedButton.icon(
                                       icon: const Icon(Icons.receipt, size: 16),
@@ -2270,14 +2606,16 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                         ],
                       );
                     },
-                  ),
-                ],
+                  );
+                },
               ),
-            );
-          },
+            ],
+          ),
         );
       },
     );
+  },
+);
   }
 }
 
@@ -2307,72 +2645,86 @@ class _PaymentModalSheet extends StatefulWidget {
 }
 
 class _PaymentModalSheetState extends State<_PaymentModalSheet> {
-  int _selectedPaymentTab = 0; // 0: Online (UPI / Card), 1: Offline (Cheque / Cash / Bank Transfer)
-  String _selectedOnlineMethod = 'UPI'; // UPI, CARD, NETBANKING
-  final _offlineRefController = TextEditingController();
-  final _offlineModeController = TextEditingController(text: 'Bank Transfer / NEFT');
+  final _onlineFormKey = GlobalKey<FormState>();
+  final _offlineFormKey = GlobalKey<FormState>();
+
+  // Online Fields
+  String _onlineMode = 'UPI'; // 'UPI' or 'Bank Transfer / NEFT'
+  final _onlineUtrController = TextEditingController();
+
+  // Offline Fields
+  String _offlineMode = 'Cheque'; // 'Cheque' or 'Cash'
+  final _chequeNoController = TextEditingController();
+  final _chequeBankController = TextEditingController();
+
   bool _isProcessing = false;
 
   @override
   void dispose() {
-    _offlineRefController.dispose();
-    _offlineModeController.dispose();
+    _onlineUtrController.dispose();
+    _chequeNoController.dispose();
+    _chequeBankController.dispose();
     super.dispose();
   }
 
-  Future<void> _processOnlinePayment() async {
+  Future<void> _submitOnlinePayment() async {
+    if (!_onlineFormKey.currentState!.validate()) return;
+
+    final utr = _onlineUtrController.text.trim();
     setState(() => _isProcessing = true);
 
     try {
-      // Simulate gateway processing delay
-      await Future.delayed(const Duration(milliseconds: 1200));
+      final user = FirebaseAuth.instance.currentUser;
+      final userEmail = user?.email ?? '';
+      final userUid = user?.uid ?? '';
+      final paymentModeName = _onlineMode == 'UPI' ? 'UPI (GPay / PhonePe / Paytm / BHIM)' : 'Bank Transfer (NEFT / IMPS / RTGS)';
 
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final receiptNo = 'REC-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
-      final txnRef = 'TXN_UPI_${timestamp.toString().substring(5)}';
-
-      // 1. Determine budget head
-      String head = 'Monthly Maintenance - Block A';
-      final cleanUpper = widget.flat.toUpperCase();
-      if (cleanUpper.startsWith('B') || cleanUpper.contains('B-')) {
-        head = 'Monthly Maintenance - Block B';
-      } else if (cleanUpper.startsWith('C') || cleanUpper.contains('C-')) {
-        head = 'Monthly Maintenance - Block C';
-      } else if (cleanUpper.startsWith('D') || cleanUpper.contains('D-')) {
-        head = 'Monthly Maintenance - Block D';
-      }
-
-      // 2. Update maintenance due doc
+      // 1. Update maintenance due record
       await FirebaseFirestore.instance.collection('maintenance_dues').doc(widget.dueId).update({
-        'status': 'PAID_ONLINE',
-        'paidAt': FieldValue.serverTimestamp(),
-        'receiptNumber': receiptNo,
-        'paymentMode': 'Online ($_selectedOnlineMethod)',
-        'transactionRef': txnRef,
-      });
-
-      // 3. Post income transaction into society accounting ledger
-      await FirebaseFirestore.instance.collection('society_transactions').add({
-        'type': 'INCOME',
-        'voucherNumber': receiptNo,
-        'accountHead': head,
-        'category': 'Maintenance Collection',
+        'status': 'PAYMENT_PENDING_APPROVAL',
+        'paymentCategory': 'ONLINE',
+        'paymentMode': paymentModeName,
+        'uniqueId': utr,
+        'utrNumber': utr,
+        'referenceNumber': utr,
+        'submittedAt': FieldValue.serverTimestamp(),
+        'submittedByUid': userUid,
+        'submittedByEmail': userEmail,
         'amount': widget.amount,
-        'paidToOrReceivedFrom': 'Flat ${widget.flat}',
-        'paymentDate': FieldValue.serverTimestamp(),
-        'paymentMode': 'Online ($_selectedOnlineMethod)',
-        'referenceNumber': txnRef,
-        'description': 'Online maintenance payment for ${widget.month} by Flat ${widget.flat} (FY 2026-27)',
-        'linkedDueId': widget.dueId,
-        'recordedBy': 'Resident (${widget.flat})',
-        'createdAt': FieldValue.serverTimestamp(),
+        'rejectionReason': FieldValue.delete(),
       });
 
-      widget.onPaymentComplete(receiptNo);
+      // 2. Dispatch notification to Admin
+      await NotificationService.notifyAdmin(
+        title: 'Online Payment Approval: Flat ${widget.flat}',
+        message: 'Flat ${widget.flat} submitted Online payment ($paymentModeName) of ${AppFormatters.currency(widget.amount)} for ${widget.month} with 16-Character Unique ID: $utr. Tap to verify and approve.',
+        type: 'MAINTENANCE_PAYMENT_APPROVAL_REQUEST',
+        flatNumber: widget.flat,
+        extraData: {
+          'dueId': widget.dueId,
+          'amount': widget.amount,
+          'month': widget.month,
+          'uniqueId': utr,
+          'utrNumber': utr,
+          'referenceNumber': utr,
+          'paymentCategory': 'ONLINE',
+          'paymentMode': paymentModeName,
+        },
+      );
+
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.teal,
+            content: Text('Online payment with 16-digit Unique ID ($utr) submitted for Admin approval!'),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red, content: Text('Payment error: $e')),
+          SnackBar(backgroundColor: Colors.red, content: Text('Submission error: $e')),
         );
       }
     } finally {
@@ -2380,49 +2732,69 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
     }
   }
 
-  Future<void> _processOfflinePayment() async {
-    final ref = _offlineRefController.text.trim();
-    if (ref.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter Cheque No. or Bank UTR / Reference No.')),
-      );
-      return;
-    }
+  Future<void> _submitOfflineCheque() async {
+    if (!_offlineFormKey.currentState!.validate()) return;
 
+    final chqNo = _chequeNoController.text.trim();
+    final chqBank = _chequeBankController.text.trim();
+    final uniqueId = 'CHQ-$chqNo ($chqBank)';
     setState(() => _isProcessing = true);
 
     try {
+      final user = FirebaseAuth.instance.currentUser;
+      final userEmail = user?.email ?? '';
+      final userUid = user?.uid ?? '';
+
+      // 1. Update maintenance due record
       await FirebaseFirestore.instance.collection('maintenance_dues').doc(widget.dueId).update({
-        'status': 'PAID_OFFLINE_PENDING',
-        'paymentMode': _offlineModeController.text,
-        'offlineRef': ref,
+        'status': 'PAYMENT_PENDING_APPROVAL',
+        'paymentCategory': 'OFFLINE',
+        'paymentMode': 'Cheque to Cashier',
+        'uniqueId': uniqueId,
+        'utrNumber': 'CHQ-$chqNo',
+        'referenceNumber': 'CHQ-$chqNo',
+        'chequeNumber': chqNo,
+        'chequeBank': chqBank,
         'submittedAt': FieldValue.serverTimestamp(),
+        'submittedByUid': userUid,
+        'submittedByEmail': userEmail,
+        'amount': widget.amount,
+        'rejectionReason': FieldValue.delete(),
       });
 
-      // Send admin notification
-      await FirebaseFirestore.instance.collection('notifications').add({
-        'targetRole': 'ADMIN',
-        'type': 'OFFLINE_PAYMENT_SUBMITTED',
-        'title': 'Offline Maintenance Payment Submitted',
-        'message': 'Flat ${widget.flat} submitted offline payment of ${widget.currencyFmt.format(widget.amount)} for ${widget.month} (Ref: $ref).',
-        'flatNumber': widget.flat,
-        'dueId': widget.dueId,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      // 2. Dispatch notification to Admin
+      await NotificationService.notifyAdmin(
+        title: 'Cheque Payment Approval: Flat ${widget.flat}',
+        message: 'Flat ${widget.flat} submitted Cheque No: $chqNo ($chqBank) of ${AppFormatters.currency(widget.amount)} for ${widget.month}. Tap to verify and approve.',
+        type: 'MAINTENANCE_PAYMENT_APPROVAL_REQUEST',
+        flatNumber: widget.flat,
+        extraData: {
+          'dueId': widget.dueId,
+          'amount': widget.amount,
+          'month': widget.month,
+          'uniqueId': uniqueId,
+          'utrNumber': 'CHQ-$chqNo',
+          'referenceNumber': 'CHQ-$chqNo',
+          'chequeNumber': chqNo,
+          'chequeBank': chqBank,
+          'paymentCategory': 'OFFLINE',
+          'paymentMode': 'Cheque to Cashier',
+        },
+      );
 
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             backgroundColor: Colors.teal,
-            content: Text('Offline payment details submitted for Admin verification.'),
+            content: Text('Cheque details ($uniqueId) submitted for Admin approval!'),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red, content: Text('Error: $e')),
+          SnackBar(backgroundColor: Colors.red, content: Text('Submission error: $e')),
         );
       }
     } finally {
@@ -2432,189 +2804,462 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: 20,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return DefaultTabController(
+      length: 2,
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Pay Maintenance Bill', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
-            ],
-          ),
-          const SizedBox(height: 8),
+              // Modal Header
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: Colors.teal.shade50, shape: BoxShape.circle),
+                        child: const Icon(Icons.account_balance_wallet_outlined, color: Colors.teal),
+                      ),
+                      const SizedBox(width: 10),
+                      const Text('Pay Maintenance Bill', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                ],
+              ),
+              const SizedBox(height: 8),
 
-          // Bill Summary
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.teal.shade50,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.teal.shade200),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              // Bill Summary Card
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.teal.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.teal.shade200),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('Flat ${widget.flat} • ${widget.month}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                    const Text('FY 2026-27 Approved Rates', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Flat ${widget.flat} • ${widget.month}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                        const Text('FY 2026-27 Approved Rates', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                      ],
+                    ),
+                    Text(
+                      widget.currencyFmt.format(widget.amount),
+                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal),
+                    ),
                   ],
                 ),
-                Text(
-                  widget.currencyFmt.format(widget.amount),
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal),
+              ),
+              const SizedBox(height: 12),
+
+              // TabBar Navigation (Online vs Offline)
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: TabBar(
+                  labelColor: Colors.teal.shade900,
+                  unselectedLabelColor: Colors.black54,
+                  indicator: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4, offset: const Offset(0, 2)),
+                    ],
+                  ),
+                  tabs: const [
+                    Tab(
+                      icon: Icon(Icons.language_rounded, size: 18),
+                      text: 'Online Payments',
+                    ),
+                    Tab(
+                      icon: Icon(Icons.storefront_outlined, size: 18),
+                      text: 'Offline to Cashier',
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // TabBar View Content
+              SizedBox(
+                height: 380,
+                child: TabBarView(
+                  children: [
+                    // Tab 1: Online Payments
+                    _buildOnlineTab(),
+
+                    // Tab 2: Offline Payments
+                    _buildOfflineTab(),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOnlineTab() {
+    return Form(
+      key: _onlineFormKey,
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Mode Switcher: UPI vs Bank Transfer
+            Row(
+              children: [
+                Expanded(
+                  child: ChoiceChip(
+                    label: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.qr_code_2, size: 16),
+                        SizedBox(width: 6),
+                        Text('UPI (GPay/Paytm)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    selected: _onlineMode == 'UPI',
+                    selectedColor: Colors.teal.shade100,
+                    onSelected: (sel) {
+                      if (sel) setState(() => _onlineMode = 'UPI');
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ChoiceChip(
+                    label: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.account_balance, size: 16),
+                        SizedBox(width: 6),
+                        Text('Bank / NEFT / IMPS', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    selected: _onlineMode == 'Bank Transfer / NEFT',
+                    selectedColor: Colors.teal.shade100,
+                    onSelected: (sel) {
+                      if (sel) setState(() => _onlineMode = 'Bank Transfer / NEFT');
+                    },
+                  ),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 16),
+            const SizedBox(height: 10),
 
-          // Segment Selector
+            // Bank / UPI Details Card
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.account_balance, size: 16, color: Colors.blue),
+                      const SizedBox(width: 6),
+                      Text(
+                        _onlineMode == 'UPI' ? 'Society UPI Details' : 'Society Bank Account Details',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blue),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  if (_onlineMode == 'UPI') ...[
+                    Text('UPI ID: ${SocietyConfig.upiId}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    Text('Name: ${SocietyConfig.accountHolderName}', style: const TextStyle(fontSize: 11, color: Colors.black87)),
+                  ] else ...[
+                    Text('Bank: ${SocietyConfig.bankName} • A/C: ${SocietyConfig.accountNumber}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    Text('IFSC: ${SocietyConfig.ifscCode} • Branch: ${SocietyConfig.branchName}', style: const TextStyle(fontSize: 11, color: Colors.black87)),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // 16-Character UTR Input Field
+            TextFormField(
+              controller: _onlineUtrController,
+              maxLength: 16,
+              textCapitalization: TextCapitalization.characters,
+              decoration: InputDecoration(
+                labelText: _onlineMode == 'UPI' ? '16-Character UTR Number *' : '16-Character Bank Reference Number *',
+                hintText: 'e.g. UPI202609071234',
+                prefixIcon: const Icon(Icons.tag),
+                border: const OutlineInputBorder(),
+                helperText: 'Enter exact 16-character alphanumeric UTR / Reference ID',
+                helperMaxLines: 2,
+              ),
+              validator: (val) {
+                if (val == null || val.trim().isEmpty) {
+                  return 'Please enter the 16-character UTR / Ref number';
+                }
+                final clean = val.trim();
+                if (clean.length != 16) {
+                  return 'Must be exactly 16 characters (Current: ${clean.length})';
+                }
+                if (!RegExp(r'^[a-zA-Z0-9]{16}$').hasMatch(clean)) {
+                  return 'Only letters and numbers allowed (no special characters)';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 10),
+
+            // Submit Online Payment Button
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _isProcessing ? null : _submitOnlinePayment,
+                icon: _isProcessing
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.send_rounded, size: 18),
+                label: Text(
+                  _isProcessing ? 'Submitting Online Payment...' : 'Submit Online Payment for Approval',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOfflineTab() {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Segmented Switcher for Cheque vs Cash
           Row(
             children: [
               Expanded(
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _selectedPaymentTab == 0 ? Colors.teal : Colors.grey.shade200,
-                    foregroundColor: _selectedPaymentTab == 0 ? Colors.white : Colors.black87,
-                    elevation: _selectedPaymentTab == 0 ? 2 : 0,
+                child: ChoiceChip(
+                  label: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.edit_note_rounded, size: 16),
+                      SizedBox(width: 6),
+                      Text('Cheque to Cashier', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ],
                   ),
-                  icon: const Icon(Icons.flash_on, size: 18),
-                  label: const Text('Instant Online Pay'),
-                  onPressed: () => setState(() => _selectedPaymentTab = 0),
+                  selected: _offlineMode == 'Cheque',
+                  selectedColor: Colors.deepPurple.shade100,
+                  onSelected: (sel) {
+                    if (sel) setState(() => _offlineMode = 'Cheque');
+                  },
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _selectedPaymentTab == 1 ? Colors.teal : Colors.grey.shade200,
-                    foregroundColor: _selectedPaymentTab == 1 ? Colors.white : Colors.black87,
-                    elevation: _selectedPaymentTab == 1 ? 2 : 0,
+                child: ChoiceChip(
+                  label: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.payments_outlined, size: 16),
+                      SizedBox(width: 6),
+                      Text('Cash to Cashier', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ],
                   ),
-                  icon: const Icon(Icons.account_balance, size: 18),
-                  label: const Text('Offline / Transfer'),
-                  onPressed: () => setState(() => _selectedPaymentTab = 1),
+                  selected: _offlineMode == 'Cash',
+                  selectedColor: Colors.green.shade100,
+                  onSelected: (sel) {
+                    if (sel) setState(() => _offlineMode = 'Cash');
+                  },
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
 
-          // Online Payment View
-          if (_selectedPaymentTab == 0) ...[
-            const Text('Select Online Payment Channel:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-            const SizedBox(height: 8),
-            RadioListTile<String>(
-              value: 'UPI',
-              groupValue: _selectedOnlineMethod,
-              title: const Row(
+          if (_offlineMode == 'Cheque') ...[
+            // Cheque Submission Form
+            Form(
+              key: _offlineFormKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.qr_code, color: Colors.teal),
-                  SizedBox(width: 8),
-                  Text('UPI / QR Code / GPay / PhonePe / Paytm'),
-                ],
-              ),
-              onChanged: (val) => setState(() => _selectedOnlineMethod = val!),
-            ),
-            RadioListTile<String>(
-              value: 'CARD',
-              groupValue: _selectedOnlineMethod,
-              title: const Row(
-                children: [
-                  Icon(Icons.credit_card, color: Colors.teal),
-                  SizedBox(width: 8),
-                  Text('Debit / Credit Card'),
-                ],
-              ),
-              onChanged: (val) => setState(() => _selectedOnlineMethod = val!),
-            ),
-            RadioListTile<String>(
-              value: 'NETBANKING',
-              groupValue: _selectedOnlineMethod,
-              title: const Row(
-                children: [
-                  Icon(Icons.account_balance, color: Colors.teal),
-                  SizedBox(width: 8),
-                  Text('Net Banking (SBI / HDFC / ICICI / Axis)'),
-                ],
-              ),
-              onChanged: (val) => setState(() => _selectedOnlineMethod = val!),
-            ),
-            const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.deepPurple.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.deepPurple.shade200),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.info_outline, size: 16, color: Colors.deepPurple),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Please issue Cheque in favor of "Society Maintenance Account" and hand over to Treasurer/Cashier.',
+                            style: TextStyle(fontSize: 11, color: Colors.deepPurple),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
 
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                onPressed: _isProcessing ? null : _processOnlinePayment,
-                icon: _isProcessing
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.lock),
-                label: Text(
-                  _isProcessing ? 'Processing Payment...' : 'Pay ${widget.currencyFmt.format(widget.amount)} Now',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
+                  TextFormField(
+                    controller: _chequeNoController,
+                    keyboardType: TextInputType.number,
+                    maxLength: 10,
+                    decoration: const InputDecoration(
+                      labelText: 'Cheque Number *',
+                      hintText: 'e.g. 049210',
+                      prefixIcon: Icon(Icons.numbers),
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (val) {
+                      if (val == null || val.trim().isEmpty) {
+                        return 'Please enter the cheque number';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 8),
+
+                  TextFormField(
+                    controller: _chequeBankController,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(
+                      labelText: 'Issuing Bank Name *',
+                      hintText: 'e.g. SBI, HDFC, ICICI, Axis Bank',
+                      prefixIcon: Icon(Icons.account_balance),
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (val) {
+                      if (val == null || val.trim().isEmpty) {
+                        return 'Please enter your bank name';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 12),
+
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.deepPurple,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: _isProcessing ? null : _submitOfflineCheque,
+                      icon: _isProcessing
+                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                          : const Icon(Icons.send_rounded, size: 18),
+                      label: Text(
+                        _isProcessing ? 'Submitting Cheque...' : 'Submit Cheque Details for Admin Approval',
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ] else ...[
-            // Offline Payment View
-            DropdownButtonFormField<String>(
-              value: _offlineModeController.text,
-              decoration: const InputDecoration(labelText: 'Payment Mode', border: OutlineInputBorder()),
-              items: const [
-                DropdownMenuItem(value: 'Bank Transfer / NEFT', child: Text('Bank Transfer / NEFT / IMPS')),
-                DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
-                DropdownMenuItem(value: 'Cash', child: Text('Cash to Treasurer')),
-                DropdownMenuItem(value: 'Demand Draft', child: Text('Demand Draft')),
-              ],
-              onChanged: (val) {
-                if (val != null) setState(() => _offlineModeController.text = val);
-              },
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _offlineRefController,
-              decoration: const InputDecoration(
-                labelText: 'Cheque No. / Transaction UTR / Ref No. *',
-                hintText: 'e.g. UTR12345678 or Cheque #987654',
-                border: OutlineInputBorder(),
+            // Cash Handover Instructions Card (No doc submission required)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.green.shade300, width: 1.2),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: Colors.green.shade100, shape: BoxShape.circle),
+                        child: const Icon(Icons.payments, color: Colors.green, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Cash to Cashier / Treasurer',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.green),
+                            ),
+                            Text(
+                              'No app document submission required',
+                              style: TextStyle(fontSize: 11, color: Colors.black54),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(height: 1),
+                  const SizedBox(height: 10),
+                  Text(
+                    '1. Please visit the Society Office and hand over the exact cash of ${widget.currencyFmt.format(widget.amount)} to the Society Cashier / Treasurer.',
+                    style: const TextStyle(fontSize: 12, height: 1.4, color: Colors.black87),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '2. Office Hours: ${SocietyConfig.officeHours}. Location: ${SocietyConfig.officeAddress}.',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black87),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '3. Admin / Cashier will directly record the payment in Accounts and an official receipt voucher will be generated for your flat automatically.',
+                    style: TextStyle(fontSize: 12, height: 1.4, color: Colors.black87),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),
 
             SizedBox(
               width: double.infinity,
-              height: 50,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              height: 46,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.green.shade800,
+                  side: BorderSide(color: Colors.green.shade400),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
-                onPressed: _isProcessing ? null : _processOfflinePayment,
-                icon: _isProcessing
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.check_circle_outline),
-                label: Text(
-                  _isProcessing ? 'Submitting...' : 'Submit Offline Payment for Verification',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                ),
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.check_circle_outline, size: 18),
+                label: const Text('I Understand / Close', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
             ),
           ],
@@ -2715,7 +3360,7 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
-                value: _purpose,
+                initialValue: _purpose,
                 decoration: const InputDecoration(labelText: 'Purpose'),
                 items: const [
                   DropdownMenuItem(value: 'Guest', child: Text('Guest')),
@@ -2764,7 +3409,7 @@ class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   DropdownButtonFormField<String>(
-                    value: category,
+                    initialValue: category,
                     decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder()),
                     items: const [
                       DropdownMenuItem(value: 'Maintenance', child: Text('Maintenance')),

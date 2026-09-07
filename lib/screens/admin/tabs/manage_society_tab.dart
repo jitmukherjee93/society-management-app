@@ -683,7 +683,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                         Expanded(
                           flex: 1,
                           child: DropdownButtonFormField<String>(
-                            value: selectedBlock,
+                            initialValue: selectedBlock,
                             items: kBlockOptions
                                 .map((v) => DropdownMenuItem(value: v, child: Text(v)))
                                 .toList(),
@@ -849,6 +849,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     bool renteeAdded = false;
     PlatformFile? rentAgreementFile;
 
+    if (!mounted) return;
     await showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -1096,6 +1097,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     bool hasBike2 = currentData['hasBike2'] == true;
     bool hasAttemptedSubmit = false;
 
+    if (!mounted) return;
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(

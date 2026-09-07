@@ -1,5 +1,11 @@
 # Antigravity Agent Rules: Society Management Application
 
+## 🚨 P0 Rule: Architecture Consistency, Code Reuse & Professional Standards
+> **CRITICAL & MANDATORY:** Whenever new code is written in this codebase:
+> 1. **Follow Current Architecture & Patterns:** Always adhere to the existing architectural approach, established patterns, and directory conventions of the codebase.
+> 2. **Maximize Code Reuse:** Always check and reuse existing domain models (`MaintenanceDueModel`, `SocietyTransactionModel`, `AppUser`), shared utilities (`AppFormatters`, `FlatUtils`), centralized configuration (`SocietyConfig`), and shared services (`NotificationService`) before creating new logic or duplicating code. Never write redundant one-off inline boilerplate.
+> 3. **Professional Coding Standards:** Write code to production-grade standards — strong typing, atomic multi-document operations (`WriteBatch`), robust error handling, full null safety, zero static analysis warnings/errors (`flutter analyze`), and strict separation of UI, business logic, and data layers.
+
 ## 1. Project Context & Objectives
 You are operating within a Society Management Application. This system handles resident directories, maintenance billing, facility bookings, visitor management, and helpdesk ticketing. 
 * **Primary Goal:** Write clean, modular, and secure code while providing verifiable artifacts for all changes.

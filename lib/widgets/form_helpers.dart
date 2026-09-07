@@ -231,7 +231,7 @@ class _VehicleRow extends StatelessWidget {
           Expanded(
             flex: 1,
             child: DropdownButtonFormField<String>(
-              value: hasOwnership ? 'Yes' : 'No',
+              initialValue: hasOwnership ? 'Yes' : 'No',
               items: kYesNo
                   .map((v) => DropdownMenuItem(value: v, child: Text(v)))
                   .toList(),

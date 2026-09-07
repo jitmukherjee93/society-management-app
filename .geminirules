@@ -1,0 +1,6 @@
+# P0 Rule: Architecture Consistency, Code Reuse & Professional Coding Standards
+
+Whenever new code is written in this codebase:
+1. Always follow the approach and patterns of the current codebase.
+2. Maximize code reuse: Check and reuse existing domain models (`MaintenanceDueModel`, `SocietyTransactionModel`, `AppUser`), shared utilities (`AppFormatters`, `FlatUtils`), centralized configuration (`SocietyConfig`), and shared services (`NotificationService`) before writing new logic.
+3. Write all new code adhering strictly to professional-grade coding standards (strong typing, atomic operations with `WriteBatch`, full null safety, zero static analysis errors/warnings with `flutter analyze`, and clear separation of concerns).

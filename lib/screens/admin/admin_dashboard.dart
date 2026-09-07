@@ -176,9 +176,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
         title.contains('complaint') ||
         message.contains('complaint')) {
       setState(() => _currentIndex = 3); // Manage Complaints Tab
-    } else if (type == 'PAYMENT' ||
+    } else if (type == 'MAINTENANCE_PAYMENT_APPROVAL_REQUEST' ||
+        type == 'OFFLINE_PAYMENT_SUBMITTED' ||
+        type == 'PAYMENT' ||
         title.contains('payment') ||
-        message.contains('payment')) {
+        message.contains('payment') ||
+        title.contains('utr') ||
+        message.contains('utr')) {
       setState(() => _currentIndex = 5); // Verify Payments Tab
     } else if (type == 'MAINTENANCE' ||
         title.contains('maintenance') ||
