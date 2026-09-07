@@ -1,3 +1,14 @@
 {
-    "java.configuration.updateBuildConfiguration": "interactive"
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/.git/logs/**": true,
+    "**/.dart_tool/**": true,
+    "**/build/**": true,
+    "**/android/.gradle/**": true,
+    "**/.pub-cache/**": true
+  },
+  "git.openRepositoryInParentFolders": "never",
+  "git.decorations.enabled": true,
+  "dart.hotReloadOnSave": "always"
 }
