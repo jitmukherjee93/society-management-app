@@ -5,6 +5,10 @@ import '../../../models/accounting_heads.dart';
 import '../../../utils/app_formatters.dart';
 import '../../../utils/flat_utils.dart';
 import '../../../services/notification_service.dart';
+import '../../../theme/app_colors.dart';
+import '../../../theme/app_decorations.dart';
+import '../../../widgets/app_dialog.dart';
+import '../../../widgets/app_feedback.dart';
 
 class GenerateMaintenanceTab extends StatefulWidget {
   const GenerateMaintenanceTab({super.key});
@@ -95,92 +99,86 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
 
       if (!mounted) return;
       if (displayPaidFlats.isNotEmpty) {
-        final choice = await showDialog<String>(
+        final choice = await AppDialog.show<String>(
           context: context,
-          barrierDismissible: false,
-          builder: (ctx) => AlertDialog(
-            title: Row(
-              children: [
-                const Icon(Icons.info_outline, color: Colors.teal),
-                const SizedBox(width: 8),
-                Expanded(child: Text('Payment Status: $_selectedMonth')),
-              ],
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${displayPaidFlats.length} flat(s) have already paid or submitted payment for $_selectedMonth:\n',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.green.shade200),
-                    ),
-                    child: Text(
-                      displayPaidFlats.join(', '),
-                      style: TextStyle(fontSize: 13, color: Colors.green.shade900, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    'Would you like to skip sending billing notifications to these paid flats, or resend to all flats?',
-                  ),
-                ],
+          title: 'Payment Status: $_selectedMonth',
+          subtitle: '${displayPaidFlats.length} flat(s) have recorded payments',
+          icon: Icons.info_outline_rounded,
+          iconColor: AppColors.info,
+          iconBgColor: AppColors.infoSurface,
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${displayPaidFlats.length} flat(s) have already paid or submitted payment for $_selectedMonth:',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.slate700),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'CANCEL'),
-                child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
-              ),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(foregroundColor: Colors.deepPurple),
-                onPressed: () => Navigator.pop(ctx, 'RESEND_ALL'),
-                child: const Text('Resend to All'),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal,
-                  foregroundColor: Colors.white,
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.successSurface,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.successBorder),
                 ),
-                onPressed: () => Navigator.pop(ctx, 'SKIP_PAID'),
-                child: const Text('Skip Paid (Notify Unpaid)'),
+                child: Text(
+                  displayPaidFlats.join(', '),
+                  style: const TextStyle(fontSize: 12, color: AppColors.successDark, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Would you like to skip sending billing notifications to these paid flats, or resend to all flats?',
+                style: TextStyle(fontSize: 13, color: AppColors.slate600),
               ),
             ],
           ),
+          actions: [
+            OutlinedButton(
+              onPressed: () => Navigator.pop(context, 'CANCEL'),
+              child: const Text('Cancel'),
+            ),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(foregroundColor: AppColors.secondary),
+              onPressed: () => Navigator.pop(context, 'RESEND_ALL'),
+              child: const Text('Resend to All'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(context, 'SKIP_PAID'),
+              child: const Text('Skip Paid (Notify Unpaid)'),
+            ),
+          ],
         );
 
         if (choice == null || choice == 'CANCEL') return;
         resendToPaid = (choice == 'RESEND_ALL');
       } else {
         if (!mounted) return;
-        final confirm = await showDialog<bool>(
+        final confirm = await AppDialog.show<bool>(
           context: context,
-          builder: (ctx) => AlertDialog(
-            title: Text('Send Maintenance Bills for $_selectedMonth'),
-            content: Text(
-              'This will automatically calculate each flat\'s maintenance bill using their registered details (Block base rate + Puja subscription + registered 4-wheeler/2-wheeler parking charges as per the FY ${AccountingConfig.currentFinancialYear} budget) and send instant billing notifications to all residents.\n\n'
-              'Existing bills for $_selectedMonth will be updated/skipped without double-billing. Proceed?',
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.deepPurple,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Send Bills & Notify'),
-              ),
-            ],
+          title: 'Send Maintenance Bills',
+          subtitle: '$_selectedMonth • All Registered Flats',
+          icon: Icons.campaign_rounded,
+          iconColor: AppColors.primary,
+          iconBgColor: AppColors.primarySurface,
+          body: Text(
+            'This will automatically calculate each flat\'s maintenance bill using their registered details (Block base rate + Puja subscription + registered 4-wheeler/2-wheeler parking charges as per the FY ${AccountingConfig.currentFinancialYear} budget) and send instant billing notifications to all residents.\n\n'
+            'Existing bills for $_selectedMonth will be updated/skipped without double-billing. Proceed?',
+            style: const TextStyle(fontSize: 13, color: AppColors.slate700, height: 1.4),
           ),
+          actions: [
+            OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Send Bills & Notify'),
+            ),
+          ],
         );
 
         if (confirm != true) return;
@@ -294,24 +292,18 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
       await batch.commit();
 
       final skippedText = skippedPaidCount > 0 ? ' ($skippedPaidCount paid flat(s) skipped)' : '';
+      final msg = 'Issued $generatedCount new bill(s) and notified $notifiedCount flat(s) for $_selectedMonth$skippedText.';
       setState(() {
-        _resultMsg = 'Successfully issued $generatedCount new bill(s) and sent notifications to $notifiedCount flat(s) for $_selectedMonth$skippedText.';
+        _resultMsg = msg;
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.green.shade700,
-            content: Text(_resultMsg!),
-          ),
-        );
+        AppFeedback.showSuccess(context, msg);
       }
     } catch (e) {
       setState(() => _resultMsg = 'Error sending maintenance bills: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red, content: Text('Error: $e')),
-        );
+        AppFeedback.showError(context, 'Error generating maintenance bills: $e');
       }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
@@ -319,22 +311,25 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
   }
 
   Future<void> _resetDueToUnpaid(String docId, String flat) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await AppDialog.show<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Reset Bill for Flat $flat?'),
-        content: const Text(
-          'This will reset the status to UNPAID and remove all recorded payment details (UTR, receipts, verification timestamp). The resident will immediately be able to pay again. Proceed?',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Reset to Unpaid'),
-          ),
-        ],
+      title: 'Reset Bill for Flat $flat?',
+      subtitle: 'Month: $_selectedMonth',
+      icon: Icons.refresh_rounded,
+      iconColor: AppColors.warning,
+      iconBgColor: AppColors.warningSurface,
+      body: const Text(
+        'This will reset the status to UNPAID and remove all recorded payment details (UTR, receipts, verification timestamp). The resident will immediately be able to pay again. Proceed?',
+        style: TextStyle(fontSize: 13, color: AppColors.slate700, height: 1.4),
       ),
+      actions: [
+        OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.warning, foregroundColor: Colors.white),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Reset to Unpaid'),
+        ),
+      ],
     );
     if (confirm != true) return;
 
@@ -358,61 +353,60 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         'paymentMode': FieldValue.delete(),
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.teal, content: Text('Flat $flat bill reset to UNPAID successfully.')),
-        );
+        AppFeedback.showSuccess(context, 'Flat $flat bill reset to UNPAID successfully.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red, content: Text('Error resetting bill: $e')),
-        );
+        AppFeedback.showError(context, 'Error resetting bill: $e');
       }
     }
   }
 
   Future<void> _recordCashPayment(String docId, String flat, double amount, String month) async {
     final notesController = TextEditingController(text: 'Received cash at Society Office');
-    final confirm = await showDialog<bool>(
+    final confirm = await AppDialog.show<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: Colors.green.shade50, shape: BoxShape.circle),
-              child: const Icon(Icons.payments, color: Colors.green),
+      title: 'Record Cash: Flat $flat',
+      subtitle: '$month • Amount: ${AppFormatters.currency(amount)}',
+      icon: Icons.payments_rounded,
+      iconColor: AppColors.success,
+      iconBgColor: AppColors.successSurface,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.slate50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.slate200),
             ),
-            const SizedBox(width: 10),
-            Text('Record Cash: Flat $flat', style: const TextStyle(fontSize: 16)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Month: $month • Amount: ${AppFormatters.currency(amount)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: notesController,
-              decoration: const InputDecoration(
-                labelText: 'Cashier Notes / Handover Ref',
-                hintText: 'e.g. Received cash at Society Office',
-                border: OutlineInputBorder(),
-              ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Maintenance Amount:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
+                Text(AppFormatters.currency(amount), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900)),
+              ],
             ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm Cash & Issue Receipt'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: notesController,
+            decoration: const InputDecoration(
+              labelText: 'Cashier Notes / Handover Ref',
+              hintText: 'e.g. Received cash at Society Office',
+            ),
           ),
         ],
       ),
+      actions: [
+        OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Confirm Cash & Issue Receipt'),
+        ),
+      ],
     );
     if (confirm != true) return;
 
@@ -482,51 +476,46 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
       await batch.commit();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.green.shade700, content: Text('Cash payment recorded for Flat $flat ($voucherCode)!')),
-        );
+        AppFeedback.showSuccess(context, 'Cash payment recorded for Flat $flat ($voucherCode)!');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red, content: Text('Error recording cash payment: $e')),
-        );
+        AppFeedback.showError(context, 'Error recording cash payment: $e');
       }
     }
   }
 
   Future<void> _deleteDue(String docId, String flat) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await AppDialog.show<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete Bill for Flat $flat?'),
-        content: const Text(
-          'This will completely remove this month\'s maintenance bill for this flat from the system. Proceed?',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete Bill'),
-          ),
-        ],
+      title: 'Delete Bill for Flat $flat?',
+      subtitle: 'Month: $_selectedMonth',
+      icon: Icons.delete_outline_rounded,
+      iconColor: AppColors.error,
+      iconBgColor: AppColors.errorSurface,
+      body: const Text(
+        'This will completely remove this month\'s maintenance bill for this flat from the system. Proceed?',
+        style: TextStyle(fontSize: 13, color: AppColors.slate700),
       ),
+      actions: [
+        OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Delete Bill'),
+        ),
+      ],
     );
     if (confirm != true) return;
 
     try {
       await FirebaseFirestore.instance.collection('maintenance_dues').doc(docId).delete();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red.shade700, content: Text('Flat $flat bill deleted.')),
-        );
+        AppFeedback.showSuccess(context, 'Flat $flat bill deleted.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red, content: Text('Error deleting bill: $e')),
-        );
+        AppFeedback.showError(context, 'Error deleting bill: $e');
       }
     }
   }
@@ -539,118 +528,92 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Main Action Card: Month Selection & Send Notification Button
-          Card(
-            elevation: 3,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            child: Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.deepPurple.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(Icons.campaign, color: Colors.deepPurple, size: 28),
-                      ),
-                      const SizedBox(width: 14),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Generate Maintenance Bills',
-                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                            ),
-                            SizedBox(height: 2),
-                            Text(
-                              'Auto-calculates from flat registered vehicles and sends instant notification bills',
-                              style: TextStyle(fontSize: 12, color: Colors.black54),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  const Divider(),
-                  const SizedBox(height: 16),
-
-                  // Month Selector
-                  DropdownButtonFormField<String>(
-                    initialValue: _selectedMonth,
-                    decoration: const InputDecoration(
-                      labelText: 'Select Billing Month *',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.calendar_month, color: Colors.deepPurple),
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: AppDecorations.card(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    AppDecorations.iconContainer(
+                      icon: Icons.campaign_rounded,
+                      color: AppColors.primary,
+                      surfaceColor: AppColors.primarySurface,
+                      size: 24,
                     ),
-                    items: _monthsList.map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
-                    onChanged: (val) {
-                      if (val != null) setState(() => _selectedMonth = val);
-                    },
-                  ),
-                  const SizedBox(height: 20),
-
-                  // Send Notification Bill Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepPurple,
-                        foregroundColor: Colors.white,
-                        elevation: 2,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: _isProcessing ? null : _sendMaintenanceNotificationBills,
-                      icon: _isProcessing
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                            )
-                          : const Icon(Icons.send_rounded, size: 22),
-                      label: Text(
-                        _isProcessing ? 'Generating & Sending...' : 'Send Maintenance Notification Bill',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-
-                  if (_resultMsg != null) ...[
-                    const SizedBox(height: 14),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.green.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.green.shade300),
-                      ),
-                      child: Row(
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _resultMsg!,
-                              style: TextStyle(color: Colors.green.shade900, fontWeight: FontWeight.bold, fontSize: 12),
-                            ),
+                          Text(
+                            'Generate Maintenance Bills',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Calculates budget-approved rates and sends notifications to residents',
+                            style: TextStyle(fontSize: 12, color: AppColors.slate500),
                           ),
                         ],
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 16),
+                const Divider(height: 1, color: AppColors.slate200),
+                const SizedBox(height: 16),
+
+                // Month Selector
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedMonth,
+                  decoration: const InputDecoration(
+                    labelText: 'Billing Month',
+                    prefixIcon: Icon(Icons.calendar_month_rounded, color: AppColors.primary, size: 20),
+                  ),
+                  items: _monthsList.map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13)))).toList(),
+                  onChanged: (val) {
+                    if (val != null) setState(() => _selectedMonth = val);
+                  },
+                ),
+                const SizedBox(height: 14),
+
+                // Send Notification Bill Button
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: _isProcessing ? null : _sendMaintenanceNotificationBills,
+                    icon: _isProcessing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send_rounded, size: 18),
+                    label: Text(
+                      _isProcessing ? 'Generating & Sending...' : 'Send Maintenance Notification Bill',
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+
+                if (_resultMsg != null) ...[
+                  const SizedBox(height: 12),
+                  _resultMsg!.startsWith('Error')
+                      ? AppBanner.error(message: _resultMsg!)
+                      : AppBanner.success(message: _resultMsg!),
                 ],
-              ),
+              ],
             ),
           ),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
 
           // Billing Records & Status for Selected Month
           Row(
@@ -658,37 +621,45 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
             children: [
               Text(
                 'Billed Records ($_selectedMonth)',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.slate800),
               ),
-              DropdownButton<String>(
-                value: _filterStatus,
-                isDense: true,
-                items: const [
-                  DropdownMenuItem(value: 'ALL', child: Text('All Statuses')),
-                  DropdownMenuItem(value: 'UNPAID', child: Text('Unpaid')),
-                  DropdownMenuItem(value: 'PAID_ONLINE', child: Text('Paid Online')),
-                  DropdownMenuItem(value: 'PAID_OFFLINE_PENDING', child: Text('Offline Pending')),
-                  DropdownMenuItem(value: 'PAID_OFFLINE_VERIFIED', child: Text('Offline Verified')),
-                ],
-                onChanged: (val) {
-                  if (val != null) setState(() => _filterStatus = val);
-                },
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.slate100,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.slate300),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _filterStatus,
+                    isDense: true,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.slate700),
+                    items: const [
+                      DropdownMenuItem(value: 'ALL', child: Text('All Statuses')),
+                      DropdownMenuItem(value: 'UNPAID', child: Text('Unpaid')),
+                      DropdownMenuItem(value: 'PAID_ONLINE', child: Text('Paid Online')),
+                      DropdownMenuItem(value: 'PAID_OFFLINE_PENDING', child: Text('Offline Pending')),
+                      DropdownMenuItem(value: 'PAID_OFFLINE_VERIFIED', child: Text('Offline Verified')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) setState(() => _filterStatus = val);
+                    },
+                  ),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
 
           TextField(
             decoration: const InputDecoration(
               hintText: 'Search by Flat (e.g. B-201)...',
-              prefixIcon: Icon(Icons.search, size: 20),
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.search_rounded, size: 18, color: AppColors.slate400),
             ),
             onChanged: (val) => setState(() => _searchQuery = val.trim().toUpperCase()),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
 
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
@@ -699,7 +670,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(child: Padding(
                   padding: EdgeInsets.all(24.0),
-                  child: CircularProgressIndicator(),
+                  child: CircularProgressIndicator(color: AppColors.primary, strokeWidth: 2.5),
                 ));
               }
 
@@ -721,15 +692,15 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade200),
+                    color: AppColors.slate50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.slate200),
                   ),
-                  child: Center(
+                  child: const Center(
                     child: Text(
-                      'No maintenance bills generated yet for $_selectedMonth.\nTap "Send Maintenance Notification Bill" above to generate.',
+                      'No maintenance bills found for this filter.\nTap "Send Maintenance Notification Bill" above to generate.',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.grey, fontSize: 13),
+                      style: TextStyle(color: AppColors.slate500, fontSize: 13, height: 1.4),
                     ),
                   ),
                 );
@@ -742,7 +713,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                 final amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
                 totalBilled += amt;
                 final st = data['status'] ?? 'UNPAID';
-                if (st == 'PAID_ONLINE' || st == 'PAID_OFFLINE_VERIFIED') {
+                if (st == 'PAID_ONLINE' || st == 'PAID_OFFLINE_VERIFIED' || st == 'PAID_VERIFIED') {
                   totalCollected += amt;
                 }
               }
@@ -752,20 +723,20 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     decoration: BoxDecoration(
-                      color: Colors.deepPurple.shade50,
+                      color: AppColors.primarySurface,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.deepPurple.shade100),
+                      border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Billed: ${_currencyFmt.format(totalBilled)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                        Text('Collected: ${_currencyFmt.format(totalCollected)}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.green.shade700)),
-                        Text('Pending: ${_currencyFmt.format(totalBilled - totalCollected)}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.red.shade700)),
+                        Text('Billed: ${_currencyFmt.format(totalBilled)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.slate800)),
+                        Text('Collected: ${_currencyFmt.format(totalCollected)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.successDark)),
+                        Text('Pending: ${_currencyFmt.format(totalBilled - totalCollected)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.errorDark)),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   ListView.builder(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
@@ -776,91 +747,94 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                       final amount = data['amount'] ?? 0;
                       final status = data['status'] ?? 'UNPAID';
 
-                      Color statusColor = Colors.red;
-                      String statusLabel = 'UNPAID';
+                      Widget badge;
                       if (status == 'PAYMENT_PENDING_APPROVAL' || status == 'PAID_OFFLINE_PENDING') {
-                        statusColor = Colors.orange.shade800;
-                        statusLabel = 'PAYMENT UNDER VERIFICATION';
+                        badge = AppBadge.warning('VERIFICATION PENDING');
                       } else if (status == 'PAID_ONLINE') {
-                        statusColor = Colors.green;
-                        statusLabel = 'PAID (ONLINE)';
+                        badge = AppBadge.success('PAID (ONLINE)');
                       } else if (status == 'PAID_OFFLINE_VERIFIED' || status == 'PAID_VERIFIED') {
-                        statusColor = Colors.green.shade800;
-                        statusLabel = 'PAID (VERIFIED)';
+                        badge = AppBadge.success('PAID (VERIFIED)');
+                      } else {
+                        badge = AppBadge.error('UNPAID');
                       }
 
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 6),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        child: ListTile(
-                          dense: true,
-                          title: Text('Flat $flat', style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: Text('Amount: ${_currencyFmt.format(amount)}'),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: statusColor.withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(color: statusColor.withValues(alpha: 0.4)),
-                                ),
-                                child: Text(
-                                  statusLabel,
-                                  style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 10),
-                                ),
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: AppDecorations.card(),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: AppColors.slate100,
+                                borderRadius: BorderRadius.circular(8),
                               ),
-                              PopupMenuButton<String>(
-                                icon: const Icon(Icons.more_vert, size: 18, color: Colors.grey),
-                                tooltip: 'Bill Actions',
-                                onSelected: (action) {
-                                  final docId = docs[index].id;
-                                  if (action == 'RECORD_CASH') {
-                                    _recordCashPayment(docId, flat, amount, _selectedMonth);
-                                  } else if (action == 'RESET') {
-                                    _resetDueToUnpaid(docId, flat);
-                                  } else if (action == 'DELETE') {
-                                    _deleteDue(docId, flat);
-                                  }
-                                },
-                                itemBuilder: (ctx) => [
-                                  if (status == 'UNPAID')
-                                    const PopupMenuItem(
-                                      value: 'RECORD_CASH',
-                                      child: Row(
-                                        children: [
-                                          Icon(Icons.payments, color: Colors.green, size: 18),
-                                          SizedBox(width: 8),
-                                          Text('Record Cash Payment', style: TextStyle(color: Colors.green, fontWeight: FontWeight.w600)),
-                                        ],
-                                      ),
-                                    ),
-                                  if (status != 'UNPAID')
-                                    const PopupMenuItem(
-                                      value: 'RESET',
-                                      child: Row(
-                                        children: [
-                                          Icon(Icons.refresh, color: Colors.orange, size: 18),
-                                          SizedBox(width: 8),
-                                          Text('Reset to Unpaid'),
-                                        ],
-                                      ),
-                                    ),
+                              child: const Icon(Icons.home_rounded, size: 20, color: AppColors.slate700),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Flat $flat', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900)),
+                                  const SizedBox(height: 2),
+                                  Text('Amount: ${_currencyFmt.format(amount)}', style: const TextStyle(fontSize: 12, color: AppColors.slate600)),
+                                ],
+                              ),
+                            ),
+                            badge,
+                            const SizedBox(width: 6),
+                            PopupMenuButton<String>(
+                              icon: const Icon(Icons.more_vert_rounded, size: 18, color: AppColors.slate500),
+                              tooltip: 'Bill Actions',
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              onSelected: (action) {
+                                final docId = docs[index].id;
+                                if (action == 'RECORD_CASH') {
+                                  _recordCashPayment(docId, flat, (amount as num).toDouble(), _selectedMonth);
+                                } else if (action == 'RESET') {
+                                  _resetDueToUnpaid(docId, flat);
+                                } else if (action == 'DELETE') {
+                                  _deleteDue(docId, flat);
+                                }
+                              },
+                              itemBuilder: (ctx) => [
+                                if (status == 'UNPAID')
                                   const PopupMenuItem(
-                                    value: 'DELETE',
+                                    value: 'RECORD_CASH',
                                     child: Row(
                                       children: [
-                                        Icon(Icons.delete_outline, color: Colors.red, size: 18),
+                                        Icon(Icons.payments_rounded, color: AppColors.success, size: 18),
                                         SizedBox(width: 8),
-                                        Text('Delete Bill', style: TextStyle(color: Colors.red)),
+                                        Text('Record Cash Payment', style: TextStyle(color: AppColors.successDark, fontWeight: FontWeight.w600, fontSize: 13)),
                                       ],
                                     ),
                                   ),
-                                ],
-                              ),
-                            ],
-                          ),
+                                if (status != 'UNPAID')
+                                  const PopupMenuItem(
+                                    value: 'RESET',
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.refresh_rounded, color: AppColors.warning, size: 18),
+                                        SizedBox(width: 8),
+                                        Text('Reset to Unpaid', style: TextStyle(color: AppColors.warningDark, fontSize: 13)),
+                                      ],
+                                    ),
+                                  ),
+                                const PopupMenuItem(
+                                  value: 'DELETE',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.delete_outline_rounded, color: AppColors.error, size: 18),
+                                      SizedBox(width: 8),
+                                      Text('Delete Bill', style: TextStyle(color: AppColors.error, fontSize: 13)),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       );
                     },

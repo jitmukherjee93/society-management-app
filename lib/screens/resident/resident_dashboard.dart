@@ -10,6 +10,10 @@ import '../../services/notification_service.dart';
 import 'tabs/community_feed_tab.dart';
 import '../../utils/storage_utils.dart';
 import '../../widgets/document_preview_dialog.dart';
+import '../../theme/app_colors.dart';
+import '../../theme/app_decorations.dart';
+import '../../widgets/app_dialog.dart';
+import '../../widgets/app_feedback.dart';
 
 bool _isNotificationForResident(Map<String, dynamic> data, User? user, [String? userFlat, String? fullFlat]) {
   if (user == null) return false;
@@ -122,7 +126,36 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Resident Dashboard'),
+        backgroundColor: AppColors.surface,
+        elevation: 0,
+        scrolledUnderElevation: 1,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: AppColors.primarySurface,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.apartment_rounded, color: AppColors.primary, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Resident Portal',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
+                ),
+                if (fullFlat != null && fullFlat.isNotEmpty)
+                  Text(
+                    'Flat $fullFlat',
+                    style: const TextStyle(fontSize: 11, color: AppColors.slate500, fontWeight: FontWeight.w500),
+                  ),
+              ],
+            ),
+          ],
+        ),
         actions: [
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
@@ -134,61 +167,62 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                 return _isNotificationForResident(data, user, userFlat, fullFlat);
               }).toList();
               final count = docs.length;
-              return Stack(
-                alignment: Alignment.center,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.notifications),
-                    tooltip: 'Alerts',
-                    onPressed: () => setState(() => _currentIndex = 2),
-                  ),
-                  if (count > 0)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(
-                          color: Colors.red,
-                          shape: BoxShape.circle,
-                        ),
-                        constraints: const BoxConstraints(
-                          minWidth: 16,
-                          minHeight: 16,
-                        ),
-                        child: Text(
-                          '$count',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ),
-                ],
+              return IconButton(
+                icon: Badge(
+                  isLabelVisible: count > 0,
+                  backgroundColor: AppColors.error,
+                  label: Text('$count', style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
+                  child: const Icon(Icons.notifications_outlined, color: AppColors.slate700),
+                ),
+                tooltip: 'Alerts',
+                onPressed: () => setState(() => _currentIndex = 2),
               );
             },
           ),
-          TextButton.icon(
-            icon: const Icon(Icons.logout),
-            label: const Text('Log out'),
-            onPressed: () => FirebaseAuth.instance.signOut(),
+          Padding(
+            padding: const EdgeInsets.only(right: 8.0),
+            child: TextButton.icon(
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.error,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              ),
+              icon: const Icon(Icons.logout_rounded, size: 18),
+              label: const Text('Log out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              onPressed: () async {
+                final confirm = await AppDialog.show<bool>(
+                  context: context,
+                  title: 'Sign Out',
+                  subtitle: 'Are you sure you want to log out?',
+                  icon: Icons.logout_rounded,
+                  iconColor: AppColors.error,
+                  iconBgColor: AppColors.errorSurface,
+                  body: const Text('You will need to sign in again to access your resident portal.'),
+                  actions: [
+                    OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Sign Out'),
+                    ),
+                  ],
+                );
+                if (confirm == true) {
+                  await FirebaseAuth.instance.signOut();
+                }
+              },
+            ),
           ),
         ],
       ),
       body: pages[_currentIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: Colors.teal,
-        unselectedItemColor: Colors.grey,
-        onTap: (index) => setState(() => _currentIndex = index),
-        items: [
-          const BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-          const BottomNavigationBarItem(icon: Icon(Icons.forum), label: 'Community'),
-          BottomNavigationBarItem(
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentIndex,
+        indicatorColor: AppColors.primarySurface,
+        onDestinationSelected: (index) => setState(() => _currentIndex = index),
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: AppColors.primary), label: 'Home'),
+          const NavigationDestination(icon: Icon(Icons.forum_outlined), selectedIcon: Icon(Icons.forum, color: AppColors.primary), label: 'Community'),
+          NavigationDestination(
             icon: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('notifications')
@@ -201,19 +235,23 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                 final count = docs.length;
                 return Badge(
                   isLabelVisible: count > 0,
+                  backgroundColor: AppColors.error,
                   label: Text('$count'),
-                  child: const Icon(Icons.notifications),
+                  child: const Icon(Icons.notifications_outlined),
                 );
               },
             ),
+            selectedIcon: const Icon(Icons.notifications, color: AppColors.primary),
             label: 'Alerts',
           ),
-          const BottomNavigationBarItem(icon: Icon(Icons.support_agent), label: 'Helpdesk'),
-          const BottomNavigationBarItem(icon: Icon(Icons.payment), label: 'Maintenance'),
+          const NavigationDestination(icon: Icon(Icons.support_agent_outlined), selectedIcon: Icon(Icons.support_agent, color: AppColors.primary), label: 'Helpdesk'),
+          const NavigationDestination(icon: Icon(Icons.payment_outlined), selectedIcon: Icon(Icons.payment, color: AppColors.primary), label: 'Maintenance'),
         ],
       ),
       floatingActionButton: _currentIndex == 0
           ? FloatingActionButton.extended(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
               onPressed: () {
                 Navigator.push(
                   context,
@@ -222,8 +260,8 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                   ),
                 );
               },
-              icon: const Icon(Icons.person_add),
-              label: const Text('Pre-approve Visitor'),
+              icon: const Icon(Icons.person_add_rounded, size: 20),
+              label: const Text('Pre-approve Visitor', style: TextStyle(fontWeight: FontWeight.w600)),
             )
           : null,
     );
@@ -2423,25 +2461,15 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                       Row(
                                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                            decoration: BoxDecoration(
-                                              color: Colors.red.shade50,
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
-                                            child: const Text(
-                                              'PAYMENT DUE',
-                                              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 11),
-                                            ),
-                                          ),
+                                          AppBadge.error('PAYMENT DUE'),
                                           ElevatedButton.icon(
                                             style: ElevatedButton.styleFrom(
-                                              backgroundColor: Colors.teal,
+                                              backgroundColor: AppColors.primary,
                                               foregroundColor: Colors.white,
                                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                             ),
-                                            icon: const Icon(Icons.payment, size: 18),
-                                            label: const Text('Pay Maintenance Bill', style: TextStyle(fontWeight: FontWeight.bold)),
+                                            icon: const Icon(Icons.payment_rounded, size: 16),
+                                            label: const Text('Pay Maintenance Bill', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                                             onPressed: () => _showPaymentModal(context, dueId, data, userData),
                                           ),
                                         ],
@@ -2461,106 +2489,92 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                               final mode = data['paymentMode'] ?? 'Online Payment';
                               final category = data['paymentCategory'] ?? (mode.contains('Cheque') || mode.contains('Cash') ? 'OFFLINE' : 'ONLINE');
 
-                              return Card(
+                              return Container(
                                 margin: const EdgeInsets.only(bottom: 12),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(color: Colors.amber.shade400, width: 1.5),
+                                padding: const EdgeInsets.all(14),
+                                decoration: AppDecorations.card(
+                                  borderColor: AppColors.warningBorder,
+                                  color: AppColors.warningSurface,
                                 ),
-                                color: Colors.amber.shade50.withValues(alpha: 0.5),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(14.0),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              const CircleAvatar(
-                                                radius: 18,
-                                                backgroundColor: Colors.amber,
-                                                child: Icon(Icons.hourglass_top, color: Colors.white, size: 20),
-                                              ),
-                                              const SizedBox(width: 10),
-                                              Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    'Maintenance Bill: $month',
-                                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                                                  ),
-                                                  Text(
-                                                    '[$category] Submitted via $mode',
-                                                    style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
-                                                  ),
-                                                ],
-                                              ),
-                                            ],
-                                          ),
-                                          Text(
-                                            _currencyFmt.format(amt),
-                                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: Colors.amber.shade900),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 10),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white,
-                                          borderRadius: BorderRadius.circular(8),
-                                          border: Border.all(color: Colors.amber.shade300),
-                                        ),
-                                        child: Row(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Row(
                                           children: [
-                                            const Icon(Icons.tag, size: 16, color: Colors.blue),
-                                            const SizedBox(width: 6),
-                                            const Text('Unique ID: ', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                            Expanded(
-                                              child: Text(
-                                                uniqueId,
-                                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.blue, letterSpacing: 1.1),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
+                                            AppDecorations.iconContainer(
+                                              icon: Icons.hourglass_top_rounded,
+                                              color: AppColors.warningDark,
+                                              surfaceColor: AppColors.warning.withValues(alpha: 0.15),
+                                              size: 20,
                                             ),
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: Colors.amber.shade100,
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: const Text('PAYMENT UNDER VERIFICATION', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.deepOrange)),
+                                            const SizedBox(width: 10),
+                                            Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'Maintenance Bill: $month',
+                                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                                                ),
+                                                Text(
+                                                  'Amount: ${_currencyFmt.format(amt)}',
+                                                  style: const TextStyle(fontSize: 12, color: AppColors.slate600, fontWeight: FontWeight.w500),
+                                                ),
+                                              ],
                                             ),
                                           ],
                                         ),
+                                        AppBadge.category(category, isOnline: category == 'ONLINE'),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(color: AppColors.warningBorder.withValues(alpha: 0.8)),
                                       ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        'Payment reference submitted. Approval request has been sent to Admin.',
-                                        style: TextStyle(fontSize: 11, color: Colors.grey.shade700, fontStyle: FontStyle.italic),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              uniqueId,
+                                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.infoDark, letterSpacing: 0.8),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          AppBadge.warning('VERIFICATION PENDING'),
+                                        ],
                                       ),
-                                    ],
-                                  ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    const Text(
+                                      'Payment reference submitted. Approval request has been sent to Admin.',
+                                      style: TextStyle(fontSize: 11, color: AppColors.slate500, fontStyle: FontStyle.italic),
+                                    ),
+                                  ],
                                 ),
                               );
                             }),
                           ],
 
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 20),
 
                           // Payment History & Receipts Section
                           const Text(
                             'Payment History & Receipts',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
                           ),
                           const SizedBox(height: 10),
 
                           if (paidDocs.isEmpty)
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 12),
-                              child: Text('No previous payment receipts recorded yet.', style: TextStyle(color: Colors.grey)),
+                              child: Text('No previous payment receipts recorded yet.', style: TextStyle(color: AppColors.slate400, fontSize: 13)),
                             )
                           else
                             ListView.builder(
@@ -2581,24 +2595,41 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                   dateStr = DateFormat('dd MMM yyyy').format((data['paidAt'] as Timestamp).toDate());
                                 }
 
-                                return Card(
-                                  margin: const EdgeInsets.only(bottom: 10),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                  child: ListTile(
-                                    leading: const CircleAvatar(
-                                      backgroundColor: Colors.green,
-                                      child: Icon(Icons.check, color: Colors.white),
-                                    ),
-                                    title: Text('$month — ${_currencyFmt.format(amount)}',
-                                        style: const TextStyle(fontWeight: FontWeight.bold)),
-                                    subtitle: Text('Receipt: $receiptNo • $dateStr\n${uniqueId.isNotEmpty ? 'Unique ID: $uniqueId • ' : ''}Status: Verified in Accounts'),
-                                    isThreeLine: true,
-                                    trailing: OutlinedButton.icon(
-                                      icon: const Icon(Icons.receipt, size: 16),
-                                      label: const Text('Receipt'),
-                                      style: OutlinedButton.styleFrom(foregroundColor: Colors.teal),
-                                      onPressed: () => _showReceiptDialog(context, data, receiptNo, dateStr),
-                                    ),
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                  decoration: AppDecorations.card(),
+                                  child: Row(
+                                    children: [
+                                      AppDecorations.iconContainer(
+                                        icon: Icons.check_rounded,
+                                        color: AppColors.successDark,
+                                        surfaceColor: AppColors.successSurface,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text('$month — ${_currencyFmt.format(amount)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900)),
+                                            const SizedBox(height: 2),
+                                            Text('Receipt: $receiptNo • $dateStr', style: const TextStyle(fontSize: 12, color: AppColors.slate500)),
+                                            if (uniqueId.isNotEmpty)
+                                              Text('ID: $uniqueId • Verified in Accounts', style: const TextStyle(fontSize: 11, color: AppColors.successDark, fontWeight: FontWeight.w500)),
+                                          ],
+                                        ),
+                                      ),
+                                      OutlinedButton.icon(
+                                        icon: const Icon(Icons.receipt_rounded, size: 15),
+                                        label: const Text('Receipt', style: TextStyle(fontSize: 12)),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: AppColors.primary,
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                        ),
+                                        onPressed: () => _showReceiptDialog(context, data, receiptNo, dateStr),
+                                      ),
+                                    ],
                                   ),
                                 );
                               },
@@ -2714,18 +2745,14 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
 
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.teal,
-            content: Text('Online payment with 16-digit Unique ID ($utr) submitted for Admin approval!'),
-          ),
+        AppFeedback.showSuccess(
+          context,
+          'Online payment with 16-digit Unique ID ($utr) submitted for Admin approval!',
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red, content: Text('Submission error: $e')),
-        );
+        AppFeedback.showError(context, 'Submission error: $e');
       }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
@@ -2784,18 +2811,14 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
 
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.teal,
-            content: Text('Cheque details ($uniqueId) submitted for Admin approval!'),
-          ),
+        AppFeedback.showSuccess(
+          context,
+          'Cheque details ($uniqueId) submitted for Admin approval!',
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: Colors.red, content: Text('Submission error: $e')),
-        );
+        AppFeedback.showError(context, 'Submission error: $e');
       }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
@@ -2808,8 +2831,8 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
       length: 2,
       child: Padding(
         padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
+          left: 18,
+          right: 18,
           top: 16,
           bottom: MediaQuery.of(context).viewInsets.bottom + 20,
         ),
@@ -2824,27 +2847,31 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                 children: [
                   Row(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(color: Colors.teal.shade50, shape: BoxShape.circle),
-                        child: const Icon(Icons.account_balance_wallet_outlined, color: Colors.teal),
+                      AppDecorations.iconContainer(
+                        icon: Icons.account_balance_wallet_rounded,
+                        color: AppColors.primary,
+                        surfaceColor: AppColors.primarySurface,
+                        size: 22,
                       ),
                       const SizedBox(width: 10),
-                      const Text('Pay Maintenance Bill', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const Text('Pay Maintenance Bill', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900)),
                     ],
                   ),
-                  IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: AppColors.slate500, size: 20),
+                    onPressed: () => Navigator.pop(context),
+                  ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
 
               // Bill Summary Card
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.teal.shade50,
+                  color: AppColors.primarySurface,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.teal.shade200),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2852,13 +2879,13 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Flat ${widget.flat} • ${widget.month}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                        const Text('FY 2026-27 Approved Rates', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                        Text('Flat ${widget.flat} • ${widget.month}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900)),
+                        const Text('FY 2026-27 Approved Rates', style: TextStyle(fontSize: 11, color: AppColors.slate600)),
                       ],
                     ),
                     Text(
                       widget.currencyFmt.format(widget.amount),
-                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal),
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
                     ),
                   ],
                 ),
@@ -2868,13 +2895,15 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
               // TabBar Navigation (Online vs Offline)
               Container(
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
+                  color: AppColors.slate100,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.grey.shade300),
+                  border: Border.all(color: AppColors.slate200),
                 ),
                 child: TabBar(
-                  labelColor: Colors.teal.shade900,
-                  unselectedLabelColor: Colors.black54,
+                  labelColor: AppColors.primary,
+                  unselectedLabelColor: AppColors.slate600,
+                  labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
                   indicator: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(8),
@@ -2884,21 +2913,21 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                   ),
                   tabs: const [
                     Tab(
-                      icon: Icon(Icons.language_rounded, size: 18),
+                      icon: Icon(Icons.language_rounded, size: 16),
                       text: 'Online Payments',
                     ),
                     Tab(
-                      icon: Icon(Icons.storefront_outlined, size: 18),
+                      icon: Icon(Icons.storefront_outlined, size: 16),
                       text: 'Offline to Cashier',
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
 
               // TabBar View Content
               SizedBox(
-                height: 380,
+                height: 390,
                 child: TabBarView(
                   children: [
                     // Tab 1: Online Payments
@@ -2931,13 +2960,13 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     label: const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.qr_code_2, size: 16),
+                        Icon(Icons.qr_code_2_rounded, size: 16),
                         SizedBox(width: 6),
                         Text('UPI (GPay/Paytm)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                       ],
                     ),
                     selected: _onlineMode == 'UPI',
-                    selectedColor: Colors.teal.shade100,
+                    selectedColor: AppColors.primarySurface,
                     onSelected: (sel) {
                       if (sel) setState(() => _onlineMode = 'UPI');
                     },
@@ -2949,13 +2978,13 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     label: const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.account_balance, size: 16),
+                        Icon(Icons.account_balance_rounded, size: 16),
                         SizedBox(width: 6),
                         Text('Bank / NEFT / IMPS', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                       ],
                     ),
                     selected: _onlineMode == 'Bank Transfer / NEFT',
-                    selectedColor: Colors.teal.shade100,
+                    selectedColor: AppColors.primarySurface,
                     onSelected: (sel) {
                       if (sel) setState(() => _onlineMode = 'Bank Transfer / NEFT');
                     },
@@ -2969,30 +2998,30 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.blue.shade50,
+                color: AppColors.infoSurface,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blue.shade200),
+                border: Border.all(color: AppColors.infoBorder),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      const Icon(Icons.account_balance, size: 16, color: Colors.blue),
+                      const Icon(Icons.account_balance_rounded, size: 16, color: AppColors.info),
                       const SizedBox(width: 6),
                       Text(
                         _onlineMode == 'UPI' ? 'Society UPI Details' : 'Society Bank Account Details',
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blue),
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.infoDark),
                       ),
                     ],
                   ),
                   const SizedBox(height: 4),
                   if (_onlineMode == 'UPI') ...[
-                    Text('UPI ID: ${SocietyConfig.upiId}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                    Text('Name: ${SocietyConfig.accountHolderName}', style: const TextStyle(fontSize: 11, color: Colors.black87)),
+                    Text('UPI ID: ${SocietyConfig.upiId}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.slate800)),
+                    Text('Name: ${SocietyConfig.accountHolderName}', style: const TextStyle(fontSize: 11, color: AppColors.slate600)),
                   ] else ...[
-                    Text('Bank: ${SocietyConfig.bankName} • A/C: ${SocietyConfig.accountNumber}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                    Text('IFSC: ${SocietyConfig.ifscCode} • Branch: ${SocietyConfig.branchName}', style: const TextStyle(fontSize: 11, color: Colors.black87)),
+                    Text('Bank: ${SocietyConfig.bankName} • A/C: ${SocietyConfig.accountNumber}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.slate800)),
+                    Text('IFSC: ${SocietyConfig.ifscCode} • Branch: ${SocietyConfig.branchName}', style: const TextStyle(fontSize: 11, color: AppColors.slate600)),
                   ],
                 ],
               ),
@@ -3007,8 +3036,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
               decoration: InputDecoration(
                 labelText: _onlineMode == 'UPI' ? '16-Character UTR Number *' : '16-Character Bank Reference Number *',
                 hintText: 'e.g. UPI202609071234',
-                prefixIcon: const Icon(Icons.tag),
-                border: const OutlineInputBorder(),
+                prefixIcon: const Icon(Icons.tag_rounded, size: 18),
                 helperText: 'Enter exact 16-character alphanumeric UTR / Reference ID',
                 helperMaxLines: 2,
               ),
@@ -3031,12 +3059,11 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
             // Submit Online Payment Button
             SizedBox(
               width: double.infinity,
-              height: 48,
+              height: 44,
               child: ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal,
+                  backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 onPressed: _isProcessing ? null : _submitOnlinePayment,
                 icon: _isProcessing
@@ -3044,7 +3071,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     : const Icon(Icons.send_rounded, size: 18),
                 label: Text(
                   _isProcessing ? 'Submitting Online Payment...' : 'Submit Online Payment for Approval',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
               ),
             ),
@@ -3073,7 +3100,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     ],
                   ),
                   selected: _offlineMode == 'Cheque',
-                  selectedColor: Colors.deepPurple.shade100,
+                  selectedColor: AppColors.secondarySurface,
                   onSelected: (sel) {
                     if (sel) setState(() => _offlineMode = 'Cheque');
                   },
@@ -3091,7 +3118,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     ],
                   ),
                   selected: _offlineMode == 'Cash',
-                  selectedColor: Colors.green.shade100,
+                  selectedColor: AppColors.successSurface,
                   onSelected: (sel) {
                     if (sel) setState(() => _offlineMode = 'Cash');
                   },
@@ -3111,18 +3138,18 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: Colors.deepPurple.shade50,
+                      color: AppColors.secondarySurface,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.deepPurple.shade200),
+                      border: Border.all(color: AppColors.secondary.withValues(alpha: 0.2)),
                     ),
                     child: const Row(
                       children: [
-                        Icon(Icons.info_outline, size: 16, color: Colors.deepPurple),
+                        Icon(Icons.info_outline_rounded, size: 16, color: AppColors.secondary),
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             'Please issue Cheque in favor of "Society Maintenance Account" and hand over to Treasurer/Cashier.',
-                            style: TextStyle(fontSize: 11, color: Colors.deepPurple),
+                            style: TextStyle(fontSize: 11, color: AppColors.secondaryDark),
                           ),
                         ),
                       ],
@@ -3137,8 +3164,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     decoration: const InputDecoration(
                       labelText: 'Cheque Number *',
                       hintText: 'e.g. 049210',
-                      prefixIcon: Icon(Icons.numbers),
-                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.numbers_rounded, size: 18),
                     ),
                     validator: (val) {
                       if (val == null || val.trim().isEmpty) {
@@ -3155,8 +3181,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     decoration: const InputDecoration(
                       labelText: 'Issuing Bank Name *',
                       hintText: 'e.g. SBI, HDFC, ICICI, Axis Bank',
-                      prefixIcon: Icon(Icons.account_balance),
-                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.account_balance_rounded, size: 18),
                     ),
                     validator: (val) {
                       if (val == null || val.trim().isEmpty) {
@@ -3169,12 +3194,11 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
 
                   SizedBox(
                     width: double.infinity,
-                    height: 48,
+                    height: 44,
                     child: ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepPurple,
+                        backgroundColor: AppColors.secondary,
                         foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                       onPressed: _isProcessing ? null : _submitOfflineCheque,
                       icon: _isProcessing
@@ -3182,7 +3206,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                           : const Icon(Icons.send_rounded, size: 18),
                       label: Text(
                         _isProcessing ? 'Submitting Cheque...' : 'Submit Cheque Details for Admin Approval',
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                       ),
                     ),
                   ),
@@ -3192,11 +3216,11 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
           ] else ...[
             // Cash Handover Instructions Card (No doc submission required)
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: Colors.green.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.green.shade300, width: 1.2),
+                color: AppColors.successSurface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.successBorder),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -3204,49 +3228,49 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(color: Colors.green.shade100, shape: BoxShape.circle),
-                        child: const Icon(Icons.payments, color: Colors.green, size: 24),
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(color: AppColors.success.withValues(alpha: 0.15), shape: BoxShape.circle),
+                        child: const Icon(Icons.payments_rounded, color: AppColors.successDark, size: 20),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 10),
                       const Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
                               'Cash to Cashier / Treasurer',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.green),
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.successDark),
                             ),
                             Text(
                               'No app document submission required',
-                              style: TextStyle(fontSize: 11, color: Colors.black54),
+                              style: TextStyle(fontSize: 11, color: AppColors.slate600),
                             ),
                           ],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  const Divider(height: 1),
                   const SizedBox(height: 10),
+                  const Divider(height: 1, color: AppColors.successBorder),
+                  const SizedBox(height: 8),
                   Text(
                     '1. Please visit the Society Office and hand over the exact cash of ${widget.currencyFmt.format(widget.amount)} to the Society Cashier / Treasurer.',
-                    style: const TextStyle(fontSize: 12, height: 1.4, color: Colors.black87),
+                    style: const TextStyle(fontSize: 12, height: 1.4, color: AppColors.slate800),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   Text(
                     '2. Office Hours: ${SocietyConfig.officeHours}. Location: ${SocietyConfig.officeAddress}.',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black87),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.slate800),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   const Text(
                     '3. Admin / Cashier will directly record the payment in Accounts and an official receipt voucher will be generated for your flat automatically.',
-                    style: TextStyle(fontSize: 12, height: 1.4, color: Colors.black87),
+                    style: TextStyle(fontSize: 12, height: 1.4, color: AppColors.slate800),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
 
             SizedBox(
               width: double.infinity,
@@ -3311,32 +3335,55 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
 
         if (!mounted) return;
         
-        showDialog(
+        await AppDialog.show(
           context: context,
-          barrierDismissible: false,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Gate Pass Generated'),
-            content: Text(
-              'Share this code with $_visitorName:\n\n$passCode',
-              style: const TextStyle(fontSize: 18),
-              textAlign: TextAlign.center,
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(ctx).pop(); // Close dialog
-                  Navigator.of(context).pop(); // Close screen
-                },
-                child: const Text('Done'),
-              )
+          title: 'Gate Pass Generated',
+          subtitle: 'Share code with $_visitorName for security clearance',
+          icon: Icons.qr_code_2_rounded,
+          iconColor: AppColors.primary,
+          iconBgColor: AppColors.primarySurface,
+          body: Column(
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                decoration: BoxDecoration(
+                  color: AppColors.primarySurface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                ),
+                child: Column(
+                  children: [
+                    const Text('6-Digit Security Pass Code', style: TextStyle(fontSize: 12, color: AppColors.slate600, fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 6),
+                    Text(
+                      passCode,
+                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 4, color: AppColors.primaryDark),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Visitor: $_visitorName • Purpose: $_purpose • Flat: $flatNumber',
+                style: const TextStyle(fontSize: 12, color: AppColors.slate600),
+              ),
             ],
           ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              onPressed: () {
+                Navigator.of(context).pop(); // Close dialog
+                Navigator.of(context).pop(); // Close screen
+              },
+              child: const Text('Done & Return'),
+            ),
+          ],
         );
       } catch (e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        AppFeedback.showError(context, 'Error generating visitor pass: $e');
       } finally {
         if (mounted) setState(() => _isLoading = false);
       }
@@ -3346,37 +3393,86 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Pre-Approve Visitor')),
-      body: Padding(
+      appBar: AppBar(
+        title: const Text('Pre-Approve Visitor'),
+        backgroundColor: AppColors.surface,
+        elevation: 0,
+        scrolledUnderElevation: 1,
+      ),
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            children: [
-              TextFormField(
-                decoration: const InputDecoration(labelText: 'Visitor Name'),
-                validator: (val) => val!.isEmpty ? 'Required' : null,
-                onSaved: (val) => _visitorName = val!,
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                initialValue: _purpose,
-                decoration: const InputDecoration(labelText: 'Purpose'),
-                items: const [
-                  DropdownMenuItem(value: 'Guest', child: Text('Guest')),
-                  DropdownMenuItem(value: 'Delivery', child: Text('Delivery')),
-                  DropdownMenuItem(value: 'Service', child: Text('Service/Repair')),
-                ],
-                onChanged: (val) => setState(() => _purpose = val!),
-              ),
-              const SizedBox(height: 32),
-              ElevatedButton(
-                onPressed: _isLoading ? null : _generatePass,
-                child: _isLoading 
-                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator()) 
-                    : const Text('Generate Pass Code'),
-              ),
-            ],
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: AppDecorations.card(),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    AppDecorations.iconContainer(
+                      icon: Icons.person_add_rounded,
+                      color: AppColors.primary,
+                      surfaceColor: AppColors.primarySurface,
+                      size: 22,
+                    ),
+                    const SizedBox(width: 12),
+                    const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Pre-approve Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.slate900)),
+                        Text('Generate an instant gate pass code for the security gate', style: TextStyle(fontSize: 12, color: AppColors.slate500)),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Divider(height: 1, color: AppColors.slate200),
+                const SizedBox(height: 16),
+                TextFormField(
+                  decoration: const InputDecoration(
+                    labelText: 'Visitor Name *',
+                    prefixIcon: Icon(Icons.person_outline_rounded, size: 20),
+                  ),
+                  validator: (val) => val == null || val.trim().isEmpty ? 'Please enter visitor name' : null,
+                  onSaved: (val) => _visitorName = val!.trim(),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<String>(
+                  initialValue: _purpose,
+                  decoration: const InputDecoration(
+                    labelText: 'Purpose of Visit',
+                    prefixIcon: Icon(Icons.work_outline_rounded, size: 20),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'Guest', child: Text('Guest / Family')),
+                    DropdownMenuItem(value: 'Delivery', child: Text('Delivery (Amazon/Swiggy/Zomato)')),
+                    DropdownMenuItem(value: 'Service', child: Text('Service / Repair / Electrician')),
+                  ],
+                  onChanged: (val) => setState(() => _purpose = val!),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: _isLoading ? null : _generatePass,
+                    icon: _isLoading
+                        ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : const Icon(Icons.qr_code_2_rounded, size: 20),
+                    label: Text(
+                      _isLoading ? 'Generating Pass...' : 'Generate Pass Code',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -3392,82 +3488,96 @@ class ResidentHelpdeskTab extends StatefulWidget {
 }
 
 class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
-  void _showRaiseTicketDialog() {
+  Future<void> _showRaiseTicketDialog() async {
     final titleController = TextEditingController();
     final descController = TextEditingController();
     String category = 'Maintenance';
-    bool isLoading = false;
-    
-    showDialog(
+    final formKey = GlobalKey<FormState>();
+
+    await AppDialog.show(
       context: context,
-      builder: (ctx) {
-        return StatefulBuilder(builder: (context, setState) {
-          return AlertDialog(
-            title: const Text('Raise a Ticket'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DropdownButtonFormField<String>(
-                    initialValue: category,
-                    decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder()),
-                    items: const [
-                      DropdownMenuItem(value: 'Maintenance', child: Text('Maintenance')),
-                      DropdownMenuItem(value: 'Security', child: Text('Security')),
-                      DropdownMenuItem(value: 'Cleanliness', child: Text('Cleanliness')),
-                      DropdownMenuItem(value: 'Other', child: Text('Other')),
-                    ],
-                    onChanged: (val) => setState(() => category = val!),
+      title: 'Raise a Helpdesk Ticket',
+      subtitle: 'Submit a complaint or service request to Society Admin',
+      icon: Icons.support_agent_rounded,
+      iconColor: AppColors.primary,
+      iconBgColor: AppColors.primarySurface,
+      body: StatefulBuilder(
+        builder: (ctx, setDlgState) {
+          return Form(
+            key: formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: category,
+                  decoration: const InputDecoration(labelText: 'Category *'),
+                  items: const [
+                    DropdownMenuItem(value: 'Maintenance', child: Text('Maintenance / Electrical / Plumbing')),
+                    DropdownMenuItem(value: 'Security', child: Text('Security & Gate')),
+                    DropdownMenuItem(value: 'Cleanliness', child: Text('Cleanliness & Waste Management')),
+                    DropdownMenuItem(value: 'Other', child: Text('Other / General Query')),
+                  ],
+                  onChanged: (val) => setDlgState(() => category = val!),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: titleController,
+                  decoration: const InputDecoration(
+                    labelText: 'Issue Subject / Title *',
+                    hintText: 'e.g. Water seepage in master bedroom balcony',
                   ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: titleController,
-                    decoration: const InputDecoration(labelText: 'Title', border: OutlineInputBorder()),
+                  validator: (v) => v == null || v.trim().isEmpty ? 'Title is required' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: descController,
+                  decoration: const InputDecoration(
+                    labelText: 'Detailed Description *',
+                    hintText: 'Describe the issue clearly...',
                   ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: descController,
-                    decoration: const InputDecoration(labelText: 'Description', border: OutlineInputBorder()),
-                    maxLines: 4,
-                  ),
-                ],
-              ),
+                  maxLines: 4,
+                  validator: (v) => v == null || v.trim().isEmpty ? 'Description is required' : null,
+                ),
+              ],
             ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-              ElevatedButton(
-                onPressed: isLoading ? null : () async {
-                  if (titleController.text.trim().isEmpty || descController.text.trim().isEmpty) return;
-                  setState(() => isLoading = true);
-                  
-                  try {
-                    final uid = FirebaseAuth.instance.currentUser!.uid;
-                    final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
-                    final flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
-                    
-                    await FirebaseFirestore.instance.collection('complaints').add({
-                      'title': titleController.text.trim(),
-                      'description': descController.text.trim(),
-                      'category': category,
-                      'status': 'OPEN',
-                      'residentUid': uid,
-                      'flatNumber': flatNumber,
-                      'createdAt': FieldValue.serverTimestamp(),
-                      'updatedAt': FieldValue.serverTimestamp(),
-                    });
-                    
-                    if (context.mounted) Navigator.pop(ctx);
-                  } catch (e) {
-                    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-                    setState(() => isLoading = false);
-                  }
-                },
-                child: isLoading ? const CircularProgressIndicator() : const Text('Submit'),
-              )
-            ],
           );
-        });
-      },
+        },
+      ),
+      actions: [
+        OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+          onPressed: () async {
+            if (!formKey.currentState!.validate()) return;
+            try {
+              final uid = FirebaseAuth.instance.currentUser!.uid;
+              final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+              final flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
+              
+              await FirebaseFirestore.instance.collection('complaints').add({
+                'title': titleController.text.trim(),
+                'description': descController.text.trim(),
+                'category': category,
+                'status': 'OPEN',
+                'residentUid': uid,
+                'flatNumber': flatNumber,
+                'createdAt': FieldValue.serverTimestamp(),
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+              
+              if (mounted) {
+                Navigator.pop(context);
+                AppFeedback.showSuccess(context, 'Ticket submitted successfully!');
+              }
+            } catch (e) {
+              if (mounted) {
+                AppFeedback.showError(context, 'Error raising ticket: $e');
+              }
+            }
+          },
+          child: const Text('Submit Ticket'),
+        ),
+      ],
     );
   }
 
@@ -3483,14 +3593,40 @@ class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
             .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
+            return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: AppColors.error)));
           }
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(child: CircularProgressIndicator(color: AppColors.primary, strokeWidth: 2.5));
           }
           var docs = snapshot.data?.docs ?? [];
           if (docs.isEmpty) {
-            return const Center(child: Text('You have not raised any tickets.'));
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AppDecorations.iconContainer(
+                      icon: Icons.support_agent_rounded,
+                      color: AppColors.slate400,
+                      surfaceColor: AppColors.slate100,
+                      size: 32,
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'No tickets raised yet',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate700),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Tap "Raise Ticket" below to report an issue or request maintenance assistance.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: AppColors.slate500, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+            );
           }
           
           // Sort by createdAt locally
@@ -3508,29 +3644,65 @@ class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
             itemCount: docs.length,
             itemBuilder: (context, index) {
               final data = docs[index].data() as Map<String, dynamic>;
-              final status = data['status'] ?? 'OPEN';
+              final status = (data['status'] ?? 'OPEN').toString().toUpperCase();
               
-              Color statusColor = Colors.red;
-              if (status == 'IN_PROGRESS') statusColor = Colors.orange;
-              if (status == 'RESOLVED') statusColor = Colors.green;
+              Widget badge;
+              if (status == 'RESOLVED') {
+                badge = AppBadge.success('RESOLVED');
+              } else if (status == 'IN_PROGRESS') {
+                badge = AppBadge.warning('IN PROGRESS');
+              } else {
+                badge = AppBadge.error('OPEN');
+              }
 
-              return Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: ListTile(
-                  title: Text(data['title'] ?? 'No Title', style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('Category: ${data['category'] ?? 'General'}'),
-                  trailing: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: statusColor.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: statusColor),
+              return Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(14),
+                decoration: AppDecorations.card(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            data['title'] ?? 'No Title',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        badge,
+                      ],
                     ),
-                    child: Text(
-                      status,
-                      style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 12),
+                    const SizedBox(height: 6),
+                    Text(
+                      data['description'] ?? '',
+                      style: const TextStyle(fontSize: 13, color: AppColors.slate600, height: 1.3),
                     ),
-                  ),
+                    const SizedBox(height: 10),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.slate100,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            data['category'] ?? 'General',
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.slate700),
+                          ),
+                        ),
+                        if (data['createdAt'] is Timestamp)
+                          Text(
+                            DateFormat('dd MMM yyyy, hh:mm a').format((data['createdAt'] as Timestamp).toDate()),
+                            style: const TextStyle(fontSize: 11, color: AppColors.slate400),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
               );
             },
@@ -3538,9 +3710,11 @@ class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
         },
       ),
       floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
         onPressed: _showRaiseTicketDialog,
-        icon: const Icon(Icons.add),
-        label: const Text('Raise Ticket'),
+        icon: const Icon(Icons.add_rounded, size: 20),
+        label: const Text('Raise Ticket', style: TextStyle(fontWeight: FontWeight.w600)),
       ),
     );
   }

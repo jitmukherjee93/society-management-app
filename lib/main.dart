@@ -7,6 +7,9 @@ import 'firebase_options.dart';
 import 'screens/resident/resident_dashboard.dart';
 import 'screens/guard/guard_dashboard.dart';
 import 'screens/admin/admin_dashboard.dart';
+import 'theme/app_theme.dart';
+import 'theme/app_colors.dart';
+import 'widgets/app_feedback.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,13 +32,7 @@ class SocietyManagementApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Ramkrishnapuram RWA',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
-        useMaterial3: true,
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-        ),
-      ),
+      theme: AppTheme.lightTheme,
       home: const AuthWrapper(),
     );
   }
@@ -217,64 +214,56 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 400),
+            constraints: const BoxConstraints(maxWidth: 420),
             child: Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: AppColors.border, width: 0.9),
+              ),
               child: Padding(
-                padding: const EdgeInsets.all(24.0),
+                padding: const EdgeInsets.symmetric(horizontal: 28.0, vertical: 32.0),
                 child: Form(
                   key: _formKey,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.apartment, size: 64, color: Colors.teal),
-                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryLight,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(Icons.apartment_rounded, size: 40, color: AppColors.primary),
+                      ),
+                      const SizedBox(height: 16),
                       const Text(
                         'Ramkrishnapuram RWA',
                         style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.teal,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.textPrimary,
+                          letterSpacing: -0.4,
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Welcome back! Sign in to continue.',
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Smart Society Management System',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey[600]),
+                        style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
                       ),
                       const SizedBox(height: 24),
                       if (_errorMessage != null) ...[
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.red.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.red.shade200),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.error_outline, color: Colors.red, size: 20),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  _errorMessage!,
-                                  style: const TextStyle(color: Colors.red, fontSize: 13),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                        AppBanner.error(message: _errorMessage!),
                         const SizedBox(height: 16),
                       ],
                       TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
                         decoration: const InputDecoration(
-                          labelText: 'Username / Email Address',
-                          prefixIcon: Icon(Icons.person_outline),
-                          border: OutlineInputBorder(),
+                          labelText: 'Username or Email Address',
+                          hintText: 'e.g. B-312 or user@ramkrishnapuram.com',
+                          prefixIcon: Icon(Icons.person_outline_rounded, size: 20),
                         ),
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
@@ -289,11 +278,12 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
                         obscureText: !_isPasswordVisible,
                         decoration: InputDecoration(
                           labelText: 'Password',
-                          prefixIcon: const Icon(Icons.lock_outline),
+                          prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
                           suffixIcon: IconButton(
                             icon: Icon(
-                              _isPasswordVisible ? Icons.visibility : Icons.visibility_off,
-                              color: Colors.grey[600],
+                              _isPasswordVisible ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                              size: 20,
+                              color: AppColors.textMuted,
                             ),
                             onPressed: () {
                               setState(() {
@@ -301,7 +291,6 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
                               });
                             },
                           ),
-                          border: const OutlineInputBorder(),
                         ),
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
@@ -310,37 +299,32 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
                           return null;
                         },
                       ),
+                      const SizedBox(height: 4),
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
                           onPressed: _resetPassword,
-                          child: const Text('Forgot Password?'),
+                          child: const Text('Forgot Password?', style: TextStyle(fontSize: 12)),
                         ),
                       ),
+                      const SizedBox(height: 12),
                       SizedBox(
                         width: double.infinity,
-                        height: 48,
+                        height: 44,
                         child: ElevatedButton(
                           onPressed: _isLoading ? null : _submit,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.teal,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
                           child: _isLoading
                               ? const SizedBox(
-                                  width: 24,
-                                  height: 24,
+                                  width: 20,
+                                  height: 20,
                                   child: CircularProgressIndicator(
                                     color: Colors.white,
                                     strokeWidth: 2,
                                   ),
                                 )
                               : const Text(
-                                  'Sign In',
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  'Sign In to Dashboard',
+                                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                                 ),
                         ),
                       ),
@@ -364,62 +348,31 @@ class RoleRouter extends StatefulWidget {
 }
 
 class _RoleRouterState extends State<RoleRouter> {
-  bool _isLoading = true;
+  bool _isResolving = true;
   String? _error;
-  String? _role;
 
   @override
   void initState() {
     super.initState();
-    _determineRole();
+    _ensureUserLinked();
   }
 
-  Future<void> _determineRole() async {
+  Future<void> _ensureUserLinked() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _isResolving = false);
       return;
     }
 
     try {
-      // 1. Check if a document with ID = user.uid exists
-      var docRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
-      var docSnap = await docRef.get();
-
+      final docRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      final docSnap = await docRef.get();
       if (docSnap.exists) {
-        final data = docSnap.data() as Map<String, dynamic>;
-        final role = data['role'] as String?;
-        final flatNum = data['flatNumber']?.toString().trim() ?? '';
-
-        if (role == 'RESIDENT' && flatNum.isNotEmpty) {
-          final cleanFlatNum = flatNum.trim().toLowerCase();
-          final flatDoc = await FirebaseFirestore.instance.collection('flats').doc(flatNum).get();
-          final allFlatsSnap = await FirebaseFirestore.instance.collection('flats').get();
-          final flatExists = flatDoc.exists ||
-              allFlatsSnap.docs.any((d) => d.id.trim().toLowerCase() == cleanFlatNum);
-
-          if (!flatExists) {
-            // Flat has been deleted by Admin! Delete user doc, sign out, and block access
-            await docRef.delete();
-            await FirebaseAuth.instance.signOut();
-            if (mounted) {
-              setState(() {
-                _error = 'This flat has been deleted by the Admin. Access revoked.';
-                _isLoading = false;
-              });
-            }
-            return;
-          }
-        }
-
-        setState(() {
-          _role = role;
-          _isLoading = false;
-        });
+        if (mounted) setState(() => _isResolving = false);
         return;
       }
 
-      // 2. Not found by uid. Let's check by email or phone number.
+      // Check by email or phone
       QuerySnapshot<Map<String, dynamic>>? querySnap;
       if (user.email != null && user.email!.isNotEmpty) {
         querySnap = await FirebaseFirestore.instance
@@ -438,64 +391,43 @@ class _RoleRouterState extends State<RoleRouter> {
       }
 
       if (querySnap != null && querySnap.docs.isNotEmpty) {
-        // Found the record admin created. Link it to this UID.
         final existingDoc = querySnap.docs.first;
         final existingData = existingDoc.data();
-          
-          // Normalize role for dashboard routing
-          String assignedRole = existingData['role'] ?? 'RESIDENT';
-          if (assignedRole == 'Owner' || assignedRole == 'Resident') {
-            assignedRole = 'RESIDENT';
-          }
-          
-          // Re-create the document with doc ID = user.uid and delete the old one
-          await docRef.set({
-            ...existingData,
-            'uid': user.uid,
-            'role': assignedRole,
-          });
-          await existingDoc.reference.delete();
-
-          if (mounted) {
-            setState(() {
-              _role = assignedRole;
-              _isLoading = false;
-            });
-          }
-          return;
+        String assignedRole = existingData['role'] ?? 'RESIDENT';
+        if (assignedRole == 'Owner' || assignedRole == 'Resident') {
+          assignedRole = 'RESIDENT';
         }
 
-      // 3. User is completely new or deleted.
-      if (user.email != null && user.email!.endsWith('@ramkrishnapuram.com')) {
+        await docRef.set({
+          ...existingData,
+          'uid': user.uid,
+          'role': assignedRole,
+        });
+        await existingDoc.reference.delete();
+      } else if (user.email != null && user.email!.endsWith('@ramkrishnapuram.com')) {
         await FirebaseAuth.instance.signOut();
         if (mounted) {
           setState(() {
             _error = 'This account or flat has been deleted by the Admin.';
-            _isLoading = false;
+            _isResolving = false;
           });
         }
         return;
       }
-
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-
     } catch (e) {
       if (mounted) {
         setState(() {
           _error = e.toString();
-          _isLoading = false;
         });
       }
+    } finally {
+      if (mounted) setState(() => _isResolving = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
+    if (_isResolving) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
@@ -503,12 +435,38 @@ class _RoleRouterState extends State<RoleRouter> {
       return Scaffold(body: Center(child: Text('Error: $_error')));
     }
 
-    if (_role == 'RESIDENT') return const ResidentDashboard();
-    if (_role == 'GUARD') return const GuardDashboard();
-    if (_role == 'ADMIN') return const AdminDashboard();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const CustomAuthScreen();
+    }
 
-    // Default or null role -> needs profile setup
-    return const ProfileSetupScreen();
+    // Real-time synchronization stream for User Profile & Role from Firestore backend
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+
+        if (snapshot.hasError) {
+          return Scaffold(body: Center(child: Text('Error: ${snapshot.error}')));
+        }
+
+        if (!snapshot.hasData || !snapshot.data!.exists) {
+          // Document was deleted from backend or not yet created
+          return const ProfileSetupScreen();
+        }
+
+        final data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+        final role = data['role'] as String?;
+
+        if (role == 'RESIDENT') return const ResidentDashboard();
+        if (role == 'GUARD') return const GuardDashboard();
+        if (role == 'ADMIN') return const AdminDashboard();
+
+        return const ProfileSetupScreen();
+      },
+    );
   }
 }
 

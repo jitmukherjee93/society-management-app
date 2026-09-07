@@ -3,6 +3,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../widgets/pdf_iframe.dart';
+import '../../theme/app_colors.dart';
+import '../../theme/app_decorations.dart';
+import '../../widgets/app_dialog.dart';
 import 'tabs/manage_society_tab.dart';
 import 'tabs/accounts_tab.dart';
 import 'tabs/generate_maintenance_tab.dart';
@@ -22,137 +25,112 @@ class _AdminDashboardState extends State<AdminDashboard> {
   String? _selectedFlatQuery;
 
   void _showNotificationsDialog(BuildContext context) {
-    showDialog(
+    AppDialog.show(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.notifications, color: Colors.deepPurple),
-            SizedBox(width: 8),
-            Text('Admin Notifications'),
-          ],
-        ),
-        content: SizedBox(
-          width: 520,
-          height: 420,
-          child: StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('notifications')
-                .where('targetRole', isEqualTo: 'ADMIN')
-                .snapshots(),
-            builder: (context, snap) {
-              if (snap.hasError) {
-                return Center(
-                  child: Text(
-                    'Error loading notifications: ${snap.error}',
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                );
-              }
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final docs = (snap.data?.docs ?? []).toList();
-              // Sort in memory by createdAt descending to avoid composite index requirement
-              docs.sort((a, b) {
-                final aData = a.data() as Map<String, dynamic>;
-                final bData = b.data() as Map<String, dynamic>;
-                final aTime = (aData['createdAt'] as Timestamp?)?.toDate() ??
-                    DateTime.fromMillisecondsSinceEpoch(0);
-                final bTime = (bData['createdAt'] as Timestamp?)?.toDate() ??
-                    DateTime.fromMillisecondsSinceEpoch(0);
-                return bTime.compareTo(aTime);
-              });
-
-              if (docs.isEmpty) {
-                return const Center(
-                  child: Text(
-                    'No new notifications.',
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                );
-              }
-
-              return ListView.separated(
-                itemCount: docs.length,
-                separatorBuilder: (context, index) => const Divider(height: 1),
-                itemBuilder: (context, i) {
-                  final notif = docs[i].data() as Map<String, dynamic>;
-                  final title = notif['title'] ?? 'Notification';
-                  final msg = notif['message'] ?? '';
-                  final type = (notif['type'] ?? '').toString().toUpperCase();
-                  final isVehicleReq = type == 'VEHICLE_UPDATE_REQUEST';
-
-                  return ListTile(
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    leading: CircleAvatar(
-                      backgroundColor: isVehicleReq
-                          ? Colors.orange.shade100
-                          : Colors.deepPurple.shade100,
-                      child: Icon(
-                        isVehicleReq
-                            ? Icons.directions_car
-                            : Icons.info_outline,
-                        color: isVehicleReq
-                            ? Colors.orange.shade900
-                            : Colors.deepPurple,
-                      ),
-                    ),
-                    title: Text(
-                      title,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const SizedBox(height: 2),
-                        Text(msg, style: const TextStyle(fontSize: 12)),
-                        const SizedBox(height: 4),
-                        Text(
-                          isVehicleReq
-                              ? 'Tap to review & approve request'
-                              : 'Tap to view in dashboard',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.deepPurple.shade700,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline,
-                              size: 18, color: Colors.grey),
-                          onPressed: () => docs[i].reference.delete(),
-                          tooltip: 'Dismiss',
-                        ),
-                        const Icon(Icons.chevron_right, color: Colors.grey),
-                      ],
-                    ),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _handleNotificationClick(notif, docs[i].reference);
-                    },
-                  );
-                },
+      title: 'Admin Notifications',
+      subtitle: 'Real-time alerts and resident submissions',
+      icon: Icons.notifications_active_rounded,
+      iconColor: AppColors.primary,
+      maxWidth: 540,
+      content: SizedBox(
+        height: 380,
+        child: StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('notifications')
+              .where('targetRole', isEqualTo: 'ADMIN')
+              .snapshots(),
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Center(
+                child: Text(
+                  'Error loading notifications: ${snap.error}',
+                  style: const TextStyle(color: AppColors.error),
+                ),
               );
-            },
-          ),
+            }
+            if (snap.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+            }
+            final docs = (snap.data?.docs ?? []).toList();
+            docs.sort((a, b) {
+              final aData = a.data() as Map<String, dynamic>;
+              final bData = b.data() as Map<String, dynamic>;
+              final aTime = (aData['createdAt'] as Timestamp?)?.toDate() ??
+                  DateTime.fromMillisecondsSinceEpoch(0);
+              final bTime = (bData['createdAt'] as Timestamp?)?.toDate() ??
+                  DateTime.fromMillisecondsSinceEpoch(0);
+              return bTime.compareTo(aTime);
+            });
+
+            if (docs.isEmpty) {
+              return const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.notifications_none_rounded, size: 40, color: AppColors.textMuted),
+                    SizedBox(height: 8),
+                    Text('No pending admin notifications.', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                  ],
+                ),
+              );
+            }
+
+            return ListView.separated(
+              itemCount: docs.length,
+              separatorBuilder: (context, index) => const Divider(height: 1),
+              itemBuilder: (context, i) {
+                final notif = docs[i].data() as Map<String, dynamic>;
+                final title = notif['title'] ?? 'Notification';
+                final msg = notif['message'] ?? '';
+                final type = (notif['type'] ?? '').toString().toUpperCase();
+                final isVehicleReq = type == 'VEHICLE_UPDATE_REQUEST';
+
+                return ListTile(
+                  dense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  leading: AppDecorations.iconContainer(
+                    icon: isVehicleReq ? Icons.directions_car_rounded : Icons.info_outline_rounded,
+                    color: isVehicleReq ? AppColors.warning : AppColors.primary,
+                    size: 18,
+                    padding: 8,
+                  ),
+                  title: Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 2),
+                      Text(msg, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                      const SizedBox(height: 4),
+                      Text(
+                        isVehicleReq ? 'Tap to review & approve request →' : 'Tap to view in dashboard →',
+                        style: const TextStyle(fontSize: 11, color: AppColors.primary, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.close_rounded, size: 16, color: AppColors.textMuted),
+                    tooltip: 'Dismiss',
+                    onPressed: () => docs[i].reference.delete(),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _handleNotificationClick(notif, docs[i].reference);
+                  },
+                );
+              },
+            );
+          },
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-        ],
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
     );
   }
 
@@ -831,8 +809,36 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Admin Dashboard'),
-        backgroundColor: Colors.deepPurple,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLight,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.admin_panel_settings_rounded, size: 20, color: AppColors.primary),
+            ),
+            const SizedBox(width: 10),
+            const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Admin Management Portal',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                ),
+                Text(
+                  'Ramkrishnapuram RWA',
+                  style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ],
+        ),
+        bottom: const PreferredSize(
+          preferredSize: Size.fromHeight(1),
+          child: Divider(height: 1, color: AppColors.border),
+        ),
         actions: [
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
@@ -845,7 +851,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 alignment: Alignment.center,
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.notifications, color: Colors.white),
+                    icon: const Icon(Icons.notifications_none_rounded, color: AppColors.textPrimary),
                     tooltip: 'Notifications',
                     onPressed: () => _showNotificationsDialog(context),
                   ),
@@ -856,11 +862,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       child: Container(
                         padding: const EdgeInsets.all(4),
                         decoration: const BoxDecoration(
-                          color: Colors.red,
+                          color: AppColors.error,
                           shape: BoxShape.circle,
                         ),
-                        constraints: const BoxConstraints(
-                            minWidth: 16, minHeight: 16),
+                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
                         child: Text(
                           '$count',
                           style: const TextStyle(
@@ -876,34 +881,70 @@ class _AdminDashboardState extends State<AdminDashboard> {
               );
             },
           ),
-          TextButton.icon(
-            icon: const Icon(Icons.logout, color: Colors.white),
-            label: const Text('Log out', style: TextStyle(color: Colors.white)),
-            onPressed: () => FirebaseAuth.instance.signOut(),
+          Padding(
+            padding: const EdgeInsets.only(right: 12.0, left: 4.0),
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                minimumSize: const Size(0, 32),
+                side: const BorderSide(color: AppColors.borderDark),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
+              icon: const Icon(Icons.logout_rounded, size: 14, color: AppColors.error),
+              label: const Text('Logout', style: TextStyle(color: AppColors.textPrimary, fontSize: 12)),
+              onPressed: () => FirebaseAuth.instance.signOut(),
+            ),
           ),
         ],
       ),
       body: pages[_currentIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        selectedItemColor: Colors.deepPurple,
-        type: BottomNavigationBarType.fixed,
-        unselectedItemColor: Colors.grey,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.apartment), label: 'Flats'),
-          BottomNavigationBarItem(icon: Icon(Icons.account_balance), label: 'Accounts'),
-          BottomNavigationBarItem(icon: Icon(Icons.campaign), label: 'Notices'),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.support_agent), label: 'Helpdesk'),
-          BottomNavigationBarItem(icon: Icon(Icons.add_box), label: 'Bills'),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.fact_check), label: 'Payments'),
-        ],
+      bottomNavigationBar: Container(
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: AppColors.border, width: 0.9)),
+        ),
+        child: NavigationBar(
+          selectedIndex: _currentIndex,
+          height: 62,
+          backgroundColor: Colors.white,
+          indicatorColor: AppColors.primaryLight,
+          onDestinationSelected: (index) {
+            setState(() {
+              _currentIndex = index;
+            });
+          },
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.apartment_outlined, size: 20),
+              selectedIcon: Icon(Icons.apartment_rounded, size: 20, color: AppColors.primary),
+              label: 'Flats',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.account_balance_wallet_outlined, size: 20),
+              selectedIcon: Icon(Icons.account_balance_wallet_rounded, size: 20, color: AppColors.primary),
+              label: 'Accounts',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.campaign_outlined, size: 20),
+              selectedIcon: Icon(Icons.campaign_rounded, size: 20, color: AppColors.primary),
+              label: 'Notices',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.support_agent_outlined, size: 20),
+              selectedIcon: Icon(Icons.support_agent_rounded, size: 20, color: AppColors.primary),
+              label: 'Helpdesk',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.post_add_outlined, size: 20),
+              selectedIcon: Icon(Icons.post_add_rounded, size: 20, color: AppColors.primary),
+              label: 'Bills',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.verified_outlined, size: 20),
+              selectedIcon: Icon(Icons.verified_rounded, size: 20, color: AppColors.primary),
+              label: 'Verify',
+            ),
+          ],
+        ),
       ),
     );
   }

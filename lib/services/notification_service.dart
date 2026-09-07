@@ -44,7 +44,7 @@ class NotificationService {
       targetUids.addAll(lookupKeys);
 
       final payload = <String, dynamic>{
-        if (resolvedUid != null) 'targetUid': resolvedUid,
+        'targetUid': ?resolvedUid,
         'targetUids': targetUids.toList(),
         'targetRole': 'RESIDENT',
         'flatNumber': normFlat,

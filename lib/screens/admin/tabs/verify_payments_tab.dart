@@ -4,6 +4,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../utils/app_formatters.dart';
 import '../../../utils/flat_utils.dart';
 import '../../../services/notification_service.dart';
+import '../../../theme/app_colors.dart';
+import '../../../theme/app_decorations.dart';
+import '../../../widgets/app_dialog.dart';
+import '../../../widgets/app_feedback.dart';
 
 class VerifyPaymentsTab extends StatefulWidget {
   const VerifyPaymentsTab({super.key});
@@ -15,8 +19,7 @@ class VerifyPaymentsTab extends StatefulWidget {
 class _VerifyPaymentsTabState extends State<VerifyPaymentsTab> {
   final Set<String> _processingDues = {};
 
-  Future<void> _verifyPayment(BuildContext context, String dueId, Map<String, dynamic> data) async {
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
+  Future<void> _verifyPayment(String dueId, Map<String, dynamic> data) async {
     setState(() => _processingDues.add(dueId));
 
     try {
@@ -94,16 +97,17 @@ class _VerifyPaymentsTabState extends State<VerifyPaymentsTab> {
       // Commit all 3 writes atomically!
       await batch.commit();
 
-      scaffoldMessenger.showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.green.shade700,
-          content: Text('Payment for Flat $normFlat approved & posted to Accounts ($voucherCode)!'),
-        ),
-      );
+      if (mounted) {
+        AppFeedback.showSuccess(
+          context,
+          'Payment for Flat $normFlat approved & posted to Accounts ($voucherCode)!',
+          title: 'Payment Verified & Approved',
+        );
+      }
     } catch (e) {
-      scaffoldMessenger.showSnackBar(
-        SnackBar(backgroundColor: Colors.red, content: Text('Error approving payment: $e')),
-      );
+      if (mounted) {
+        AppFeedback.showError(context, 'Error approving payment: $e', title: 'Approval Failed');
+      }
     } finally {
       if (mounted) setState(() => _processingDues.remove(dueId));
     }
@@ -116,88 +120,104 @@ class _VerifyPaymentsTabState extends State<VerifyPaymentsTab> {
     final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? 'N/A').toString();
     final mode = (data['paymentMode'] ?? 'Payment').toString();
 
-    showDialog(
+    AppDialog.show(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: Colors.red.shade50, shape: BoxShape.circle),
-              child: const Icon(Icons.cancel_outlined, color: Colors.red),
+      title: 'Reject Payment Submission',
+      subtitle: 'Flat $flat • $month ($mode)',
+      icon: Icons.cancel_outlined,
+      iconColor: AppColors.error,
+      maxWidth: 480,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.errorSurface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.errorBorder),
             ),
-            const SizedBox(width: 10),
-            const Text('Reject Payment Submission', style: TextStyle(fontSize: 16)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Flat: $flat • Month: $month\nMode: $mode\nUnique ID / Ref: $uniqueId', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: reasonController,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: 'Reason for Rejection *',
-                hintText: 'Explain why the payment could not be verified...',
-                border: OutlineInputBorder(),
-              ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline, size: 16, color: AppColors.error),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Unique ID: $uniqueId\nResetting will mark the bill as UNPAID and notify the resident to re-submit.',
+                    style: const TextStyle(fontSize: 11, color: AppColors.error, height: 1.3),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-            onPressed: () async {
-              final reason = reasonController.text.trim();
-              if (reason.isEmpty) return;
-              Navigator.pop(ctx);
-
-              setState(() => _processingDues.add(dueId));
-              try {
-                // Reset status back to UNPAID
-                await FirebaseFirestore.instance.collection('maintenance_dues').doc(dueId).update({
-                  'status': 'UNPAID',
-                  'rejectionReason': reason,
-                  'rejectedAt': FieldValue.serverTimestamp(),
-                });
-
-                // Notify resident via NotificationService
-                await NotificationService.notifyResident(
-                  flatNumber: flat,
-                  title: 'Payment Submission Rejected ($month)',
-                  message: 'Your payment submission for $month ($mode, Unique ID: $uniqueId) was rejected by Admin. Reason: $reason. Please re-submit with valid reference.',
-                  type: 'MAINTENANCE_PAYMENT_REJECTED',
-                  extraData: {
-                    'dueId': dueId,
-                    'uniqueId': uniqueId,
-                    'rejectionReason': reason,
-                  },
-                );
-
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(backgroundColor: Colors.orange.shade800, content: Text('Payment rejected. Resident ($flat) has been notified.')),
-                  );
-                }
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(backgroundColor: Colors.red, content: Text('Error: $e')),
-                  );
-                }
-              } finally {
-                if (mounted) setState(() => _processingDues.remove(dueId));
-              }
-            },
-            child: const Text('Confirm Rejection'),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: reasonController,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Reason for Rejection *',
+              hintText: 'Explain why the payment could not be verified...',
+            ),
           ),
         ],
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        const SizedBox(width: 8),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.error,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () async {
+            final reason = reasonController.text.trim();
+            if (reason.isEmpty) return;
+            Navigator.pop(context);
+
+            setState(() => _processingDues.add(dueId));
+            try {
+              // Reset status back to UNPAID
+              await FirebaseFirestore.instance.collection('maintenance_dues').doc(dueId).update({
+                'status': 'UNPAID',
+                'rejectionReason': reason,
+                'rejectedAt': FieldValue.serverTimestamp(),
+              });
+
+              // Notify resident via NotificationService
+              await NotificationService.notifyResident(
+                flatNumber: flat,
+                title: 'Payment Submission Rejected ($month)',
+                message: 'Your payment submission for $month ($mode, Unique ID: $uniqueId) was rejected by Admin. Reason: $reason. Please re-submit with valid reference.',
+                type: 'MAINTENANCE_PAYMENT_REJECTED',
+                extraData: {
+                  'dueId': dueId,
+                  'uniqueId': uniqueId,
+                  'rejectionReason': reason,
+                },
+              );
+
+              if (context.mounted) {
+                AppFeedback.showWarning(
+                  context,
+                  'Payment rejected. Resident ($flat) has been notified to re-submit.',
+                  title: 'Payment Rejected',
+                );
+              }
+            } catch (e) {
+              if (context.mounted) {
+                AppFeedback.showError(context, 'Error rejecting payment: $e');
+              }
+            } finally {
+              if (mounted) setState(() => _processingDues.remove(dueId));
+            }
+          },
+          child: const Text('Confirm Rejection'),
+        ),
+      ],
     );
   }
 
@@ -309,15 +329,14 @@ class _VerifyPaymentsTabState extends State<VerifyPaymentsTab> {
                       submittedDateStr = AppFormatters.dateTime((data['submittedAt'] as Timestamp).toDate());
                     }
 
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 14),
-                      elevation: 3,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        side: BorderSide(color: Colors.amber.shade400, width: 1.2),
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: AppDecorations.card(
+                        borderColor: AppColors.warningBorder,
+                        borderRadius: 12,
                       ),
                       child: Padding(
-                        padding: const EdgeInsets.all(16.0),
+                        padding: const EdgeInsets.all(14.0),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -327,15 +346,13 @@ class _VerifyPaymentsTabState extends State<VerifyPaymentsTab> {
                               children: [
                                 Row(
                                   children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(10),
-                                      decoration: BoxDecoration(
-                                        color: Colors.amber.shade100,
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: const Icon(Icons.pending_actions_rounded, color: Colors.deepOrange, size: 24),
+                                    AppDecorations.iconContainer(
+                                      icon: Icons.pending_actions_rounded,
+                                      color: AppColors.warning,
+                                      size: 20,
+                                      padding: 8,
                                     ),
-                                    const SizedBox(width: 12),
+                                    const SizedBox(width: 10),
                                     Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
@@ -343,30 +360,16 @@ class _VerifyPaymentsTabState extends State<VerifyPaymentsTab> {
                                           children: [
                                             Text(
                                               'Flat $flat • $month',
-                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppColors.textPrimary),
                                             ),
                                             const SizedBox(width: 8),
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: paymentCategory == 'ONLINE' ? Colors.blue.shade50 : Colors.purple.shade50,
-                                                borderRadius: BorderRadius.circular(6),
-                                                border: Border.all(color: paymentCategory == 'ONLINE' ? Colors.blue.shade200 : Colors.purple.shade200),
-                                              ),
-                                              child: Text(
-                                                paymentCategory,
-                                                style: TextStyle(
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: paymentCategory == 'ONLINE' ? Colors.blue.shade800 : Colors.purple.shade800,
-                                                ),
-                                              ),
-                                            ),
+                                            AppBadge.category(paymentCategory, isOnline: paymentCategory == 'ONLINE'),
                                           ],
                                         ),
+                                        const SizedBox(height: 2),
                                         Text(
                                           'Submitted: $submittedDateStr via $paymentMode',
-                                          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                                          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
                                         ),
                                       ],
                                     ),
@@ -375,33 +378,34 @@ class _VerifyPaymentsTabState extends State<VerifyPaymentsTab> {
                                 Text(
                                   AppFormatters.currency(amount),
                                   style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 20,
-                                    color: Colors.teal,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 18,
+                                    color: AppColors.primary,
+                                    letterSpacing: -0.3,
                                   ),
                                 ),
                               ],
                             ),
 
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 10),
                             const Divider(height: 1),
                             const SizedBox(height: 10),
 
                             // Unique ID Highlight Box
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                               decoration: BoxDecoration(
-                                color: Colors.blue.shade50,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.blue.shade200),
+                                color: AppColors.infoSurface,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: AppColors.infoBorder),
                               ),
                               child: Row(
                                 children: [
-                                  const Icon(Icons.tag, color: Colors.blue, size: 20),
-                                  const SizedBox(width: 8),
+                                  const Icon(Icons.tag_rounded, color: AppColors.info, size: 18),
+                                  const SizedBox(width: 6),
                                   Text(
-                                    paymentCategory == 'ONLINE' ? 'Unique ID (16-Char UTR / Ref):' : 'Unique ID (Cheque / Ref):',
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87),
+                                    paymentCategory == 'ONLINE' ? '16-Char UTR / Ref:' : 'Cheque / Ref:',
+                                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppColors.textPrimary),
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
@@ -409,67 +413,69 @@ class _VerifyPaymentsTabState extends State<VerifyPaymentsTab> {
                                       uniqueId,
                                       style: const TextStyle(
                                         fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                        color: Colors.blue,
-                                        letterSpacing: 1.1,
+                                        fontSize: 13,
+                                        color: AppColors.info,
+                                        letterSpacing: 0.8,
                                       ),
                                     ),
                                   ),
-                                  IconButton(
-                                    icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
-                                    tooltip: 'Copy Unique ID',
-                                    onPressed: () {
+                                  InkWell(
+                                    borderRadius: BorderRadius.circular(4),
+                                    onTap: () {
                                       Clipboard.setData(ClipboardData(text: uniqueId));
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          duration: const Duration(seconds: 2),
-                                          content: Text('Copied Unique ID ($uniqueId) to clipboard!'),
-                                        ),
-                                      );
+                                      AppFeedback.showInfo(context, 'Copied Unique ID ($uniqueId) to clipboard');
                                     },
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(4.0),
+                                      child: Icon(Icons.copy_rounded, size: 16, color: AppColors.info),
+                                    ),
                                   ),
                                 ],
                               ),
                             ),
 
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 8),
 
                             // Itemized Breakdown Wrap
                             Wrap(
-                              spacing: 8,
+                              spacing: 6,
                               runSpacing: 4,
                               children: [
                                 if (baseMaint != null)
-                                  Chip(
-                                    label: Text('Base: ${AppFormatters.currency(baseMaint)}', style: const TextStyle(fontSize: 11)),
-                                    backgroundColor: Colors.grey.shade100,
-                                    padding: EdgeInsets.zero,
-                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  AppBadge(
+                                    label: 'Base: ${AppFormatters.currency(baseMaint)}',
+                                    textColor: AppColors.textSecondary,
+                                    backgroundColor: AppColors.cardSurfaceSecondary,
+                                    borderColor: AppColors.border,
+                                    fontSize: 10,
                                   ),
-                                Chip(
-                                  label: Text('Puja: ${AppFormatters.currency(puja)}', style: const TextStyle(fontSize: 11)),
-                                  backgroundColor: Colors.grey.shade100,
-                                  padding: EdgeInsets.zero,
-                                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                AppBadge(
+                                  label: 'Puja: ${AppFormatters.currency(puja)}',
+                                  textColor: AppColors.textSecondary,
+                                  backgroundColor: AppColors.cardSurfaceSecondary,
+                                  borderColor: AppColors.border,
+                                  fontSize: 10,
                                 ),
                                 if (carCharges > 0)
-                                  Chip(
-                                    label: Text('Car ($carCount): ${AppFormatters.currency(carCharges)}', style: const TextStyle(fontSize: 11)),
-                                    backgroundColor: Colors.grey.shade100,
-                                    padding: EdgeInsets.zero,
-                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  AppBadge(
+                                    label: 'Car ($carCount): ${AppFormatters.currency(carCharges)}',
+                                    textColor: AppColors.textSecondary,
+                                    backgroundColor: AppColors.cardSurfaceSecondary,
+                                    borderColor: AppColors.border,
+                                    fontSize: 10,
                                   ),
                                 if (bikeCharges > 0)
-                                  Chip(
-                                    label: Text('Bike ($bikeCount): ${AppFormatters.currency(bikeCharges)}', style: const TextStyle(fontSize: 11)),
-                                    backgroundColor: Colors.grey.shade100,
-                                    padding: EdgeInsets.zero,
-                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  AppBadge(
+                                    label: 'Bike ($bikeCount): ${AppFormatters.currency(bikeCharges)}',
+                                    textColor: AppColors.textSecondary,
+                                    backgroundColor: AppColors.cardSurfaceSecondary,
+                                    borderColor: AppColors.border,
+                                    fontSize: 10,
                                   ),
                               ],
                             ),
 
-                            const SizedBox(height: 14),
+                            const SizedBox(height: 12),
 
                             // Action Buttons
                             Row(
@@ -477,26 +483,31 @@ class _VerifyPaymentsTabState extends State<VerifyPaymentsTab> {
                               children: [
                                 OutlinedButton.icon(
                                   style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.red,
-                                    side: const BorderSide(color: Colors.red),
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                    foregroundColor: AppColors.error,
+                                    side: const BorderSide(color: AppColors.errorBorder),
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    minimumSize: const Size(0, 36),
                                   ),
-                                  icon: const Icon(Icons.close, size: 16),
-                                  label: const Text('Reject Submission'),
+                                  icon: const Icon(Icons.close_rounded, size: 15),
+                                  label: const Text('Reject Submission', style: TextStyle(fontSize: 12)),
                                   onPressed: isProcessing ? null : () => _showRejectDialog(context, dueId, data),
                                 ),
-                                const SizedBox(width: 10),
+                                const SizedBox(width: 8),
                                 ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green.shade700,
+                                    backgroundColor: AppColors.success,
                                     foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                    minimumSize: const Size(0, 36),
                                   ),
                                   icon: isProcessing
-                                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                      : const Icon(Icons.verified, size: 18),
-                                  label: Text(isProcessing ? 'Posting to Accounts...' : 'Approve & Post to Income'),
-                                  onPressed: isProcessing ? null : () => _verifyPayment(context, dueId, data),
+                                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                                      : const Icon(Icons.verified_rounded, size: 16),
+                                  label: Text(
+                                    isProcessing ? 'Posting to Accounts...' : 'Approve & Post to Income',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                  ),
+                                  onPressed: isProcessing ? null : () => _verifyPayment(dueId, data),
                                 ),
                               ],
                             ),
