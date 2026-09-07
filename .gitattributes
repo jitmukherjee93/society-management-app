@@ -1,0 +1,15 @@
+# Auto detect text files and perform LF normalization on checkin
+* text=auto eol=lf
+
+# Explicit binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.mp4 binary
+*.mov binary
+*.docx binary
+*.xlsx binary
+*.jar binary
