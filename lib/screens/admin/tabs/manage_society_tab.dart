@@ -6,6 +6,8 @@ import 'package:csv/csv.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
+import '../../../utils/flat_utils.dart';
 import '../../../widgets/form_helpers.dart';
 import '../../../utils/storage_utils.dart';
 import '../../../widgets/document_preview_dialog.dart';
@@ -1631,6 +1633,34 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
           ),
         ),
 
+        // Maintenance Status Bulb Legend Bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+          decoration: const BoxDecoration(
+            color: AppColors.cardSurfaceSecondary,
+            border: Border(bottom: BorderSide(color: AppColors.border, width: 0.8)),
+          ),
+          child: const SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                Icon(Icons.lightbulb, size: 14, color: AppColors.textSecondary),
+                SizedBox(width: 6),
+                Text(
+                  'Maintenance:',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textSecondary),
+                ),
+                SizedBox(width: 10),
+                _BulbLegendItem(color: AppColors.success, label: 'Paid Current Month'),
+                SizedBox(width: 12),
+                _BulbLegendItem(color: AppColors.warning, label: 'Unpaid (>15 Days)'),
+                SizedBox(width: 12),
+                _BulbLegendItem(color: AppColors.error, label: 'Defaulter (Past Unpaid)'),
+              ],
+            ),
+          ),
+        ),
+
         // Responsive Flats Grid
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
@@ -1709,7 +1739,45 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
   }
 }
 
-// ─── Compact Flat Tile Widget ───────────────────────────────────────────────
+// ─── Bulb Legend Item Widget ────────────────────────────────────────────────
+
+class _BulbLegendItem extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const _BulbLegendItem({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 9,
+          height: 9,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.5),
+                blurRadius: 4,
+                spreadRadius: 0.8,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Compact Flat Tile Widget with Maintenance Bulb ──────────────────────────
 
 class _FlatTile extends StatelessWidget {
   final String flatId;
@@ -1728,203 +1796,375 @@ class _FlatTile extends StatelessWidget {
     final isRented = flatData['isRented'] == true;
     final flatNumber = flatData['flatNumber']?.toString() ?? flatId;
     final displayFlatNumber = flatNumber.contains('-') ? flatNumber.split('-').last : flatNumber;
+    final lookupKeys = FlatUtils.getLookupKeys(flatId).toList();
 
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
-          .collection('users')
-          .where('flatNumber', isEqualTo: flatId)
+          .collection('maintenance_dues')
+          .where('flatNumber', whereIn: lookupKeys.isNotEmpty ? lookupKeys : [flatId])
           .snapshots(),
-      builder: (context, snapshot) {
-        final docs = snapshot.data?.docs ?? [];
-        
-        int cars = 0;
-        int bikes = 0;
-        bool hasPendingReq = false;
-        String? primaryOccupantName;
+      builder: (context, duesSnapshot) {
+        final duesDocs = duesSnapshot.data?.docs ?? [];
+        final bulbData = _MaintenanceBulbData.calculate(duesDocs);
 
-        for (final doc in docs) {
-          final data = doc.data() as Map<String, dynamic>;
-          if (primaryOccupantName == null && (data['name']?.toString().isNotEmpty ?? false)) {
-            primaryOccupantName = data['name'].toString();
-          }
-          if (data['isCarOwner'] == true && (data['carReg']?.toString().trim().isNotEmpty ?? false)) {
-            cars++;
-          }
-          if (data['isBikeOwner'] == true && (data['bikeReg']?.toString().trim().isNotEmpty ?? false)) {
-            bikes++;
-          }
-          if (data['hasBike2'] == true && (data['bike2Reg']?.toString().trim().isNotEmpty ?? false)) {
-            bikes++;
-          }
-          if ((data['pendingCarReg']?.toString().isNotEmpty ?? false) ||
-              (data['pendingBikeReg']?.toString().isNotEmpty ?? false) ||
-              (data['pendingBike2Reg']?.toString().isNotEmpty ?? false)) {
-            hasPendingReq = true;
-          }
-        }
+        return StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('users')
+              .where('flatNumber', isEqualTo: flatId)
+              .snapshots(),
+          builder: (context, snapshot) {
+            final docs = snapshot.data?.docs ?? [];
+            
+            int cars = 0;
+            int bikes = 0;
+            bool hasPendingReq = false;
+            String? primaryOccupantName;
 
-        final isVacant = docs.isEmpty;
+            for (final doc in docs) {
+              final data = doc.data() as Map<String, dynamic>;
+              if (primaryOccupantName == null && (data['name']?.toString().isNotEmpty ?? false)) {
+                primaryOccupantName = data['name'].toString();
+              }
+              if (data['isCarOwner'] == true && (data['carReg']?.toString().trim().isNotEmpty ?? false)) {
+                cars++;
+              }
+              if (data['isBikeOwner'] == true && (data['bikeReg']?.toString().trim().isNotEmpty ?? false)) {
+                bikes++;
+              }
+              if (data['hasBike2'] == true && (data['bike2Reg']?.toString().trim().isNotEmpty ?? false)) {
+                bikes++;
+              }
+              if ((data['pendingCarReg']?.toString().isNotEmpty ?? false) ||
+                  (data['pendingBikeReg']?.toString().isNotEmpty ?? false) ||
+                  (data['pendingBike2Reg']?.toString().isNotEmpty ?? false)) {
+                hasPendingReq = true;
+              }
+            }
 
-        return Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.cardSurface,
+            final isVacant = docs.isEmpty;
+
+            return Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTap,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: hasPendingReq ? AppColors.warningBorder : AppColors.border,
-                  width: hasPendingReq ? 1.4 : 0.9,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.03),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.cardSurface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: hasPendingReq ? AppColors.warningBorder : AppColors.border,
+                      width: hasPendingReq ? 1.4 : 0.9,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.03),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  // Top Row: Block & Flat No + Occupancy Status
-                  Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
+                      // Top Row: Maintenance Bulb + Block & Flat No + Occupancy Status
                       Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          if (block.isNotEmpty) ...[
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: AppColors.primarySurface,
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: AppColors.primaryBorder, width: 0.8),
-                              ),
-                              child: Text(
-                                block,
+                          Row(
+                            children: [
+                              _MaintenanceBulbIcon(data: bulbData, size: 13),
+                              const SizedBox(width: 6),
+                              if (block.isNotEmpty) ...[
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primarySurface,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: AppColors.primaryBorder, width: 0.8),
+                                  ),
+                                  child: Text(
+                                    block,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11,
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 5),
+                              ],
+                              Text(
+                                displayFlatNumber,
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
-                                  fontSize: 11,
-                                  color: AppColors.primary,
+                                  fontSize: 14,
+                                  color: AppColors.textPrimary,
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 6),
-                          ],
-                          Text(
-                            displayFlatNumber,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                              color: AppColors.textPrimary,
-                            ),
+                            ],
                           ),
+                          if (isVacant)
+                            const AppBadge(
+                              label: 'Vacant',
+                              textColor: AppColors.textMuted,
+                              backgroundColor: AppColors.cardSurfaceSecondary,
+                              borderColor: AppColors.border,
+                            )
+                          else if (isRented)
+                            AppBadge.info('Rented')
+                          else
+                            AppBadge.success('Owner'),
                         ],
                       ),
-                      if (isVacant)
-                        const AppBadge(
-                          label: 'Vacant',
-                          textColor: AppColors.textMuted,
-                          backgroundColor: AppColors.cardSurfaceSecondary,
-                          borderColor: AppColors.border,
-                        )
-                      else if (isRented)
-                        AppBadge.info('Rented')
-                      else
-                        AppBadge.success('Owner'),
-                    ],
-                  ),
 
-                  // Middle Row: Primary occupant name
-                  Row(
-                    children: [
-                      Icon(
-                        isVacant ? Icons.person_off_outlined : Icons.person_outline,
-                        size: 14,
-                        color: isVacant ? AppColors.textMuted : AppColors.textSecondary,
-                      ),
-                      const SizedBox(width: 5),
-                      Expanded(
-                        child: Text(
-                          isVacant
-                              ? 'No occupant'
-                              : (docs.length > 1
-                                  ? '$primaryOccupantName (+${docs.length - 1})'
-                                  : (primaryOccupantName ?? 'Occupant')),
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: isVacant ? AppColors.textMuted : AppColors.textPrimary,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  // Bottom Row: Vehicles + Pending request indicator
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
+                      // Middle Row: Primary occupant name
                       Row(
                         children: [
-                          if (cars > 0) ...[
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: AppColors.cardSurfaceSecondary,
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: AppColors.border, width: 0.7),
+                          Icon(
+                            isVacant ? Icons.person_off_outlined : Icons.person_outline,
+                            size: 14,
+                            color: isVacant ? AppColors.textMuted : AppColors.textSecondary,
+                          ),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: Text(
+                              isVacant
+                                  ? 'No occupant'
+                                  : (docs.length > 1
+                                      ? '$primaryOccupantName (+${docs.length - 1})'
+                                      : (primaryOccupantName ?? 'Occupant')),
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: isVacant ? AppColors.textMuted : AppColors.textPrimary,
                               ),
-                              child: Text('🚗 $cars', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            const SizedBox(width: 4),
-                          ],
-                          if (bikes > 0) ...[
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: AppColors.cardSurfaceSecondary,
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: AppColors.border, width: 0.7),
-                              ),
-                              child: Text('🏍️ $bikes', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                            ),
-                            const SizedBox(width: 4),
-                          ],
-                          if (cars == 0 && bikes == 0)
-                            const Text(
-                              'No vehicles',
-                              style: TextStyle(fontSize: 10, color: AppColors.textMuted),
-                            ),
+                          ),
                         ],
                       ),
-                      if (hasPendingReq)
-                        const AppBadge(
-                          label: 'Pending Req',
-                          icon: Icons.pending_actions,
-                          textColor: AppColors.warning,
-                          backgroundColor: AppColors.warningSurface,
-                          borderColor: AppColors.warningBorder,
-                          fontSize: 10,
-                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        )
-                      else
-                        const Icon(Icons.arrow_forward_ios, size: 11, color: AppColors.textMuted),
+
+                      // Bottom Row: Vehicles + Pending request indicator
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              if (cars > 0) ...[
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.cardSurfaceSecondary,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: AppColors.border, width: 0.7),
+                                  ),
+                                  child: Text('🚗 $cars', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                ),
+                                const SizedBox(width: 4),
+                              ],
+                              if (bikes > 0) ...[
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.cardSurfaceSecondary,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: AppColors.border, width: 0.7),
+                                  ),
+                                  child: Text('🏍️ $bikes', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                ),
+                                const SizedBox(width: 4),
+                              ],
+                              if (cars == 0 && bikes == 0)
+                                const Text(
+                                  'No vehicles',
+                                  style: TextStyle(fontSize: 10, color: AppColors.textMuted),
+                                ),
+                            ],
+                          ),
+                          if (hasPendingReq)
+                            const AppBadge(
+                              label: 'Pending Req',
+                              icon: Icons.pending_actions,
+                              textColor: AppColors.warning,
+                              backgroundColor: AppColors.warningSurface,
+                              borderColor: AppColors.warningBorder,
+                              fontSize: 10,
+                              padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            )
+                          else
+                            const Icon(Icons.arrow_forward_ios, size: 11, color: AppColors.textMuted),
+                        ],
+                      ),
                     ],
                   ),
-                ],
+                ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
+    );
+  }
+}
+
+// ─── Maintenance Bulb Data & Indicator Widget ────────────────────────────────
+
+class _MaintenanceBulbData {
+  final Color color;
+  final Color surfaceColor;
+  final Color borderColor;
+  final String label;
+  final String tooltip;
+  final IconData icon;
+  final bool isGlowing;
+
+  const _MaintenanceBulbData({
+    required this.color,
+    required this.surfaceColor,
+    required this.borderColor,
+    required this.label,
+    required this.tooltip,
+    this.icon = Icons.lightbulb,
+    this.isGlowing = true,
+  });
+
+  static _MaintenanceBulbData calculate(List<QueryDocumentSnapshot> duesDocs) {
+    final now = DateTime.now();
+    final currentMonthStr = DateFormat('MMMM yyyy').format(now);
+
+    int unpaidPastCount = 0;
+    double unpaidPastAmount = 0.0;
+    bool currentMonthPaid = false;
+    bool hasCurrentMonthDue = false;
+    DateTime? currentMonthCreatedAt;
+    double currentMonthAmount = 0.0;
+
+    for (final doc in duesDocs) {
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+      final month = (data['month'] ?? '').toString().trim();
+      final status = (data['status'] ?? 'UNPAID').toString().toUpperCase();
+      final amount = (data['amount'] as num?)?.toDouble() ?? 0.0;
+      final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
+
+      final isPaid = status == 'PAID_ONLINE' ||
+          status == 'PAID_OFFLINE_VERIFIED' ||
+          status == 'PAID_VERIFIED' ||
+          status == 'PAYMENT_PENDING_APPROVAL' ||
+          status == 'PAID_OFFLINE_PENDING';
+
+      if (month.toLowerCase() == currentMonthStr.toLowerCase()) {
+        hasCurrentMonthDue = true;
+        currentMonthPaid = isPaid;
+        currentMonthCreatedAt = createdAt;
+        currentMonthAmount = amount;
+      } else {
+        if (!isPaid) {
+          unpaidPastCount++;
+          unpaidPastAmount += amount;
+        }
+      }
+    }
+
+    // 1. Red Bulb: Defaulter if has unpaid dues from past months
+    if (unpaidPastCount > 0) {
+      return _MaintenanceBulbData(
+        color: AppColors.error,
+        surfaceColor: AppColors.errorSurface,
+        borderColor: AppColors.errorBorder,
+        label: 'Defaulter ($unpaidPastCount mo unpaid)',
+        tooltip: 'Maintenance Defaulter: $unpaidPastCount past month(s) unpaid (₹${unpaidPastAmount.toStringAsFixed(0)})',
+        isGlowing: true,
+      );
+    }
+
+    // 2. Green Bulb: Paid for current month
+    if (currentMonthPaid) {
+      return _MaintenanceBulbData(
+        color: AppColors.success,
+        surfaceColor: AppColors.successSurface,
+        borderColor: AppColors.successBorder,
+        label: 'Paid ($currentMonthStr)',
+        tooltip: 'Maintenance Paid for current month ($currentMonthStr)',
+        isGlowing: true,
+      );
+    }
+
+    // 3. Amber Bulb: Not paid even after 15 days passed
+    final isOverdue15Days = now.day > 15 ||
+        (currentMonthCreatedAt != null && now.difference(currentMonthCreatedAt).inDays > 15);
+
+    if (hasCurrentMonthDue && isOverdue15Days) {
+      return _MaintenanceBulbData(
+        color: AppColors.warning,
+        surfaceColor: AppColors.warningSurface,
+        borderColor: AppColors.warningBorder,
+        label: 'Overdue >15 Days',
+        tooltip: 'Maintenance not paid after 15 days passed for $currentMonthStr (₹${currentMonthAmount.toStringAsFixed(0)})',
+        isGlowing: true,
+      );
+    }
+
+    // 4. Within 15-day grace period
+    if (hasCurrentMonthDue) {
+      return _MaintenanceBulbData(
+        color: const Color(0xFFF59E0B),
+        surfaceColor: const Color(0xFFFEF3C7),
+        borderColor: const Color(0xFFFDE68A),
+        label: 'Due (Grace Period)',
+        tooltip: 'Current month due (within 15-day grace period) - ₹${currentMonthAmount.toStringAsFixed(0)}',
+        isGlowing: false,
+      );
+    }
+
+    // 5. No bill generated for current month yet
+    return const _MaintenanceBulbData(
+      color: AppColors.textMuted,
+      surfaceColor: AppColors.cardSurfaceSecondary,
+      borderColor: AppColors.border,
+      label: 'No Bill Generated',
+      tooltip: 'No maintenance bill generated yet for current month',
+      icon: Icons.lightbulb_outline,
+      isGlowing: false,
+    );
+  }
+}
+
+class _MaintenanceBulbIcon extends StatelessWidget {
+  final _MaintenanceBulbData data;
+  final double size;
+
+  const _MaintenanceBulbIcon({required this.data, this.size = 14});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: data.tooltip,
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: data.surfaceColor,
+          shape: BoxShape.circle,
+          border: Border.all(color: data.borderColor, width: 1.1),
+          boxShadow: data.isGlowing
+              ? [
+                  BoxShadow(
+                    color: data.color.withValues(alpha: 0.5),
+                    blurRadius: 6,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : null,
+        ),
+        child: Icon(
+          data.icon,
+          color: data.color,
+          size: size,
+        ),
+      ),
     );
   }
 }
@@ -1956,6 +2196,8 @@ class _FlatDetailsDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lookupKeys = FlatUtils.getLookupKeys(flatId).toList();
+
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance.collection('flats').doc(flatId).snapshots(),
       builder: (context, flatSnap) {
@@ -1976,6 +2218,57 @@ class _FlatDetailsDialog extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // Live Maintenance Status Banner with Bulb Indicator
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('maintenance_dues')
+                    .where('flatNumber', whereIn: lookupKeys.isNotEmpty ? lookupKeys : [flatId])
+                    .snapshots(),
+                builder: (context, duesSnap) {
+                  final duesDocs = duesSnap.data?.docs ?? [];
+                  final bulbData = _MaintenanceBulbData.calculate(duesDocs);
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: bulbData.surfaceColor,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: bulbData.borderColor, width: 0.9),
+                    ),
+                    child: Row(
+                      children: [
+                        _MaintenanceBulbIcon(data: bulbData, size: 18),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Maintenance: ${bulbData.label}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                  color: bulbData.color,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                bulbData.tooltip,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+
               // Rented Switch & Add Rentee button section
               StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
