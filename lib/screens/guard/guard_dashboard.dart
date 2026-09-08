@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../services/visitor_pass_service.dart';
 
 class GuardDashboard extends StatefulWidget {
   const GuardDashboard({super.key});
@@ -14,6 +14,12 @@ class _GuardDashboardState extends State<GuardDashboard> {
   bool _isLoading = false;
   Map<String, dynamic>? _visitorData;
   String? _visitorDocId;
+
+  @override
+  void dispose() {
+    _codeController.dispose();
+    super.dispose();
+  }
 
   Future<void> _verifyPass() async {
     final code = _codeController.text.trim();
@@ -31,24 +37,21 @@ class _GuardDashboardState extends State<GuardDashboard> {
     });
 
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('visitors')
-          .where('passCode', isEqualTo: code)
-          .where('status', isEqualTo: 'PENDING')
-          .limit(1)
-          .get();
+      final doc = await VisitorPassService.verifyPassCode(code);
 
-      if (snapshot.docs.isEmpty) {
+      if (doc == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Invalid or already used pass code')),
           );
         }
       } else {
-        setState(() {
-          _visitorDocId = snapshot.docs.first.id;
-          _visitorData = snapshot.docs.first.data();
-        });
+        if (mounted) {
+          setState(() {
+            _visitorDocId = doc.id;
+            _visitorData = doc.data();
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -67,11 +70,10 @@ class _GuardDashboardState extends State<GuardDashboard> {
     setState(() => _isLoading = true);
     
     try {
-      await FirebaseFirestore.instance.collection('visitors').doc(_visitorDocId).update({
-        'status': 'CHECKED_IN',
-        'entryTime': FieldValue.serverTimestamp(),
-        'checkedInBy': FirebaseAuth.instance.currentUser?.uid,
-      });
+      await VisitorPassService.checkInVisitor(
+        visitorDocId: _visitorDocId!,
+        guardUid: FirebaseAuth.instance.currentUser?.uid,
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

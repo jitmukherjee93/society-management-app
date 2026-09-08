@@ -9,11 +9,13 @@ import '../../utils/app_formatters.dart';
 import '../../services/notification_service.dart';
 import 'tabs/community_feed_tab.dart';
 import '../../utils/storage_utils.dart';
+import '../../services/visitor_pass_service.dart';
 import '../../widgets/document_preview_dialog.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_decorations.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/app_feedback.dart';
+import '../../widgets/receipt_preview_dialog.dart';
 
 bool _isNotificationForResident(Map<String, dynamic> data, User? user, [String? userFlat, String? fullFlat]) {
   if (user == null) return false;
@@ -1858,159 +1860,11 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
   final _currencyFmt = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
 
   void _showReceiptDialog(BuildContext context, Map<String, dynamic> dueData, String receiptNumber, String? paidDateStr) {
-    final flat = (dueData['flatNumber'] ?? 'Unknown').toString();
-    final month = (dueData['month'] ?? '').toString();
-    final amount = (dueData['amount'] as num?)?.toDouble() ?? 0.0;
-    final baseMaint = (dueData['baseMaintenance'] as num?)?.toDouble();
-    final puja = (dueData['pujaSubscription'] as num?)?.toDouble() ?? 90.0;
-    final carCharges = (dueData['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
-    final bikeCharges = (dueData['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0;
-    final paymentMode = dueData['paymentMode'] ?? 'Online Payment';
-    final txnRef = dueData['transactionRef'] ?? dueData['offlineRef'] ?? 'N/A';
-    final block = dueData['block'] ?? (flat.isNotEmpty ? flat[0] : 'A');
-
-    showDialog(
+    ReceiptPreviewDialog.show(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        contentPadding: const EdgeInsets.all(20),
-        content: SizedBox(
-          width: 440,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // Header
-                const Icon(Icons.verified_outlined, color: Colors.teal, size: 40),
-                const SizedBox(height: 6),
-                const Text(
-                  'RAMKRISHNAPURAM WELFARE ASSOCIATION',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.teal),
-                ),
-                const Text(
-                  'Official Maintenance Payment Receipt',
-                  style: TextStyle(fontSize: 12, color: Colors.black54),
-                ),
-                const Text(
-                  'Financial Year 2026-27',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black87),
-                ),
-                const Divider(height: 20),
-
-                // Meta Info
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Receipt No: $receiptNumber', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                    Text('Date: $paidDateStr', style: const TextStyle(fontSize: 12, color: Colors.black54)),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Flat: $flat (Block $block)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                    Text('Billing Month: $month', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                  ],
-                ),
-                const Divider(height: 20),
-
-                // Itemized Table
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey.shade200),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text('Base Maintenance (Block $block)'),
-                          Text(_currencyFmt.format(baseMaint ?? (amount - puja - carCharges - bikeCharges))),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Puja Subscription Allocation'),
-                          Text(_currencyFmt.format(puja)),
-                        ],
-                      ),
-                      if (carCharges > 0) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text('4-Wheeler (Car) Parking'),
-                            Text(_currencyFmt.format(carCharges)),
-                          ],
-                        ),
-                      ],
-                      if (bikeCharges > 0) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text('2-Wheeler (Bike) Parking'),
-                            Text(_currencyFmt.format(bikeCharges)),
-                          ],
-                        ),
-                      ],
-                      const Divider(),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Total Amount Paid', style: TextStyle(fontWeight: FontWeight.bold)),
-                          Text(
-                            _currencyFmt.format(amount),
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.teal),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // Payment Meta
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Payment Mode: $paymentMode\nRef / Txn ID: $txnRef\nStatus: PAID & VERIFIED IN FULL',
-                    style: const TextStyle(fontSize: 11, color: Colors.black87, height: 1.4),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text('Authorized Signatory', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                        Text('RWA Accounts Committee', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                      ],
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
+      dueData: dueData,
+      receiptNumber: receiptNumber,
+      dateStr: paidDateStr,
     );
   }
 
@@ -2176,16 +2030,8 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text('• Base Flat Maintenance (Block ${breakdown.block})', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                            Text('• Maintenance (Block ${breakdown.block})', style: const TextStyle(color: Colors.white, fontSize: 13)),
                             Text(_currencyFmt.format(breakdown.baseMaintenance), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text('• Puja Subscription Allocation', style: TextStyle(color: Colors.white, fontSize: 13)),
-                            Text(_currencyFmt.format(breakdown.pujaSubscription), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                           ],
                         ),
                         if (breakdown.carCount > 0) ...[
@@ -2338,8 +2184,9 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                               final amt = (data['amount'] as num?)?.toDouble() ?? breakdown.totalMonthlyDue;
                               final isFocusMonth = widget.initialSelectedMonth != null && month == widget.initialSelectedMonth;
 
-                              final baseMaint = (data['baseMaintenance'] as num?)?.toDouble() ?? breakdown.baseMaintenance;
-                              final puja = (data['pujaSubscription'] as num?)?.toDouble() ?? breakdown.pujaSubscription;
+                              final rawBase = (data['baseMaintenance'] as num?)?.toDouble() ?? breakdown.baseMaintenance;
+                              final rawPuja = (data['pujaSubscription'] as num?)?.toDouble() ?? 0.0;
+                              final baseMaint = (rawPuja > 0 && rawBase < 350) ? (rawBase + rawPuja) : rawBase;
                               final carCharges = (data['carParkingCharges'] as num?)?.toDouble() ?? breakdown.carParkingCharges;
                               final bikeCharges = (data['bikeParkingCharges'] as num?)?.toDouble() ?? breakdown.bikeParkingCharges;
 
@@ -2426,7 +2273,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                           border: Border.all(color: Colors.grey.shade200),
                                         ),
                                         child: Text(
-                                          'Breakdown: Maint: ${_currencyFmt.format(baseMaint)} • Puja: ${_currencyFmt.format(puja)}${carCharges > 0 ? ' • Car Parking: ${_currencyFmt.format(carCharges)}' : ''}${bikeCharges > 0 ? ' • Bike Parking: ${_currencyFmt.format(bikeCharges)}' : ''}',
+                                          'Breakdown: Maintenance: ${_currencyFmt.format(baseMaint)}${carCharges > 0 ? ' • Car Parking: ${_currencyFmt.format(carCharges)}' : ''}${bikeCharges > 0 ? ' • Bike Parking: ${_currencyFmt.format(bikeCharges)}' : ''}',
                                           style: TextStyle(fontSize: 11, color: Colors.grey.shade800, fontWeight: FontWeight.w500),
                                         ),
                                       ),
@@ -2627,7 +2474,16 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                           foregroundColor: AppColors.primary,
                                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                         ),
-                                        onPressed: () => _showReceiptDialog(context, data, receiptNo, dateStr),
+                                        onPressed: () {
+                                          final receiptData = Map<String, dynamic>.from(data);
+                                          if (userData['name'] != null && (userData['name'].toString().isNotEmpty)) {
+                                            receiptData['residentName'] = userData['name'];
+                                          }
+                                          if (userData['carReg'] != null) receiptData['carReg'] = userData['carReg'];
+                                          if (userData['bikeReg'] != null) receiptData['bikeReg'] = userData['bikeReg'];
+                                          if (userData['bike2Reg'] != null) receiptData['bike2Reg'] = userData['bike2Reg'];
+                                          _showReceiptDialog(context, receiptData, receiptNo, dateStr);
+                                        },
                                       ),
                                     ],
                                   ),
@@ -3319,19 +3175,16 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
         // Fetch host flat number
         final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
         final flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
-        
-        // Generate random 6-digit code
-        final passCode = (100000 + DateTime.now().microsecondsSinceEpoch % 900000).toString();
 
-        await FirebaseFirestore.instance.collection('visitors').add({
-          'visitorName': _visitorName,
-          'purpose': _purpose,
-          'hostFlatNumber': flatNumber,
-          'hostUid': user.uid,
-          'passCode': passCode,
-          'status': 'PENDING', // PENDING, CHECKED_IN, CHECKED_OUT
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+        final passResult = await VisitorPassService.createVisitorPass(
+          residentUid: user.uid,
+          flatNumber: flatNumber,
+          visitorName: _visitorName,
+          phone: '',
+          purpose: _purpose,
+        );
+
+        final passCode = passResult['passCode'] as String;
 
         if (!mounted) return;
         

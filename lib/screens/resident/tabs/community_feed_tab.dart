@@ -14,6 +14,12 @@ class _CommunityFeedTabState extends State<CommunityFeedTab> {
   final _postController = TextEditingController();
   bool _isPosting = false;
 
+  @override
+  void dispose() {
+    _postController.dispose();
+    super.dispose();
+  }
+
   Future<void> _createPost() async {
     final text = _postController.text.trim();
     if (text.isEmpty) return;
@@ -221,7 +227,7 @@ class _CommunityFeedTabState extends State<CommunityFeedTab> {
                                         ),
                                         const SizedBox(width: 6),
                                         Text(
-                                          '\${likes.length}',
+                                          '${likes.length}',
                                           style: TextStyle(
                                             color: isLiked ? Colors.red : Colors.grey,
                                             fontWeight: isLiked ? FontWeight.bold : FontWeight.normal

@@ -5,11 +5,12 @@ import 'package:intl/intl.dart';
 import '../../../models/accounting_heads.dart';
 import '../../../utils/app_formatters.dart';
 import '../../../utils/flat_utils.dart';
-import '../../../services/notification_service.dart';
+import '../../../services/billing_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../theme/app_decorations.dart';
 import '../../../widgets/app_dialog.dart';
 import '../../../widgets/app_feedback.dart';
+import '../../../widgets/receipt_preview_dialog.dart';
 
 class GenerateMaintenanceTab extends StatefulWidget {
   const GenerateMaintenanceTab({super.key});
@@ -94,12 +95,12 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         }
       }
 
+      if (!mounted) return;
       setState(() => _isProcessing = false);
 
       // Determine whether to resend to paid flats
       bool resendToPaid = false;
 
-      if (!mounted) return;
       if (displayPaidFlats.isNotEmpty) {
         final choice = await AppDialog.show<String>(
           context: context,
@@ -166,7 +167,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
           iconColor: AppColors.primary,
           iconBgColor: AppColors.primarySurface,
           body: Text(
-            'This will automatically calculate each flat\'s maintenance bill using their registered details (Block base rate + Puja subscription + registered 4-wheeler/2-wheeler parking charges as per the FY ${AccountingConfig.currentFinancialYear} budget) and send instant billing notifications to all residents.\n\n'
+            'This will automatically calculate each flat\'s maintenance bill using their registered details (Block maintenance rate + registered 4-wheeler/2-wheeler parking charges as per the FY ${AccountingConfig.currentFinancialYear} budget) and send instant billing notifications to all residents.\n\n'
             'Existing bills for $_selectedMonth will be updated/skipped without double-billing. Proceed?',
             style: const TextStyle(fontSize: 13, color: AppColors.slate700, height: 1.4),
           ),
@@ -220,9 +221,18 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         final existingDoc = existingFlats[flatKey];
         if (existingDoc == null) {
           final newDueDoc = duesRef.doc();
+          final rName = (uData['name'] ?? uData['ownerName'] ?? '').toString().trim();
+          final cReg = (uData['carReg'] ?? uData['carRegistration'] ?? uData['fourWheelerReg'] ?? '').toString().trim();
+          final bReg = (uData['bikeReg'] ?? uData['bike1Registration'] ?? uData['bikeRegistration'] ?? uData['twoWheelerReg'] ?? '').toString().trim();
+          final b2Reg = (uData['bike2Reg'] ?? uData['bike2Registration'] ?? '').toString().trim();
+
           batch.set(newDueDoc, {
             'flatNumber': flatKey,
             'block': breakdown.block,
+            if (rName.isNotEmpty) 'residentName': rName,
+            if (cReg.isNotEmpty) 'carReg': cReg,
+            if (bReg.isNotEmpty) 'bikeReg': bReg,
+            if (b2Reg.isNotEmpty) 'bike2Reg': b2Reg,
             'amount': breakdown.totalMonthlyDue,
             'baseMaintenance': breakdown.baseMaintenance,
             'pujaSubscription': breakdown.pujaSubscription,
@@ -266,7 +276,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         final bikeText = breakdown.bikeCount > 0 ? ' + Bike (${breakdown.bikeCount}): ${AppFormatters.currency(breakdown.bikeParkingCharges)}' : '';
         final cateredMsg = isFlatPaid
             ? 'Dear Resident ($flatKey), your maintenance bill for $_selectedMonth (${AppFormatters.currency(breakdown.totalMonthlyDue)}) is recorded as paid/under verification.'
-            : 'Dear Resident ($flatKey), your maintenance bill for $_selectedMonth is ${AppFormatters.currency(breakdown.totalMonthlyDue)} (Maintenance: ${AppFormatters.currency(breakdown.baseMaintenance)} + Puja: ${AppFormatters.currency(breakdown.pujaSubscription)}$carText$bikeText). Tap to view breakdown and pay.';
+            : 'Dear Resident ($flatKey), your maintenance bill for $_selectedMonth is ${AppFormatters.currency(breakdown.totalMonthlyDue)} (Maintenance: ${AppFormatters.currency(breakdown.baseMaintenance)}$carText$bikeText). Tap to view breakdown and pay.';
 
         final newNotificationDoc = notificationsRef.doc();
         batch.set(newNotificationDoc, {
@@ -316,85 +326,29 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     setState(() => _processingDues.add(dueId));
 
     try {
-      final rawFlat = (data['flatNumber'] ?? 'Unknown').toString();
-      final normFlat = FlatUtils.normalize(rawFlat);
-      final month = (data['month'] ?? 'Current Month').toString();
-      final double amount = (data['amount'] as num?)?.toDouble() ?? 0.0;
-      final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? 'N/A').toString().trim();
-      final paymentCategory = (data['paymentCategory'] ?? 'ONLINE').toString();
-      final paymentMode = (data['paymentMode'] ?? 'Online Payment').toString();
-
-      // Determine budget block head via FlatUtils
-      final head = FlatUtils.getMaintenanceHead(normFlat);
-
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final voucherCode = 'INC-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
-
-      // Atomic Batch write: update due + post transaction + dispatch notification
-      final batch = FirebaseFirestore.instance.batch();
-
-      // 1. Update maintenance due document
-      final dueRef = FirebaseFirestore.instance.collection('maintenance_dues').doc(dueId);
-      batch.update(dueRef, {
-        'status': 'PAID_VERIFIED',
-        'receiptNumber': voucherCode,
-        'approvedAt': FieldValue.serverTimestamp(),
-        'verifiedAt': FieldValue.serverTimestamp(),
-        'verifiedBy': 'Admin',
-        'paymentCategory': paymentCategory,
-        'paymentMode': paymentMode,
-        'uniqueId': uniqueId,
-        'utrNumber': uniqueId,
-        'referenceNumber': uniqueId,
-      });
-
-      // 2. Post income entry into society accounts ledger
-      final txnRef = FirebaseFirestore.instance.collection('society_transactions').doc();
-      batch.set(txnRef, {
-        'type': 'INCOME',
-        'voucherNumber': voucherCode,
-        'accountHead': head,
-        'category': 'Maintenance Collection',
-        'amount': amount,
-        'paidToOrReceivedFrom': 'Flat $normFlat',
-        'paymentDate': FieldValue.serverTimestamp(),
-        'paymentMode': paymentMode,
-        'referenceNumber': uniqueId,
-        'description': 'Maintenance collection for $month from Flat $normFlat (Unique ID: $uniqueId)',
-        'linkedDueId': dueId,
-        'uniqueId': uniqueId,
-        'utrNumber': uniqueId,
-        'paymentCategory': paymentCategory,
-        'recordedBy': 'Admin',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      // 3. Dispatch notification in the same atomic batch
-      await NotificationService.notifyResident(
-        flatNumber: normFlat,
-        title: 'Maintenance Payment Approved ($voucherCode)',
-        message: 'Your maintenance payment of ${AppFormatters.currency(amount)} for $month (Unique ID: $uniqueId) has been verified and posted to Society Accounts. Receipt: $voucherCode.',
-        type: 'MAINTENANCE_PAYMENT_APPROVED',
-        extraData: {
-          'dueId': dueId,
-          'amount': amount,
-          'month': month,
-          'receiptNumber': voucherCode,
-          'uniqueId': uniqueId,
-          'paymentCategory': paymentCategory,
-          'paymentMode': paymentMode,
-        },
-        batch: batch,
+      final voucherCode = await BillingService.verifyPayment(
+        dueId: dueId,
+        data: data,
+        verifiedBy: 'Admin',
       );
 
-      // Commit all 3 writes atomically!
-      await batch.commit();
-
       if (mounted) {
+        final rawFlat = (data['flatNumber'] ?? 'Unknown').toString();
+        final normFlat = FlatUtils.normalize(rawFlat);
         AppFeedback.showSuccess(
           context,
           'Payment for Flat $normFlat approved & posted to Accounts ($voucherCode)!',
           title: 'Payment Verified & Approved',
+        );
+
+        // Open official receipt voucher preview
+        final receiptData = Map<String, dynamic>.from(data);
+        receiptData['receiptNumber'] = voucherCode;
+        receiptData['status'] = 'PAID_VERIFIED';
+        ReceiptPreviewDialog.show(
+          context: context,
+          dueData: receiptData,
+          receiptNumber: voucherCode,
         );
       }
     } catch (e) {
@@ -406,7 +360,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     }
   }
 
-  void _showRejectDialog(BuildContext context, String dueId, Map<String, dynamic> data) {
+  void _showRejectDialog(String dueId, Map<String, dynamic> data) {
     final reasonController = TextEditingController(text: 'Unique ID / Reference not reflected in Society Bank Statement');
     final flat = (data['flatNumber'] ?? 'Unknown').toString();
     final month = (data['month'] ?? '').toString();
@@ -457,7 +411,10 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: () {
+            reasonController.dispose();
+            Navigator.pop(context);
+          },
           child: const Text('Cancel'),
         ),
         const SizedBox(width: 8),
@@ -469,31 +426,21 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
           onPressed: () async {
             final reason = reasonController.text.trim();
             if (reason.isEmpty) return;
+            reasonController.dispose();
             Navigator.pop(context);
 
             setState(() => _processingDues.add(dueId));
             try {
-              // Reset status back to UNPAID
-              await FirebaseFirestore.instance.collection('maintenance_dues').doc(dueId).update({
-                'status': 'UNPAID',
-                'rejectionReason': reason,
-                'rejectedAt': FieldValue.serverTimestamp(),
-              });
-
-              // Notify resident via NotificationService
-              await NotificationService.notifyResident(
+              await BillingService.rejectPayment(
+                dueId: dueId,
                 flatNumber: flat,
-                title: 'Payment Submission Rejected ($month)',
-                message: 'Your payment submission for $month ($mode, Unique ID: $uniqueId) was rejected by Admin. Reason: $reason. Please re-submit with valid reference.',
-                type: 'MAINTENANCE_PAYMENT_REJECTED',
-                extraData: {
-                  'dueId': dueId,
-                  'uniqueId': uniqueId,
-                  'rejectionReason': reason,
-                },
+                month: month,
+                paymentMode: mode,
+                uniqueId: uniqueId,
+                reason: reason,
               );
 
-              if (context.mounted) {
+              if (mounted) {
                 AppFeedback.showWarning(
                   context,
                   'Payment rejected. Resident ($flat) has been notified to re-submit.',
@@ -501,7 +448,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                 );
               }
             } catch (e) {
-              if (context.mounted) {
+              if (mounted) {
                 AppFeedback.showError(context, 'Error rejecting payment: $e');
               }
             } finally {
@@ -523,7 +470,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
       iconColor: AppColors.warning,
       iconBgColor: AppColors.warningSurface,
       body: const Text(
-        'This will reset the status to UNPAID and remove all recorded payment details (UTR, receipts, verification timestamp). The resident will immediately be able to pay again. Proceed?',
+        'This will reset the status to UNPAID, remove all recorded payment details (UTR, receipts, verification timestamp), and remove any linked ledger entries. The resident will immediately be able to pay again. Proceed?',
         style: TextStyle(fontSize: 13, color: AppColors.slate700, height: 1.4),
       ),
       actions: [
@@ -538,26 +485,12 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     if (confirm != true) return;
 
     try {
-      await FirebaseFirestore.instance.collection('maintenance_dues').doc(docId).update({
-        'status': 'UNPAID',
-        'paidAt': FieldValue.delete(),
-        'verifiedAt': FieldValue.delete(),
-        'verifiedBy': FieldValue.delete(),
-        'uniqueId': FieldValue.delete(),
-        'utrNumber': FieldValue.delete(),
-        'referenceNumber': FieldValue.delete(),
-        'chequeNumber': FieldValue.delete(),
-        'chequeBank': FieldValue.delete(),
-        'paymentCategory': FieldValue.delete(),
-        'offlineRef': FieldValue.delete(),
-        'receiptNumber': FieldValue.delete(),
-        'submittedBy': FieldValue.delete(),
-        'submittedByEmail': FieldValue.delete(),
-        'rejectionReason': FieldValue.delete(),
-        'paymentMode': FieldValue.delete(),
-      });
+      await BillingService.resetDueToUnpaid(
+        dueId: docId,
+        flatNumber: flat,
+      );
       if (mounted) {
-        AppFeedback.showSuccess(context, 'Flat $flat bill reset to UNPAID successfully.');
+        AppFeedback.showSuccess(context, 'Flat $flat bill reset to UNPAID and accounts ledger synchronized.');
       }
     } catch (e) {
       if (mounted) {
@@ -604,7 +537,13 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         ],
       ),
       actions: [
-        OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        OutlinedButton(
+          onPressed: () {
+            notesController.dispose();
+            Navigator.pop(context, false);
+          },
+          child: const Text('Cancel'),
+        ),
         ElevatedButton(
           style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
           onPressed: () => Navigator.pop(context, true),
@@ -612,75 +551,42 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         ),
       ],
     );
-    if (confirm != true) return;
+
+    if (confirm != true) {
+      notesController.dispose();
+      return;
+    }
+
+    final notes = notesController.text.trim();
+    notesController.dispose();
 
     try {
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final voucherCode = 'INC-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
-      final normFlat = FlatUtils.normalize(flat);
-      final head = FlatUtils.getMaintenanceHead(normFlat);
-
-      // Atomic Batch write: due update + society income transaction + notification
-      final batch = FirebaseFirestore.instance.batch();
-
-      // 1. Update maintenance due
-      final dueRef = FirebaseFirestore.instance.collection('maintenance_dues').doc(docId);
-      batch.update(dueRef, {
-        'status': 'PAID_OFFLINE_VERIFIED',
-        'receiptNumber': voucherCode,
-        'paidAt': FieldValue.serverTimestamp(),
-        'verifiedAt': FieldValue.serverTimestamp(),
-        'verifiedBy': 'Admin',
-        'paymentCategory': 'OFFLINE',
-        'paymentMode': 'Cash to Cashier',
-        'uniqueId': 'CASH-OFFICE',
-        'referenceNumber': 'CASH-OFFICE',
-        'cashierNotes': notesController.text.trim(),
-      });
-
-      // 2. Post Income transaction into accounts ledger
-      final txRef = FirebaseFirestore.instance.collection('society_transactions').doc();
-      batch.set(txRef, {
-        'type': 'INCOME',
-        'voucherNumber': voucherCode,
-        'accountHead': head,
-        'category': 'Maintenance Collection',
-        'amount': amount,
-        'paidToOrReceivedFrom': 'Flat $normFlat',
-        'paymentDate': FieldValue.serverTimestamp(),
-        'paymentMode': 'Cash',
-        'referenceNumber': 'CASH-OFFICE',
-        'description': 'Cash maintenance collection for $month from Flat $normFlat',
-        'linkedDueId': docId,
-        'uniqueId': 'CASH-OFFICE',
-        'paymentCategory': 'OFFLINE',
-        'recordedBy': 'Admin',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      // 3. Dispatch receipt notification to resident
-      await NotificationService.notifyResident(
-        flatNumber: normFlat,
-        title: 'Cash Payment Receipt ($voucherCode)',
-        message: 'Your cash maintenance payment of ${AppFormatters.currency(amount)} for $month has been recorded and verified. Receipt Voucher: $voucherCode.',
-        type: 'MAINTENANCE_PAYMENT_APPROVED',
-        extraData: {
-          'dueId': docId,
-          'amount': amount,
-          'month': month,
-          'receiptNumber': voucherCode,
-          'uniqueId': 'CASH-OFFICE',
-          'paymentCategory': 'OFFLINE',
-          'paymentMode': 'Cash to Cashier',
-        },
-        batch: batch,
+      final voucherCode = await BillingService.recordCashPayment(
+        dueId: docId,
+        flatNumber: flat,
+        month: month,
+        amount: amount,
+        notes: notes.isNotEmpty ? notes : 'Received cash at Society Office',
+        recordedBy: 'Admin',
       );
-
-      // Commit all writes atomically
-      await batch.commit();
 
       if (mounted) {
         AppFeedback.showSuccess(context, 'Cash payment recorded for Flat $flat ($voucherCode)!');
+        ReceiptPreviewDialog.show(
+          context: context,
+          dueData: {
+            'flatNumber': flat,
+            'amount': amount,
+            'month': month,
+            'receiptNumber': voucherCode,
+            'paymentMode': 'Cash to Cashier',
+            'paymentCategory': 'OFFLINE',
+            'uniqueId': 'CASH-OFFICE',
+            'status': 'PAID_OFFLINE_VERIFIED',
+            'verifiedAt': Timestamp.now(),
+          },
+          receiptNumber: voucherCode,
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -698,7 +604,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
       iconColor: AppColors.error,
       iconBgColor: AppColors.errorSurface,
       body: const Text(
-        'This will completely remove this month\'s maintenance bill for this flat from the system. Proceed?',
+        'This will completely remove this month\'s maintenance bill for this flat from the system and clean up any linked transaction entries. Proceed?',
         style: TextStyle(fontSize: 13, color: AppColors.slate700),
       ),
       actions: [
@@ -713,7 +619,19 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     if (confirm != true) return;
 
     try {
-      await FirebaseFirestore.instance.collection('maintenance_dues').doc(docId).delete();
+      // 1. Fetch any linked ledger entries
+      final txSnap = await FirebaseFirestore.instance
+          .collection('society_transactions')
+          .where('linkedDueId', isEqualTo: docId)
+          .get();
+
+      final batch = FirebaseFirestore.instance.batch();
+      batch.delete(FirebaseFirestore.instance.collection('maintenance_dues').doc(docId));
+      for (final txDoc in txSnap.docs) {
+        batch.delete(txDoc.reference);
+      }
+      await batch.commit();
+
       if (mounted) {
         AppFeedback.showSuccess(context, 'Flat $flat bill deleted.');
       }
@@ -918,7 +836,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                     ),
                                     icon: const Icon(Icons.close_rounded, size: 14),
                                     label: const Text('Reject', style: TextStyle(fontSize: 11)),
-                                    onPressed: isProcessing ? null : () => _showRejectDialog(context, dueId, data),
+                                    onPressed: isProcessing ? null : () => _showRejectDialog(dueId, data),
                                   ),
                                   const SizedBox(width: 8),
                                   ElevatedButton.icon(
@@ -1241,7 +1159,21 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                   ),
                                 ),
                                 badge,
-                                const SizedBox(width: 6),
+                                if (status == 'PAID_ONLINE' || status == 'PAID_OFFLINE_VERIFIED' || status == 'PAID_VERIFIED') ...[
+                                  const SizedBox(width: 6),
+                                  OutlinedButton.icon(
+                                    icon: const Icon(Icons.receipt_long_rounded, size: 14),
+                                    label: const Text('Receipt', style: TextStyle(fontSize: 11)),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: AppColors.primary,
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      minimumSize: const Size(0, 28),
+                                      side: const BorderSide(color: AppColors.primary, width: 0.8),
+                                    ),
+                                    onPressed: () => ReceiptPreviewDialog.show(context: context, dueData: data),
+                                  ),
+                                ],
+                                const SizedBox(width: 4),
                                 PopupMenuButton<String>(
                                   icon: const Icon(Icons.more_vert_rounded, size: 18, color: AppColors.slate500),
                                   tooltip: 'Bill Actions',
@@ -1250,7 +1182,9 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                     if (action == 'APPROVE') {
                                       _verifyPayment(docId, data);
                                     } else if (action == 'REJECT') {
-                                      _showRejectDialog(context, docId, data);
+                                      _showRejectDialog(docId, data);
+                                    } else if (action == 'VIEW_RECEIPT') {
+                                      ReceiptPreviewDialog.show(context: context, dueData: data);
                                     } else if (action == 'RECORD_CASH') {
                                       _recordCashPayment(docId, flat, (amount as num).toDouble(), _selectedMonth);
                                     } else if (action == 'RESET') {
@@ -1282,6 +1216,17 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                         ),
                                       ),
                                     ],
+                                    if (status == 'PAID_ONLINE' || status == 'PAID_OFFLINE_VERIFIED' || status == 'PAID_VERIFIED')
+                                      const PopupMenuItem(
+                                        value: 'VIEW_RECEIPT',
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.receipt_long_rounded, color: AppColors.primary, size: 18),
+                                            SizedBox(width: 8),
+                                            Text('View Official Receipt', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600, fontSize: 13)),
+                                          ],
+                                        ),
+                                      ),
                                     if (status == 'UNPAID')
                                       const PopupMenuItem(
                                         value: 'RECORD_CASH',
@@ -1359,7 +1304,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                                         minimumSize: const Size(0, 26),
                                       ),
-                                      onPressed: isProcessing ? null : () => _showRejectDialog(context, docId, data),
+                                      onPressed: isProcessing ? null : () => _showRejectDialog(docId, data),
                                       child: const Text('Reject', style: TextStyle(fontSize: 10)),
                                     ),
                                     const SizedBox(width: 6),

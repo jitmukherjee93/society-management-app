@@ -117,12 +117,12 @@ class AccountingConfig {
     'Car Parking Fees (Four-Wheelers)': 24940.0,
   };
 
-  // Block maintenance and puja rate break-up (2026-27)
+  // Block maintenance rate (2026-27) - Puja subscription is merged into base maintenance
   static const Map<String, Map<String, int>> blockRateBreakup = {
-    'A': {'total': 450, 'maintenance': 360, 'puja': 90, 'flats': 50},
-    'B': {'total': 420, 'maintenance': 330, 'puja': 90, 'flats': 60},
-    'C': {'total': 390, 'maintenance': 300, 'puja': 90, 'flats': 60},
-    'D': {'total': 490, 'maintenance': 400, 'puja': 90, 'flats': 50},
+    'A': {'total': 450, 'maintenance': 450, 'puja': 0, 'flats': 50},
+    'B': {'total': 420, 'maintenance': 420, 'puja': 0, 'flats': 60},
+    'C': {'total': 390, 'maintenance': 390, 'puja': 0, 'flats': 60},
+    'D': {'total': 490, 'maintenance': 490, 'puja': 0, 'flats': 50},
   };
 
   // Parking rates (2026-27)
@@ -425,11 +425,11 @@ class AccountingConfig {
     }
 
     final rateData = blockRateBreakup[block] ?? blockRateBreakup['A']!;
-    final double baseMaint = (rateData['maintenance'] ?? 360).toDouble();
-    final double pujaSub = (rateData['puja'] ?? 90).toDouble();
+    final double baseMaint = (rateData['maintenance'] ?? rateData['total'] ?? 390).toDouble();
+    final double pujaSub = 0.0;
     final double carCharges = carCount * (parkingRates['Four-Wheeler'] ?? 430).toDouble();
     final double bikeCharges = bikeCount * (parkingRates['Two-Wheeler'] ?? 100).toDouble();
-    final double total = baseMaint + pujaSub + carCharges + bikeCharges;
+    final double total = baseMaint + carCharges + bikeCharges;
 
     return FlatMaintenanceBreakdown(
       block: block,
