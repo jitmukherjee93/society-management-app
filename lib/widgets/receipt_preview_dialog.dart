@@ -46,30 +46,44 @@ class ReceiptPreviewDialog extends StatefulWidget {
   });
 
   /// Helper to format 2-Wheeler (T.W.) and 4-Wheeler (F.W.) vehicle registration numbers cleanly
+  /// strictly constrained by what was billed (carCount / bikeCount or parking charges).
   static String formatVehicleNumbers({
     dynamic carReg,
     dynamic bikeReg,
     dynamic bike2Reg,
     String? fallback,
+    int? carCount,
+    int? bikeCount,
+    double? carParkingCharges,
+    double? bikeParkingCharges,
   }) {
-    final List<String> parts = [];
-    final cleanCar = (carReg ?? '').toString().trim();
-    final cleanBike = (bikeReg ?? '').toString().trim();
-    final cleanBike2 = (bike2Reg ?? '').toString().trim();
-
+    // If fallback is provided and contains formatted vehicle strings, check if valid
     bool isValid(String s) {
       if (s.isEmpty) return false;
       final up = s.toUpperCase();
       return up != '-' && up != '—' && up != 'N/A' && up != 'NONE' && up != 'NULL';
     }
 
-    if (isValid(cleanCar)) {
+    final double carAmt = carParkingCharges ?? (carCount != null ? carCount * 430.0 : 430.0);
+    final double bikeAmt = bikeParkingCharges ?? (bikeCount != null ? bikeCount * 100.0 : 100.0);
+
+    // If zero parking billed at all, do NOT show any vehicles
+    if (carAmt <= 0 && bikeAmt <= 0) {
+      return '—';
+    }
+
+    final List<String> parts = [];
+    final cleanCar = (carReg ?? '').toString().trim();
+    final cleanBike = (bikeReg ?? '').toString().trim();
+    final cleanBike2 = (bike2Reg ?? '').toString().trim();
+
+    if (carAmt > 0 && isValid(cleanCar)) {
       parts.add('4W: $cleanCar');
     }
-    if (isValid(cleanBike)) {
+    if (bikeAmt >= 100 && isValid(cleanBike)) {
       parts.add('2W: $cleanBike');
     }
-    if (isValid(cleanBike2)) {
+    if (bikeAmt >= 200 && isValid(cleanBike2)) {
       parts.add('2W: $cleanBike2');
     }
 
@@ -159,6 +173,8 @@ class ReceiptPreviewDialog extends StatefulWidget {
     final amt = (dueData['amount'] as num?)?.toDouble() ?? 0.0;
     final car = (dueData['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
     final bike = (dueData['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0;
+    final carCount = (dueData['carCount'] as num?)?.toInt();
+    final bikeCount = (dueData['bikeCount'] as num?)?.toInt();
     final totalParking = car + bike;
 
     final rawBase = (dueData['baseMaintenance'] as num?)?.toDouble();
@@ -192,6 +208,10 @@ class ReceiptPreviewDialog extends StatefulWidget {
       bikeReg: dueData['bikeReg'] ?? dueData['bike1Registration'] ?? dueData['bikeRegistration'] ?? dueData['twoWheelerReg'],
       bike2Reg: dueData['bike2Reg'] ?? dueData['bike2Registration'],
       fallback: dueData['vehicleReg']?.toString(),
+      carCount: carCount,
+      bikeCount: bikeCount,
+      carParkingCharges: car,
+      bikeParkingCharges: bike,
     );
 
     final initialName = residentName ??
@@ -246,10 +266,10 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
     final bool nameNeedsFetch = _residentName.isEmpty ||
         _residentName == 'Flat Occupant / Member' ||
         _residentName == 'Resident';
-    final bool vehicleNeedsFetch = _vehicleReg.isEmpty ||
+    final bool vehicleNeedsFetch = (_vehicleReg.isEmpty ||
         _vehicleReg == '—' ||
         _vehicleReg == 'N/A' ||
-        _vehicleReg == '-';
+        _vehicleReg == '-') && (widget.carParkingCharges > 0 || widget.bikeParkingCharges > 0);
 
     if (nameNeedsFetch || vehicleNeedsFetch) {
       setState(() => _isFetchingDetails = true);
@@ -269,12 +289,14 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                 _residentName = fetchedName;
               }
             }
-            if (vehicleNeedsFetch) {
+            if (vehicleNeedsFetch && (widget.carParkingCharges > 0 || widget.bikeParkingCharges > 0)) {
               final formattedVehicles = ReceiptPreviewDialog.formatVehicleNumbers(
                 carReg: uData['carReg'] ?? uData['carRegistration'] ?? uData['fourWheelerReg'] ?? uData['carNo'],
                 bikeReg: uData['bikeReg'] ?? uData['bike1Registration'] ?? uData['bikeRegistration'] ?? uData['twoWheelerReg'] ?? uData['bikeNo'],
                 bike2Reg: uData['bike2Reg'] ?? uData['bike2Registration'],
                 fallback: _vehicleReg,
+                carParkingCharges: widget.carParkingCharges,
+                bikeParkingCharges: widget.bikeParkingCharges,
               );
               if (formattedVehicles.isNotEmpty && formattedVehicles != '—') {
                 _vehicleReg = formattedVehicles;
@@ -421,7 +443,7 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                           ),
                           child: const Center(
                             child: Text(
-                              'RAMKRISHNA PURAM RESIDENTS WELFARE ASSOCIATION',
+                              "RAMKRISHNAPURAM RESIDENTS' WELFARE ASSOCIATION",
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 15,
@@ -531,8 +553,14 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                                           const Text('Rate Per Month', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
                                           const SizedBox(height: 2),
                                           Text('Maint. :  Rs. ${widget.baseMaintenance.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
-                                          const SizedBox(height: 2),
-                                          Text('Car Park : Rs. ${widget.carParkingCharges.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
+                                          if (widget.carParkingCharges > 0) ...[
+                                            const SizedBox(height: 2),
+                                            Text('Car Park : Rs. ${widget.carParkingCharges.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
+                                          ],
+                                          if (widget.bikeParkingCharges > 0) ...[
+                                            const SizedBox(height: 2),
+                                            Text('Bike Park : Rs. ${widget.bikeParkingCharges.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
+                                          ],
                                         ],
                                       ),
                                       const SizedBox(width: 14),
@@ -574,61 +602,70 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 8),
+                                  if (totalParking > 0) ...[
+                                    const SizedBox(height: 8),
 
-                                  // Car parking line
-                                  Row(
-                                    children: [
-                                      const Text('Car Parking Charge for the month of ', style: TextStyle(fontSize: 11)),
-                                      Expanded(
-                                        child: Container(
-                                          decoration: const BoxDecoration(
-                                            border: Border(bottom: BorderSide(color: Colors.black, width: 0.8, style: BorderStyle.solid)),
-                                          ),
-                                          padding: const EdgeInsets.only(left: 4),
-                                          child: Text(
-                                            totalParking > 0 ? widget.month : 'N/A',
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                                    // Car / Bike parking line
+                                    Row(
+                                      children: [
+                                        Text(
+                                          (widget.carParkingCharges > 0 && widget.bikeParkingCharges > 0)
+                                              ? 'Car & Two-Wheeler Parking Charge for the month of '
+                                              : (widget.bikeParkingCharges > 0 && widget.carParkingCharges <= 0)
+                                                  ? 'Two-Wheeler Parking Charge for the month of '
+                                                  : 'Car Parking Charge for the month of ',
+                                          style: const TextStyle(fontSize: 11),
+                                        ),
+                                        Expanded(
+                                          child: Container(
+                                            decoration: const BoxDecoration(
+                                              border: Border(bottom: BorderSide(color: Colors.black, width: 0.8, style: BorderStyle.solid)),
+                                            ),
+                                            padding: const EdgeInsets.only(left: 4),
+                                            child: Text(
+                                              widget.month,
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 6),
 
-                                  // T.W / F.W line
-                                  Row(
-                                    children: [
-                                      const Text('T.W/F.W. No. ', style: TextStyle(fontSize: 11)),
-                                      Expanded(
-                                        flex: 5,
-                                        child: Container(
-                                          decoration: const BoxDecoration(
-                                            border: Border(bottom: BorderSide(color: Colors.black, width: 0.8, style: BorderStyle.solid)),
-                                          ),
-                                          padding: const EdgeInsets.only(left: 4),
-                                          child: Text(
-                                            _vehicleReg.isNotEmpty ? _vehicleReg : '—',
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
-                                          ),
-                                        ),
-                                      ),
-                                      const Text('   Rs. ', style: TextStyle(fontSize: 11)),
-                                      Expanded(
-                                        flex: 3,
-                                        child: Container(
-                                          decoration: const BoxDecoration(
-                                            border: Border(bottom: BorderSide(color: Colors.black, width: 0.8, style: BorderStyle.solid)),
-                                          ),
-                                          padding: const EdgeInsets.only(left: 4),
-                                          child: Text(
-                                            totalParking > 0 ? totalParking.toStringAsFixed(2) : '0.00',
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                                    // T.W / F.W line
+                                    Row(
+                                      children: [
+                                        const Text('T.W/F.W. No. ', style: TextStyle(fontSize: 11)),
+                                        Expanded(
+                                          flex: 5,
+                                          child: Container(
+                                            decoration: const BoxDecoration(
+                                              border: Border(bottom: BorderSide(color: Colors.black, width: 0.8, style: BorderStyle.solid)),
+                                            ),
+                                            padding: const EdgeInsets.only(left: 4),
+                                            child: Text(
+                                              _vehicleReg.isNotEmpty ? _vehicleReg : '—',
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
+                                        const Text('   Rs. ', style: TextStyle(fontSize: 11)),
+                                        Expanded(
+                                          flex: 3,
+                                          child: Container(
+                                            decoration: const BoxDecoration(
+                                              border: Border(bottom: BorderSide(color: Colors.black, width: 0.8, style: BorderStyle.solid)),
+                                            ),
+                                            padding: const EdgeInsets.only(left: 4),
+                                            child: Text(
+                                              totalParking.toStringAsFixed(2),
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                   const SizedBox(height: 6),
 
                                   // Cash / Cheque / Ref Line
@@ -696,14 +733,17 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                             // RIGHT AREA: Labels (Special Fund, TOTAL) + TABLE (Rs. | P.)
                             Row(
                               mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.end,
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 // Labels column aligned with rows 3 and 4 of table
                                 Column(
                                   crossAxisAlignment: CrossAxisAlignment.end,
                                   children: [
+                                    const SizedBox(height: 20), // Header spacer
+                                    const SizedBox(height: 24), // Maint spacer
+                                    const SizedBox(height: 24), // Parking spacer
                                     Container(
-                                      height: 20,
+                                      height: 24,
                                       alignment: Alignment.centerRight,
                                       padding: const EdgeInsets.only(right: 6),
                                       child: const Text(
@@ -822,14 +862,50 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                       onPressed: () => Navigator.pop(context),
                       child: const Text('Close'),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        side: const BorderSide(color: AppColors.primary),
+                      ),
+                      icon: const Icon(Icons.download_rounded, size: 18),
+                      label: const Text('Download PDF'),
+                      onPressed: () async {
+                        DateTime parsedDate = DateTime.now();
+                        if (widget.dueData['verifiedAt'] != null && widget.dueData['verifiedAt'].toDate != null) {
+                          parsedDate = widget.dueData['verifiedAt'].toDate();
+                        } else if (widget.dueData['paidAt'] != null && widget.dueData['paidAt'].toDate != null) {
+                          parsedDate = widget.dueData['paidAt'].toDate();
+                        }
+
+                        await ReceiptPdfService.downloadReceiptPdf(
+                          receiptNumber: widget.receiptNumber,
+                          date: parsedDate,
+                          residentName: _residentName,
+                          block: widget.block,
+                          flatNumber: widget.flatNumber,
+                          billingMonth: widget.month,
+                          financialYear: widget.financialYear,
+                          baseMaintenance: widget.baseMaintenance,
+                          carParkingCharges: widget.carParkingCharges,
+                          bikeParkingCharges: widget.bikeParkingCharges,
+                          pujaSubscription: widget.pujaSubscription,
+                          totalAmount: widget.totalAmount,
+                          vehicleReg: _vehicleReg,
+                          paymentMode: widget.paymentMode,
+                          referenceNumber: widget.referenceNumber,
+                          bankName: widget.bankName,
+                        );
+                      },
+                    ),
+                    const SizedBox(width: 8),
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.primary,
                         foregroundColor: Colors.white,
                       ),
                       icon: const Icon(Icons.print_rounded, size: 18),
-                      label: const Text('Print / Save PDF'),
+                      label: const Text('Print'),
                       onPressed: () async {
                         DateTime parsedDate = DateTime.now();
                         if (widget.dueData['verifiedAt'] != null && widget.dueData['verifiedAt'].toDate != null) {

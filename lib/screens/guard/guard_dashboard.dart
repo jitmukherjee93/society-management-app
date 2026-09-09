@@ -110,79 +110,92 @@ class _GuardDashboardState extends State<GuardDashboard> {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Gate Pass Verification',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 32),
-            TextField(
-              controller: _codeController,
-              decoration: const InputDecoration(
-                labelText: 'Enter 6-digit code',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.qr_code),
-              ),
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.all(16),
-                backgroundColor: Colors.blueGrey,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: _isLoading ? null : _verifyPass,
-              child: _isLoading && _visitorDocId == null
-                  ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white))
-                  : const Text('Verify Pass', style: TextStyle(fontSize: 18)),
-            ),
-            
-            if (_visitorData != null) ...[
-              const SizedBox(height: 32),
-              Card(
-                elevation: 4,
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Visitor Details', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
-                      const Divider(),
-                      Text('Name: ${_visitorData!['visitorName']}', style: const TextStyle(fontSize: 18)),
-                      const SizedBox(height: 8),
-                      Text('Purpose: ${_visitorData!['purpose']}', style: const TextStyle(fontSize: 18)),
-                      const SizedBox(height: 8),
-                      Text('Visiting Flat: ${_visitorData!['hostFlatNumber']}', style: const TextStyle(fontSize: 18)),
-                      const SizedBox(height: 24),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.all(16)
-                          ),
-                          onPressed: _isLoading ? null : _checkInVisitor,
-                          icon: const Icon(Icons.check_circle),
-                          label: _isLoading && _visitorDocId != null
-                              ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white))
-                              : const Text('Confirm Entry & Check In', style: TextStyle(fontSize: 18)),
-                        ),
-                      )
-                    ],
-                  ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 500),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Icon(Icons.security, size: 48, color: Colors.blueGrey),
+                const SizedBox(height: 12),
+                const Text(
+                  'Gate Pass Verification',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
                 ),
-              )
-            ]
-          ],
+                const SizedBox(height: 8),
+                const Text(
+                  'Enter the 6-digit visitor entry code provided by the resident.',
+                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                TextField(
+                  controller: _codeController,
+                  decoration: const InputDecoration(
+                    labelText: 'Enter 6-digit code',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.qr_code),
+                  ),
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.all(16),
+                    backgroundColor: Colors.blueGrey,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: _isLoading ? null : _verifyPass,
+                  child: _isLoading && _visitorDocId == null
+                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white))
+                      : const Text('Verify Pass', style: TextStyle(fontSize: 18)),
+                ),
+                
+                if (_visitorData != null) ...[
+                  const SizedBox(height: 32),
+                  Card(
+                    elevation: 4,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Visitor Details', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+                          const Divider(),
+                          Text('Name: ${_visitorData!['visitorName']}', style: const TextStyle(fontSize: 18)),
+                          const SizedBox(height: 8),
+                          Text('Purpose: ${_visitorData!['purpose']}', style: const TextStyle(fontSize: 18)),
+                          const SizedBox(height: 8),
+                          Text('Visiting Flat: ${_visitorData!['hostFlatNumber']}', style: const TextStyle(fontSize: 18)),
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.all(16)
+                              ),
+                              onPressed: _isLoading ? null : _checkInVisitor,
+                              icon: const Icon(Icons.check_circle),
+                              label: _isLoading && _visitorDocId != null
+                                  ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white))
+                                  : const Text('Confirm Entry & Check In', style: TextStyle(fontSize: 18)),
+                            ),
+                          )
+                        ],
+                      ),
+                    ),
+                  )
+                ]
+              ],
+            ),
+          ),
         ),
       ),
     );

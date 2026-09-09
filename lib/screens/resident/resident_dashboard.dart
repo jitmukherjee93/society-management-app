@@ -572,7 +572,7 @@ class _HomeTabState extends State<HomeTab> {
                                   icon: const Icon(Icons.attach_file, size: 16),
                                   label: Text(carRcFile == null ? 'Select File' : 'Change'),
                                   onPressed: () async {
-                                    final file = await pickFile();
+                                    final file = await pickFile(context: context);
                                     if (file != null) {
                                       setDS(() => carRcFile = file);
                                     }
@@ -684,7 +684,7 @@ class _HomeTabState extends State<HomeTab> {
                                   icon: const Icon(Icons.attach_file, size: 16),
                                   label: Text(bikeRcFile == null ? 'Select File' : 'Change'),
                                   onPressed: () async {
-                                    final file = await pickFile();
+                                    final file = await pickFile(context: context);
                                     if (file != null) {
                                       setDS(() => bikeRcFile = file);
                                     }
@@ -786,7 +786,7 @@ class _HomeTabState extends State<HomeTab> {
                                     icon: const Icon(Icons.attach_file, size: 16),
                                     label: Text(bike2RcFile == null ? 'Select File' : 'Change'),
                                     onPressed: () async {
-                                      final file = await pickFile();
+                                      final file = await pickFile(context: context);
                                       if (file != null) {
                                         setDS(() => bike2RcFile = file);
                                       }
@@ -1633,10 +1633,11 @@ class NotificationsTab extends StatelessWidget {
                     final type =
                         (notif['type'] ?? '').toString().toUpperCase();
 
-                    final isApproved = type == 'VEHICLE_APPROVED';
-                    final isRejected = type == 'VEHICLE_REJECTED';
-                    final isVehicle =
-                        isApproved || isRejected || type.contains('VEHICLE');
+                    final isApproved = type.contains('APPROVED');
+                    final isRejected = type.contains('REJECTED');
+                    final isPaymentApproved = type == 'MAINTENANCE_PAYMENT_APPROVED';
+                    final isPaymentRejected = type == 'MAINTENANCE_PAYMENT_REJECTED';
+                    final isVehicle = type.contains('VEHICLE');
                     final isComplaint = type.contains('COMPLAINT');
                     final isMaintenance =
                         type.contains('MAINTENANCE') || type.contains('PAYMENT');
@@ -1689,13 +1690,17 @@ class NotificationsTab extends StatelessWidget {
                             Text(msg, style: const TextStyle(fontSize: 12)),
                             const SizedBox(height: 4),
                             Text(
-                              isVehicle
-                                  ? 'Tap to view in Vehicle Details'
-                                  : isComplaint
-                                      ? 'Tap to open Helpdesk'
-                                      : isMaintenance
-                                          ? 'Tap to view & pay Maintenance'
-                                          : 'Tap to view',
+                              isPaymentApproved
+                                  ? 'Tap to view & download official receipt'
+                                  : isPaymentRejected
+                                      ? '⚠️ Please meet authorities in person to resolve conflicts'
+                                      : isVehicle
+                                          ? 'Tap to view in Vehicle Details'
+                                          : isComplaint
+                                              ? 'Tap to open Helpdesk'
+                                              : isMaintenance
+                                                  ? 'Tap to view & pay Maintenance'
+                                                  : 'Tap to view',
                               style: TextStyle(
                                 fontSize: 11,
                                 color: isApproved
@@ -1733,8 +1738,29 @@ class NotificationsTab extends StatelessWidget {
                             const Icon(Icons.chevron_right, color: Colors.grey),
                           ],
                         ),
-                        onTap: () {
-                          if (isVehicle) {
+                        onTap: () async {
+                          if (isPaymentApproved) {
+                            final dueId = notif['dueId']?.toString();
+                            final receiptNo = notif['receiptNumber']?.toString();
+                            if (dueId != null && dueId.isNotEmpty) {
+                              try {
+                                final dueDoc = await FirebaseFirestore.instance.collection('maintenance_dues').doc(dueId).get();
+                                if (dueDoc.exists && context.mounted) {
+                                  ReceiptPreviewDialog.show(
+                                    context: context,
+                                    dueData: dueDoc.data()!,
+                                    receiptNumber: receiptNo,
+                                  );
+                                  return;
+                                }
+                              } catch (_) {}
+                            }
+                            final month = notif['month']?.toString();
+                            onNavigateTab?.call(4, month); // Fallback to Maintenance tab
+                          } else if (isPaymentRejected) {
+                            final month = notif['month']?.toString();
+                            onNavigateTab?.call(4, month); // Maintenance tab
+                          } else if (isVehicle) {
                             onNavigateTab?.call(0); // Home tab
                           } else if (isComplaint) {
                             onNavigateTab?.call(3); // Helpdesk tab
@@ -2475,15 +2501,14 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                         ),
                                         onPressed: () {
-                                          final receiptData = Map<String, dynamic>.from(data);
-                                          if (userData['name'] != null && (userData['name'].toString().isNotEmpty)) {
-                                            receiptData['residentName'] = userData['name'];
-                                          }
-                                          if (userData['carReg'] != null) receiptData['carReg'] = userData['carReg'];
-                                          if (userData['bikeReg'] != null) receiptData['bikeReg'] = userData['bikeReg'];
-                                          if (userData['bike2Reg'] != null) receiptData['bike2Reg'] = userData['bike2Reg'];
-                                          _showReceiptDialog(context, receiptData, receiptNo, dateStr);
-                                        },
+                                           final receiptData = Map<String, dynamic>.from(data);
+                                           if ((receiptData['residentName'] == null || receiptData['residentName'].toString().isEmpty) &&
+                                               userData['name'] != null &&
+                                               userData['name'].toString().isNotEmpty) {
+                                             receiptData['residentName'] = userData['name'];
+                                           }
+                                           _showReceiptDialog(context, receiptData, receiptNo, dateStr);
+                                         },
                                       ),
                                     ],
                                   ),
@@ -3171,7 +3196,10 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
       setState(() => _isLoading = true);
       
       try {
-        final user = FirebaseAuth.instance.currentUser!;
+        final user = FirebaseAuth.instance.currentUser;
+        if (user == null) {
+          throw Exception('User is not logged in');
+        }
         // Fetch host flat number
         final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
         final flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
@@ -3403,7 +3431,12 @@ class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
           onPressed: () async {
             if (!formKey.currentState!.validate()) return;
             try {
-              final uid = FirebaseAuth.instance.currentUser!.uid;
+              final user = FirebaseAuth.instance.currentUser;
+              if (user == null) {
+                if (context.mounted) AppFeedback.showError(context, 'Session expired. Please log in again.');
+                return;
+              }
+              final uid = user.uid;
               final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
               final flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
               

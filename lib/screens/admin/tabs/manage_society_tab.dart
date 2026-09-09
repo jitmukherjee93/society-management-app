@@ -98,6 +98,25 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         final Map<String, int> csvFlatCars = {};
         final Map<String, int> csvFlatBikes = {};
 
+        // Pre-fetch all existing users once to eliminate N+1 network queries in the loop
+        final existingUsersSnap = await FirebaseFirestore.instance.collection('users').get();
+        final Map<String, Map<String, int>> cachedVehicleCounts = {};
+        for (final uDoc in existingUsersSnap.docs) {
+          final uData = uDoc.data();
+          final fId = (uData['flatNumber'] ?? '').toString().trim().toUpperCase();
+          if (fId.isEmpty) continue;
+          final current = cachedVehicleCounts.putIfAbsent(fId, () => {'cars': 0, 'bikes': 0});
+          if (uData['isCarOwner'] == true && (uData['carReg']?.toString().trim().isNotEmpty ?? false)) {
+            current['cars'] = (current['cars'] ?? 0) + 1;
+          }
+          if (uData['isBikeOwner'] == true && (uData['bikeReg']?.toString().trim().isNotEmpty ?? false)) {
+            current['bikes'] = (current['bikes'] ?? 0) + 1;
+          }
+          if (uData['hasBike2'] == true && (uData['bike2Reg']?.toString().trim().isNotEmpty ?? false)) {
+            current['bikes'] = (current['bikes'] ?? 0) + 1;
+          }
+        }
+
         for (var i = 1; i < csvTable.length; i++) {
           final row = csvTable[i];
           if (row.isEmpty ||
@@ -139,13 +158,14 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
           final docId = (block.isNotEmpty && !flatNo.contains('-'))
               ? '$block-$flatNo'
               : flatNo;
+          final normDocId = docId.toUpperCase();
 
           if (isCarOwner || isBikeOwner) {
-            final currentCounts = await _getFlatVehicleCounts(docId);
+            final currentCounts = cachedVehicleCounts[normDocId] ?? {'cars': 0, 'bikes': 0};
             final existingCars = currentCounts['cars'] ?? 0;
             final existingBikes = currentCounts['bikes'] ?? 0;
-            final batchCars = csvFlatCars[docId] ?? 0;
-            final batchBikes = csvFlatBikes[docId] ?? 0;
+            final batchCars = csvFlatCars[normDocId] ?? 0;
+            final batchBikes = csvFlatBikes[normDocId] ?? 0;
 
             if (isCarOwner && (existingCars + batchCars + 1 > 1)) {
               rowErrors.add('Flat $docId exceeds car quota (max 1 car per flat)');
@@ -160,8 +180,8 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
             continue;
           }
 
-          if (isCarOwner) csvFlatCars[docId] = (csvFlatCars[docId] ?? 0) + 1;
-          if (isBikeOwner) csvFlatBikes[docId] = (csvFlatBikes[docId] ?? 0) + 1;
+          if (isCarOwner) csvFlatCars[normDocId] = (csvFlatCars[normDocId] ?? 0) + 1;
+          if (isBikeOwner) csvFlatBikes[normDocId] = (csvFlatBikes[normDocId] ?? 0) + 1;
 
           await _saveRecord(flatNo, name, whatsapp, mobile, block,
               isCarOwner, carReg, isBikeOwner, bikeReg);
@@ -925,7 +945,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                       elevation: 0,
                     ),
                     onPressed: () async {
-                      final file = await pickFile();
+                      final file = await pickFile(context: context);
                       if (file != null) {
                         setDS(() => rentAgreementFile = file);
                       }

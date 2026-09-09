@@ -77,7 +77,7 @@ class BillingService {
     await NotificationService.notifyResident(
       flatNumber: normFlat,
       title: 'Maintenance Payment Approved ($voucherCode)',
-      message: 'Your maintenance payment of ${AppFormatters.currency(amount)} for $month (Ref: $uniqueId) has been verified and posted to Society Accounts. Receipt: $voucherCode.',
+      message: 'Your maintenance payment of ${AppFormatters.currency(amount)} for $month (Ref: $uniqueId) has been verified and posted to Society Accounts. Receipt No: $voucherCode. Tap to view and download your official receipt.',
       type: 'MAINTENANCE_PAYMENT_APPROVED',
       extraData: {
         'dueId': dueId,
@@ -87,6 +87,7 @@ class BillingService {
         'uniqueId': uniqueId,
         'paymentCategory': paymentCategory,
         'paymentMode': paymentMode,
+        'flatNumber': normFlat,
       },
       batch: batch,
     );
@@ -152,7 +153,7 @@ class BillingService {
     await NotificationService.notifyResident(
       flatNumber: normFlat,
       title: 'Cash Payment Receipt ($voucherCode)',
-      message: 'Cash payment of ${AppFormatters.currency(roundedAmount)} for $month has been collected at Society Office and confirmed. Receipt No: $voucherCode.',
+      message: 'Cash payment of ${AppFormatters.currency(roundedAmount)} for $month has been collected at Society Office and confirmed. Receipt No: $voucherCode. Tap to view and download your official receipt.',
       type: 'MAINTENANCE_PAYMENT_APPROVED',
       extraData: {
         'dueId': dueId,
@@ -161,6 +162,7 @@ class BillingService {
         'receiptNumber': voucherCode,
         'paymentCategory': 'OFFLINE',
         'paymentMode': 'Cash',
+        'flatNumber': normFlat,
       },
       batch: batch,
     );
@@ -189,12 +191,15 @@ class BillingService {
     await NotificationService.notifyResident(
       flatNumber: normFlat,
       title: 'Payment Submission Rejected ($month)',
-      message: 'Your payment submission for $month ($paymentMode, Ref: $uniqueId) was rejected by Admin. Reason: $reason. Please re-submit with a valid reference.',
+      message: 'Your payment submission for $month ($paymentMode, Ref: $uniqueId) was rejected by Admin. Reason: $reason. Please meet the society authorities in person to resolve conflicts.',
       type: 'MAINTENANCE_PAYMENT_REJECTED',
       extraData: {
         'dueId': dueId,
         'uniqueId': uniqueId,
         'rejectionReason': reason,
+        'month': month,
+        'flatNumber': normFlat,
+        'actionRequired': 'MEET_AUTHORITIES_IN_PERSON',
       },
     );
   }

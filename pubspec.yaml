@@ -48,6 +48,8 @@ dependencies:
   webview_flutter: ^4.14.1
   pdf: ^3.13.0
   printing: ^5.15.0
+  image: ^4.9.2
+  cross_file: ^0.3.4+2
 
 dev_dependencies:
   flutter_test:

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../../services/notification_service.dart';
+import '../../../utils/flat_utils.dart';
+import '../../../widgets/app_feedback.dart';
 
 class ManageComplaintsTab extends StatefulWidget {
   const ManageComplaintsTab({super.key});
@@ -52,7 +55,8 @@ class _ManageComplaintsTabState extends State<ManageComplaintsTab> {
           // Filter locally
           if (_filterStatus != 'ALL') {
             docs = docs.where((doc) {
-              final status = (doc.data() as Map<String, dynamic>)['status'] ?? 'OPEN';
+              final rawStatus = ((doc.data() as Map<String, dynamic>)['status'] ?? 'OPEN').toString().toUpperCase().replaceAll(' ', '_');
+              final status = const ['OPEN', 'IN_PROGRESS', 'RESOLVED'].contains(rawStatus) ? rawStatus : 'OPEN';
               return status == _filterStatus;
             }).toList();
           }
@@ -66,11 +70,17 @@ class _ManageComplaintsTabState extends State<ManageComplaintsTab> {
             itemCount: docs.length,
             itemBuilder: (context, index) {
               final data = docs[index].data() as Map<String, dynamic>;
-              final status = data['status'] ?? 'OPEN';
+              final rawStatus = (data['status'] ?? 'OPEN').toString().toUpperCase().replaceAll(' ', '_');
+              final validStatuses = const ['OPEN', 'IN_PROGRESS', 'RESOLVED'];
+              final status = validStatuses.contains(rawStatus) ? rawStatus : 'OPEN';
               
               Color statusColor = Colors.red;
               if (status == 'IN_PROGRESS') statusColor = Colors.orange;
               if (status == 'RESOLVED') statusColor = Colors.green;
+
+              final rawFlat = (data['flatNumber'] ?? 'Unknown').toString();
+              final normFlat = FlatUtils.normalize(rawFlat);
+              final title = (data['title'] ?? 'No Title').toString();
 
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
@@ -83,7 +93,7 @@ class _ManageComplaintsTabState extends State<ManageComplaintsTab> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(
-                            'Flat: ${data['flatNumber'] ?? 'Unknown'}',
+                            'Flat: $normFlat',
                             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                           ),
                           Container(
@@ -102,7 +112,7 @@ class _ManageComplaintsTabState extends State<ManageComplaintsTab> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        data['title'] ?? 'No Title',
+                        title,
                         style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 4),
@@ -124,12 +134,31 @@ class _ManageComplaintsTabState extends State<ManageComplaintsTab> {
                               DropdownMenuItem(value: 'IN_PROGRESS', child: Text('IN PROGRESS')),
                               DropdownMenuItem(value: 'RESOLVED', child: Text('RESOLVED')),
                             ],
-                            onChanged: (newStatus) {
+                            onChanged: (newStatus) async {
                               if (newStatus != null && newStatus != status) {
-                                FirebaseFirestore.instance
-                                    .collection('complaints')
-                                    .doc(docs[index].id)
-                                    .update({'status': newStatus, 'updatedAt': FieldValue.serverTimestamp()});
+                                try {
+                                  await FirebaseFirestore.instance
+                                      .collection('complaints')
+                                      .doc(docs[index].id)
+                                      .update({'status': newStatus, 'updatedAt': FieldValue.serverTimestamp()});
+
+                                  if (normFlat != 'Unknown') {
+                                    await NotificationService.notifyResident(
+                                      flatNumber: normFlat,
+                                      title: 'Complaint Status: $newStatus',
+                                      message: 'Your ticket "$title" status has been updated to $newStatus by Management.',
+                                      type: 'COMPLAINT_UPDATE',
+                                    );
+                                  }
+
+                                  if (context.mounted) {
+                                    AppFeedback.showSuccess(context, 'Ticket status updated to $newStatus');
+                                  }
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    AppFeedback.showError(context, 'Failed to update ticket: $e');
+                                  }
+                                }
                               }
                             },
                           ),

@@ -12,6 +12,7 @@ class ReceiptPdfService {
   ];
 
   static Future<Uint8List> generateReceiptPdf({
+    PdfPageFormat? pageFormat,
     required String receiptNumber,
     required DateTime date,
     required String residentName,
@@ -65,10 +66,13 @@ class ReceiptPdfService {
 
     final totalParkingCharges = carParkingCharges + bikeParkingCharges;
 
+    // Default to clean A4 or format provided by printer
+    final targetFormat = pageFormat ?? PdfPageFormat.a4;
+
     pdf.addPage(
       pw.Page(
-        pageFormat: PdfPageFormat.a5.landscape,
-        margin: const pw.EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        pageFormat: targetFormat,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 24, vertical: 20),
         build: (pw.Context context) {
           return pw.Container(
             padding: const pw.EdgeInsets.all(12),
@@ -76,6 +80,7 @@ class ReceiptPdfService {
               border: pw.Border.all(color: PdfColors.black, width: 1.5),
             ),
             child: pw.Column(
+              mainAxisSize: pw.MainAxisSize.min,
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
                 // 1. Header: RECEIPT
@@ -91,24 +96,24 @@ class ReceiptPdfService {
                 ),
                 pw.SizedBox(height: 3),
 
-                // 2. Heavy Double/Thick Box: RAMKRISHNA PURAM RESIDENTS WELFARE ASSOCIATION
+                // 2. Heavy Double/Thick Box: RAMKRISHNAPURAM RESIDENTS' WELFARE ASSOCIATION
                 pw.Container(
-                  padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: pw.BoxDecoration(
                     border: pw.Border.all(color: PdfColors.black, width: 1.8),
                   ),
                   child: pw.Center(
                     child: pw.Text(
-                      'RAMKRISHNA PURAM RESIDENTS WELFARE ASSOCIATION',
+                      "RAMKRISHNAPURAM RESIDENTS' WELFARE ASSOCIATION",
                       style: pw.TextStyle(
-                        fontSize: 14,
+                        fontSize: 13.5,
                         fontWeight: pw.FontWeight.bold,
                         letterSpacing: 0.8,
                       ),
                     ),
                   ),
                 ),
-                pw.SizedBox(height: 2),
+                pw.SizedBox(height: 3),
 
                 // 3. Address
                 pw.Center(
@@ -205,88 +210,103 @@ class ReceiptPdfService {
                 ),
                 pw.SizedBox(height: 6),
 
-                // 7. Middle Core: Left Rates + Center Month Matrix & Details + Right Rs./P. Table
-                pw.Expanded(
-                  child: pw.Row(
-                    crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-                    children: [
-                      // LEFT & CENTER AREA
-                      pw.Expanded(
-                        flex: 75,
-                        child: pw.Column(
-                          crossAxisAlignment: pw.CrossAxisAlignment.start,
-                          children: [
-                            // Rates + Month Matrix Row
-                            pw.Row(
-                              crossAxisAlignment: pw.CrossAxisAlignment.start,
-                              children: [
-                                // Left Rates per month
-                                pw.Column(
-                                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                                  children: [
-                                    pw.Text(
-                                      'Rate Per Month',
-                                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
-                                    ),
-                                    pw.SizedBox(height: 2),
-                                    pw.Text(
-                                      'Maint. :  Rs. ${baseMaintenance.toStringAsFixed(0)}',
-                                      style: const pw.TextStyle(fontSize: 8.5),
-                                    ),
+                // 7. Middle Core: Left Rates & Breakdown + Right Compact Locked Table
+                pw.Row(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    // LEFT & CENTER AREA
+                    pw.Expanded(
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: [
+                          // Rates + Month Matrix Row
+                          pw.Row(
+                            crossAxisAlignment: pw.CrossAxisAlignment.start,
+                            children: [
+                              // Left Rates per month
+                              pw.Column(
+                                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                                children: [
+                                  pw.Text(
+                                    'Rate Per Month',
+                                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
+                                  ),
+                                  pw.SizedBox(height: 2),
+                                  pw.Text(
+                                    'Maint. :  Rs. ${baseMaintenance.toStringAsFixed(0)}',
+                                    style: const pw.TextStyle(fontSize: 8.5),
+                                  ),
+                                  if (carParkingCharges > 0) ...[
                                     pw.SizedBox(height: 2),
                                     pw.Text(
                                       'Car Park : Rs. ${carParkingCharges.toStringAsFixed(0)}',
                                       style: const pw.TextStyle(fontSize: 8.5),
                                     ),
                                   ],
-                                ),
-                                pw.SizedBox(width: 14),
+                                  if (bikeParkingCharges > 0) ...[
+                                    pw.SizedBox(height: 2),
+                                    pw.Text(
+                                      'Bike Park : Rs. ${bikeParkingCharges.toStringAsFixed(0)}',
+                                      style: const pw.TextStyle(fontSize: 8.5),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              pw.SizedBox(width: 12),
 
-                                // Month Matrix Pill Box
-                                pw.Expanded(
-                                  child: pw.Column(
-                                    crossAxisAlignment: pw.CrossAxisAlignment.center,
-                                    children: [
-                                      pw.Text(
-                                        'Maintenance Charge for the month of :',
-                                        style: const pw.TextStyle(fontSize: 8.5),
-                                      ),
-                                      pw.SizedBox(height: 3),
-                                      // Row 1: Apr to Sept
-                                      pw.Row(
-                                        mainAxisAlignment: pw.MainAxisAlignment.center,
-                                        children: _allMonths.sublist(0, 6).map((m) {
+                              // Month Matrix Pill Box
+                              pw.Expanded(
+                                child: pw.Column(
+                                  crossAxisAlignment: pw.CrossAxisAlignment.center,
+                                  children: [
+                                    pw.Text(
+                                      'Maintenance Charge for the month of :',
+                                      style: const pw.TextStyle(fontSize: 8.5),
+                                    ),
+                                    pw.SizedBox(height: 3),
+                                    // Row 1: Apr to Sept
+                                    pw.Row(
+                                      mainAxisAlignment: pw.MainAxisAlignment.center,
+                                      children: _allMonths.sublist(0, 6).map((m) {
+                                        final isSelected = (m == activeMonthCode);
+                                        return _buildMonthPill(m, isSelected);
+                                      }).toList(),
+                                    ),
+                                    pw.SizedBox(height: 2),
+                                    // Row 2: Oct to Mar
+                                    pw.Row(
+                                      mainAxisAlignment: pw.MainAxisAlignment.center,
+                                      children: [
+                                        ..._allMonths.sublist(6, 12).map((m) {
                                           final isSelected = (m == activeMonthCode);
                                           return _buildMonthPill(m, isSelected);
-                                        }).toList(),
-                                      ),
-                                      pw.SizedBox(height: 2),
-                                      // Row 2: Oct to Mar
-                                      pw.Row(
-                                        mainAxisAlignment: pw.MainAxisAlignment.center,
-                                        children: [
-                                          ..._allMonths.sublist(6, 12).map((m) {
-                                            final isSelected = (m == activeMonthCode);
-                                            return _buildMonthPill(m, isSelected);
-                                          }),
-                                          pw.SizedBox(width: 4),
-                                          pw.Text(
-                                            'YEAR: $financialYear',
-                                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 7.5),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
+                                        }),
+                                        pw.SizedBox(width: 4),
+                                        pw.Text(
+                                          'YEAR: $financialYear',
+                                          style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 7.5),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
+                          ),
+                          if (totalParkingCharges > 0) ...[
                             pw.SizedBox(height: 6),
 
-                            // Car Parking Charge for month line
+                            // Car / Bike Parking Charge for month line
                             pw.Row(
                               children: [
-                                pw.Text('Car Parking Charge for the month of ', style: const pw.TextStyle(fontSize: 8.5)),
+                                pw.Text(
+                                  (carParkingCharges > 0 && bikeParkingCharges > 0)
+                                      ? 'Car & Two-Wheeler Parking Charge for the month of '
+                                      : (bikeParkingCharges > 0 && carParkingCharges <= 0)
+                                          ? 'Two-Wheeler Parking Charge for the month of '
+                                          : 'Car Parking Charge for the month of ',
+                                  style: const pw.TextStyle(fontSize: 8.5),
+                                ),
                                 pw.Expanded(
                                   child: pw.Container(
                                     decoration: const pw.BoxDecoration(
@@ -294,7 +314,7 @@ class ReceiptPdfService {
                                     ),
                                     padding: const pw.EdgeInsets.only(left: 4),
                                     child: pw.Text(
-                                      totalParkingCharges > 0 ? billingMonth : 'N/A',
+                                      billingMonth,
                                       style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
                                     ),
                                   ),
@@ -329,204 +349,207 @@ class ReceiptPdfService {
                                     ),
                                     padding: const pw.EdgeInsets.only(left: 4),
                                     child: pw.Text(
-                                      totalParkingCharges > 0 ? totalParkingCharges.toStringAsFixed(2) : '0.00',
+                                      totalParkingCharges.toStringAsFixed(2),
                                       style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
                                     ),
                                   ),
                                 ),
                               ],
                             ),
-                            pw.SizedBox(height: 4),
+                          ],
+                          pw.SizedBox(height: 4),
 
-                            // Cash / Cheque / UTR No. line
-                            pw.Row(
-                              children: [
-                                pw.Text('Mode / Ref No. ', style: const pw.TextStyle(fontSize: 8.5)),
-                                pw.Expanded(
-                                  flex: 5,
-                                  child: pw.Container(
-                                    decoration: const pw.BoxDecoration(
-                                      border: pw.Border(bottom: pw.BorderSide(color: PdfColors.black, width: 0.8, style: pw.BorderStyle.dotted)),
-                                    ),
-                                    padding: const pw.EdgeInsets.only(left: 4),
-                                    child: pw.Text(
-                                      referenceNumber.isNotEmpty ? referenceNumber : paymentMode,
-                                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
-                                      overflow: pw.TextOverflow.clip,
-                                    ),
+                          // Cash / Cheque / UTR No. line
+                          pw.Row(
+                            children: [
+                              pw.Text('Mode / Ref No. ', style: const pw.TextStyle(fontSize: 8.5)),
+                              pw.Expanded(
+                                flex: 5,
+                                child: pw.Container(
+                                  decoration: const pw.BoxDecoration(
+                                    border: pw.Border(bottom: pw.BorderSide(color: PdfColors.black, width: 0.8, style: pw.BorderStyle.dotted)),
+                                  ),
+                                  padding: const pw.EdgeInsets.only(left: 4),
+                                  child: pw.Text(
+                                    referenceNumber.isNotEmpty ? referenceNumber : paymentMode,
+                                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
+                                    overflow: pw.TextOverflow.clip,
                                   ),
                                 ),
-                                pw.Text('  Date ', style: const pw.TextStyle(fontSize: 8.5)),
-                                pw.Container(
-                                  width: 65,
+                              ),
+                              pw.Text('  Date ', style: const pw.TextStyle(fontSize: 8.5)),
+                              pw.Container(
+                                width: 65,
+                                decoration: const pw.BoxDecoration(
+                                  border: pw.Border(bottom: pw.BorderSide(color: PdfColors.black, width: 0.8, style: pw.BorderStyle.dotted)),
+                                ),
+                                padding: const pw.EdgeInsets.only(left: 2),
+                                child: pw.Text(dateStr, style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5)),
+                              ),
+                              pw.Text('  Bank ', style: const pw.TextStyle(fontSize: 8.5)),
+                              pw.Expanded(
+                                flex: 3,
+                                child: pw.Container(
                                   decoration: const pw.BoxDecoration(
                                     border: pw.Border(bottom: pw.BorderSide(color: PdfColors.black, width: 0.8, style: pw.BorderStyle.dotted)),
                                   ),
                                   padding: const pw.EdgeInsets.only(left: 2),
-                                  child: pw.Text(dateStr, style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5)),
-                                ),
-                                pw.Text('  Bank ', style: const pw.TextStyle(fontSize: 8.5)),
-                                pw.Expanded(
-                                  flex: 3,
-                                  child: pw.Container(
-                                    decoration: const pw.BoxDecoration(
-                                      border: pw.Border(bottom: pw.BorderSide(color: PdfColors.black, width: 0.8, style: pw.BorderStyle.dotted)),
-                                    ),
-                                    padding: const pw.EdgeInsets.only(left: 2),
-                                    child: pw.Text(
-                                      bankName ?? (paymentMode.toUpperCase().contains('ONLINE') ? 'Online UPI/NEFT' : paymentMode),
-                                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
-                                    ),
+                                  child: pw.Text(
+                                    bankName ?? (paymentMode.toUpperCase().contains('ONLINE') ? 'Online UPI/NEFT' : paymentMode),
+                                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
                                   ),
-                                ),
-                              ],
-                            ),
-                            pw.SizedBox(height: 4),
-
-                            // Rupees in words
-                            pw.Row(
-                              children: [
-                                pw.Text('(Rupees ', style: const pw.TextStyle(fontSize: 8.5)),
-                                pw.Expanded(
-                                  child: pw.Container(
-                                    decoration: const pw.BoxDecoration(
-                                      border: pw.Border(bottom: pw.BorderSide(color: PdfColors.black, width: 0.8, style: pw.BorderStyle.dotted)),
-                                    ),
-                                    padding: const pw.EdgeInsets.only(left: 2),
-                                    child: pw.Text(
-                                      amountInWords,
-                                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
-                                    ),
-                                  ),
-                                ),
-                                pw.Text(' )', style: const pw.TextStyle(fontSize: 8.5)),
-                              ],
-                            ),
-                            pw.SizedBox(height: 10),
-
-                            // Electronically generated disclaimer
-                            pw.Text(
-                              '* This is an electronically generated receipt and does not require a physical signature.',
-                              style: pw.TextStyle(
-                                fontWeight: pw.FontWeight.bold,
-                                fontStyle: pw.FontStyle.italic,
-                                fontSize: 7,
-                                color: PdfColors.black,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      pw.SizedBox(width: 6),
-
-                      // RIGHT AREA: Labels (Special Fund, TOTAL) + TABLE (Rs. | P.)
-                      pw.Row(
-                        mainAxisSize: pw.MainAxisSize.min,
-                        crossAxisAlignment: pw.CrossAxisAlignment.end,
-                        children: [
-                          // Labels column aligned with rows 3 and 4 of table
-                          pw.Column(
-                            crossAxisAlignment: pw.CrossAxisAlignment.end,
-                            children: [
-                              pw.Container(
-                                height: 18,
-                                alignment: pw.Alignment.centerRight,
-                                padding: const pw.EdgeInsets.only(right: 4),
-                                child: pw.Text(
-                                  'Special Fund',
-                                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
-                                ),
-                              ),
-                              pw.Container(
-                                height: 22,
-                                alignment: pw.Alignment.centerRight,
-                                padding: const pw.EdgeInsets.only(right: 4),
-                                child: pw.Text(
-                                  'TOTAL',
-                                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5),
                                 ),
                               ),
                             ],
                           ),
+                          pw.SizedBox(height: 4),
 
-                          // Right Table Container
-                          pw.Container(
-                            width: 85,
-                            decoration: pw.BoxDecoration(
-                              border: pw.Border.all(color: PdfColors.black, width: 1.2),
-                            ),
-                            child: pw.Column(
-                              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-                              children: [
-                                // Table Header
-                                pw.Container(
-                                  height: 18,
+                          // Rupees in words
+                          pw.Row(
+                            children: [
+                              pw.Text('(Rupees ', style: const pw.TextStyle(fontSize: 8.5)),
+                              pw.Expanded(
+                                child: pw.Container(
                                   decoration: const pw.BoxDecoration(
-                                    border: pw.Border(bottom: pw.BorderSide(color: PdfColors.black, width: 1)),
+                                    border: pw.Border(bottom: pw.BorderSide(color: PdfColors.black, width: 0.8, style: pw.BorderStyle.dotted)),
                                   ),
-                                  child: pw.Row(
-                                    children: [
-                                      pw.Expanded(
-                                        flex: 65,
-                                        child: pw.Center(child: pw.Text('Rs.', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5))),
-                                      ),
-                                      pw.Container(width: 1, color: PdfColors.black),
-                                      pw.Expanded(
-                                        flex: 35,
-                                        child: pw.Center(child: pw.Text('P.', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5))),
-                                      ),
-                                    ],
+                                  padding: const pw.EdgeInsets.only(left: 2),
+                                  child: pw.Text(
+                                    amountInWords,
+                                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
                                   ),
                                 ),
-                                // Row 1: Maintenance
-                                _buildAmountRow(baseMaintenance),
-                                // Row 2: Car/Bike Parking
-                                _buildAmountRow(totalParkingCharges),
-                                // Row 3: Special Fund / Puja
-                                _buildAmountRow(pujaSubscription),
-                                // TOTAL Row with double top border
-                                pw.Container(
-                                  height: 22,
-                                  decoration: const pw.BoxDecoration(
-                                    border: pw.Border(
-                                      top: pw.BorderSide(color: PdfColors.black, width: 1.5),
-                                    ),
-                                  ),
-                                  child: pw.Row(
-                                    children: [
-                                      pw.Expanded(
-                                        flex: 65,
-                                        child: pw.Container(
-                                          alignment: pw.Alignment.centerRight,
-                                          padding: const pw.EdgeInsets.only(right: 4),
-                                          child: pw.Text(
-                                            totalAmount.floor().toString(),
-                                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5),
-                                          ),
-                                        ),
-                                      ),
-                                      pw.Container(width: 1, color: PdfColors.black),
-                                      pw.Expanded(
-                                        flex: 35,
-                                        child: pw.Container(
-                                          alignment: pw.Alignment.center,
-                                          child: pw.Text(
-                                            ((totalAmount - totalAmount.floor()) * 100).round().toString().padLeft(2, '0'),
-                                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
+                              ),
+                              pw.Text(' )', style: const pw.TextStyle(fontSize: 8.5)),
+                            ],
+                          ),
+                          pw.SizedBox(height: 8),
+
+                          // Electronically generated disclaimer
+                          pw.Text(
+                            '* This is an electronically generated receipt and does not require a physical signature.',
+                            style: pw.TextStyle(
+                              fontWeight: pw.FontWeight.bold,
+                              fontStyle: pw.FontStyle.italic,
+                              fontSize: 7.5,
+                              color: PdfColors.black,
                             ),
                           ),
                         ],
                       ),
-                    ],
-                  ),
+                    ),
+
+                    pw.SizedBox(width: 8),
+
+                    // RIGHT AREA: Row-locked Table (Special Fund, TOTAL + Rs. | P.)
+                    pw.Row(
+                      mainAxisSize: pw.MainAxisSize.min,
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        // Left Labels aligned with respective table rows
+                        pw.Column(
+                          crossAxisAlignment: pw.CrossAxisAlignment.end,
+                          children: [
+                            pw.Container(height: 18), // Header row spacer
+                            pw.Container(height: 18), // Maint row spacer
+                            pw.Container(height: 18), // Parking row spacer
+                            pw.Container(
+                              height: 18,
+                              alignment: pw.Alignment.centerRight,
+                              padding: const pw.EdgeInsets.only(right: 4),
+                              child: pw.Text(
+                                'Special Fund',
+                                style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
+                              ),
+                            ),
+                            pw.Container(
+                              height: 22,
+                              alignment: pw.Alignment.centerRight,
+                              padding: const pw.EdgeInsets.only(right: 4),
+                              child: pw.Text(
+                                'TOTAL',
+                                style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        // Locked-height Table Box with No Stretching
+                        pw.Container(
+                          width: 85,
+                          decoration: pw.BoxDecoration(
+                            border: pw.Border.all(color: PdfColors.black, width: 1.2),
+                          ),
+                          child: pw.Column(
+                            mainAxisSize: pw.MainAxisSize.min,
+                            children: [
+                              // Table Header: Rs. | P.
+                              pw.Container(
+                                height: 18,
+                                decoration: const pw.BoxDecoration(
+                                  border: pw.Border(bottom: pw.BorderSide(color: PdfColors.black, width: 1)),
+                                ),
+                                child: pw.Row(
+                                  children: [
+                                    pw.Expanded(
+                                      flex: 65,
+                                      child: pw.Center(child: pw.Text('Rs.', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5))),
+                                    ),
+                                    pw.Container(width: 1, height: 18, color: PdfColors.black),
+                                    pw.Expanded(
+                                      flex: 35,
+                                      child: pw.Center(child: pw.Text('P.', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5))),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // Row 1: Maintenance
+                              _buildAmountRow(baseMaintenance),
+                              // Row 2: Car/Bike Parking
+                              _buildAmountRow(totalParkingCharges),
+                              // Row 3: Special Fund / Puja
+                              _buildAmountRow(pujaSubscription),
+                              // TOTAL Row with top double/heavy border
+                              pw.Container(
+                                height: 22,
+                                decoration: const pw.BoxDecoration(
+                                  border: pw.Border(
+                                    top: pw.BorderSide(color: PdfColors.black, width: 1.5),
+                                  ),
+                                ),
+                                child: pw.Row(
+                                  children: [
+                                    pw.Expanded(
+                                      flex: 65,
+                                      child: pw.Container(
+                                        alignment: pw.Alignment.centerRight,
+                                        padding: const pw.EdgeInsets.only(right: 4),
+                                        child: pw.Text(
+                                          totalAmount.floor().toString(),
+                                          style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5),
+                                        ),
+                                      ),
+                                    ),
+                                    pw.Container(width: 1, height: 22, color: PdfColors.black),
+                                    pw.Expanded(
+                                      flex: 35,
+                                      child: pw.Container(
+                                        alignment: pw.Alignment.center,
+                                        child: pw.Text(
+                                          ((totalAmount - totalAmount.floor()) * 100).round().toString().padLeft(2, '0'),
+                                          style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
 
                 pw.SizedBox(height: 6),
@@ -594,7 +617,7 @@ class ReceiptPdfService {
               ),
             ),
           ),
-          pw.Container(width: 1, color: PdfColors.black),
+          pw.Container(width: 1, height: 18, color: PdfColors.black),
           pw.Expanded(
             flex: 35,
             child: pw.Container(
@@ -607,6 +630,56 @@ class ReceiptPdfService {
           ),
         ],
       ),
+    );
+  }
+
+  /// Direct download / save with auto-populated file name
+  static Future<void> downloadReceiptPdf({
+    required String receiptNumber,
+    required DateTime date,
+    required String residentName,
+    required String block,
+    required String flatNumber,
+    required String billingMonth,
+    required String financialYear,
+    required double baseMaintenance,
+    required double carParkingCharges,
+    required double bikeParkingCharges,
+    required double pujaSubscription,
+    required double totalAmount,
+    required String vehicleReg,
+    required String paymentMode,
+    required String referenceNumber,
+    String? bankName,
+  }) async {
+    final pdfBytes = await generateReceiptPdf(
+      pageFormat: PdfPageFormat.a4,
+      receiptNumber: receiptNumber,
+      date: date,
+      residentName: residentName,
+      block: block,
+      flatNumber: flatNumber,
+      billingMonth: billingMonth,
+      financialYear: financialYear,
+      baseMaintenance: baseMaintenance,
+      carParkingCharges: carParkingCharges,
+      bikeParkingCharges: bikeParkingCharges,
+      pujaSubscription: pujaSubscription,
+      totalAmount: totalAmount,
+      vehicleReg: vehicleReg,
+      paymentMode: paymentMode,
+      referenceNumber: referenceNumber,
+      bankName: bankName,
+    );
+
+    final cleanFlat = flatNumber.replaceAll(RegExp(r'[^\w\-]'), '_');
+    final cleanMonth = billingMonth.replaceAll(RegExp(r'[^\w\-]'), '_');
+    final cleanReceipt = receiptNumber.replaceAll(RegExp(r'[^\w\-]'), '_');
+    final fileName = 'Receipt_${cleanFlat}_${cleanMonth}_$cleanReceipt.pdf';
+
+    await Printing.sharePdf(
+      bytes: pdfBytes,
+      filename: fileName,
     );
   }
 
@@ -629,28 +702,32 @@ class ReceiptPdfService {
     required String referenceNumber,
     String? bankName,
   }) async {
-    final bytes = await generateReceiptPdf(
-      receiptNumber: receiptNumber,
-      date: date,
-      residentName: residentName,
-      block: block,
-      flatNumber: flatNumber,
-      billingMonth: billingMonth,
-      financialYear: financialYear,
-      baseMaintenance: baseMaintenance,
-      carParkingCharges: carParkingCharges,
-      bikeParkingCharges: bikeParkingCharges,
-      pujaSubscription: pujaSubscription,
-      totalAmount: totalAmount,
-      vehicleReg: vehicleReg,
-      paymentMode: paymentMode,
-      referenceNumber: referenceNumber,
-      bankName: bankName,
-    );
+    final cleanFlat = flatNumber.replaceAll(RegExp(r'[^\w\-]'), '_');
+    final cleanMonth = billingMonth.replaceAll(RegExp(r'[^\w\-]'), '_');
+    final cleanReceipt = receiptNumber.replaceAll(RegExp(r'[^\w\-]'), '_');
+    final docName = 'Receipt_${cleanFlat}_${cleanMonth}_$cleanReceipt';
 
     await Printing.layoutPdf(
-      onLayout: (PdfPageFormat format) async => bytes,
-      name: 'Receipt_${flatNumber}_$billingMonth.pdf',
+      onLayout: (PdfPageFormat format) async => generateReceiptPdf(
+        pageFormat: format,
+        receiptNumber: receiptNumber,
+        date: date,
+        residentName: residentName,
+        block: block,
+        flatNumber: flatNumber,
+        billingMonth: billingMonth,
+        financialYear: financialYear,
+        baseMaintenance: baseMaintenance,
+        carParkingCharges: carParkingCharges,
+        bikeParkingCharges: bikeParkingCharges,
+        pujaSubscription: pujaSubscription,
+        totalAmount: totalAmount,
+        vehicleReg: vehicleReg,
+        paymentMode: paymentMode,
+        referenceNumber: referenceNumber,
+        bankName: bankName,
+      ),
+      name: docName,
     );
   }
 }

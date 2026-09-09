@@ -195,9 +195,23 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
       int generatedCount = 0;
       int notifiedCount = 0;
       int skippedPaidCount = 0;
-      final batch = FirebaseFirestore.instance.batch();
       final duesRef = FirebaseFirestore.instance.collection('maintenance_dues');
       final notificationsRef = FirebaseFirestore.instance.collection('notifications');
+
+      // Chunked batch helper to prevent exceeding Firestore's 500-op batch limit
+      var currentBatch = FirebaseFirestore.instance.batch();
+      int opCount = 0;
+      final batchesToCommit = <WriteBatch>[currentBatch];
+
+      void addBatchOp(void Function(WriteBatch b) action) {
+        if (opCount >= 400) {
+          currentBatch = FirebaseFirestore.instance.batch();
+          batchesToCommit.add(currentBatch);
+          opCount = 0;
+        }
+        action(currentBatch);
+        opCount++;
+      }
 
       final processedFlats = <String>{};
 
@@ -225,14 +239,24 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
           final cReg = (uData['carReg'] ?? uData['carRegistration'] ?? uData['fourWheelerReg'] ?? '').toString().trim();
           final bReg = (uData['bikeReg'] ?? uData['bike1Registration'] ?? uData['bikeRegistration'] ?? uData['twoWheelerReg'] ?? '').toString().trim();
           final b2Reg = (uData['bike2Reg'] ?? uData['bike2Registration'] ?? '').toString().trim();
+          final formattedVReg = ReceiptPreviewDialog.formatVehicleNumbers(
+            carReg: cReg,
+            bikeReg: bReg,
+            bike2Reg: b2Reg,
+            carCount: breakdown.carCount,
+            bikeCount: breakdown.bikeCount,
+            carParkingCharges: breakdown.carParkingCharges,
+            bikeParkingCharges: breakdown.bikeParkingCharges,
+          );
 
-          batch.set(newDueDoc, {
+          addBatchOp((b) => b.set(newDueDoc, {
             'flatNumber': flatKey,
             'block': breakdown.block,
             if (rName.isNotEmpty) 'residentName': rName,
             if (cReg.isNotEmpty) 'carReg': cReg,
             if (bReg.isNotEmpty) 'bikeReg': bReg,
             if (b2Reg.isNotEmpty) 'bike2Reg': b2Reg,
+            if (formattedVReg.isNotEmpty && formattedVReg != '—') 'vehicleReg': formattedVReg,
             'amount': breakdown.totalMonthlyDue,
             'baseMaintenance': breakdown.baseMaintenance,
             'pujaSubscription': breakdown.pujaSubscription,
@@ -244,7 +268,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
             'financialYear': AccountingConfig.currentFinancialYear,
             'status': 'UNPAID',
             'createdAt': FieldValue.serverTimestamp(),
-          });
+          }));
           generatedCount++;
         }
 
@@ -279,7 +303,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
             : 'Dear Resident ($flatKey), your maintenance bill for $_selectedMonth is ${AppFormatters.currency(breakdown.totalMonthlyDue)} (Maintenance: ${AppFormatters.currency(breakdown.baseMaintenance)}$carText$bikeText). Tap to view breakdown and pay.';
 
         final newNotificationDoc = notificationsRef.doc();
-        batch.set(newNotificationDoc, {
+        addBatchOp((b) => b.set(newNotificationDoc, {
           'targetUid': targetUid,
           'targetUids': targetUids,
           'targetRole': 'RESIDENT',
@@ -297,11 +321,13 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
           'month': _selectedMonth,
           'financialYear': AccountingConfig.currentFinancialYear,
           'createdAt': FieldValue.serverTimestamp(),
-        });
+        }));
         notifiedCount++;
       }
 
-      await batch.commit();
+      for (final b in batchesToCommit) {
+        await b.commit();
+      }
 
       final skippedText = skippedPaidCount > 0 ? ' ($skippedPaidCount paid flat(s) skipped)' : '';
       final msg = 'Issued $generatedCount new bill(s) and notified $notifiedCount flat(s) for $_selectedMonth$skippedText.';
@@ -443,7 +469,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
               if (mounted) {
                 AppFeedback.showWarning(
                   context,
-                  'Payment rejected. Resident ($flat) has been notified to re-submit.',
+                  'Payment rejected. Resident ($flat) has been notified to meet the authorities in person to resolve conflicts.',
                   title: 'Payment Rejected',
                 );
               }

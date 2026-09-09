@@ -24,10 +24,15 @@ class _CommunityFeedTabState extends State<CommunityFeedTab> {
     final text = _postController.text.trim();
     if (text.isEmpty) return;
 
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please log in to post.')));
+      return;
+    }
+
     setState(() => _isPosting = true);
     
     try {
-      final user = FirebaseAuth.instance.currentUser!;
       final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       final authorName = userDoc.data()?['name'] ?? 'Unknown Resident';
 
@@ -51,7 +56,9 @@ class _CommunityFeedTabState extends State<CommunityFeedTab> {
   }
 
   Future<void> _toggleLike(String postId, List<dynamic> currentLikes) async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    final uid = user.uid;
     final isLiked = currentLikes.contains(uid);
 
     try {

@@ -5,11 +5,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
-// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
-import 'dart:html' as html;
 
 import '../../../models/accounting_heads.dart';
+import '../../../services/staff_remuneration_service.dart';
 import '../../../utils/storage_utils.dart';
+import '../../../utils/file_downloader.dart';
 import '../../../widgets/document_preview_dialog.dart';
 
 class AccountsTab extends StatefulWidget {
@@ -27,6 +27,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
   String _searchQuery = '';
   String? _filterHead;
   String? _filterType; // 'ALL', 'INCOME', 'EXPENDITURE'
+  String _selectedRemunerationMonth = 'April 2026';
 
   @override
   void initState() {
@@ -553,7 +554,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                                   icon: const Icon(Icons.upload_file, size: 16),
                                   label: Text(masterDocFile == null ? 'Attach Document' : 'Change'),
                                   onPressed: () async {
-                                    final file = await pickFile(extensions: ['pdf', 'png', 'jpg', 'jpeg', 'csv', 'xlsx']);
+                                    final file = await pickFile(context: context, extensions: ['pdf', 'png', 'jpg', 'jpeg', 'csv', 'xlsx']);
                                     if (file != null) {
                                       setDS(() => masterDocFile = file);
                                     }
@@ -973,7 +974,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                                   icon: const Icon(Icons.upload_file, size: 16),
                                   label: Text(momFile == null ? 'Upload MoM *' : 'Change MoM'),
                                   onPressed: () async {
-                                    final file = await pickFile();
+                                    final file = await pickFile(context: context);
                                     if (file != null) {
                                       setDS(() => momFile = file);
                                     }
@@ -1473,7 +1474,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                                   icon: const Icon(Icons.upload_file, size: 16),
                                   label: Text(voucherFile == null ? 'Attach File' : 'Change'),
                                   onPressed: () async {
-                                    final file = await pickFile();
+                                    final file = await pickFile(context: context);
                                     if (file != null) {
                                       setDS(() => voucherFile = file);
                                     }
@@ -1599,6 +1600,698 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
             ],
           );
         },
+      ),
+    );
+  }
+
+  // ─── Dialog: Pay Staff Remuneration (Voucher & Budget Aligned) ─────────────
+  void _openPayStaffRemunerationDialog({
+    String? preselectedRole,
+    String? preselectedMonth,
+    Map<String, double>? currentSpentMap,
+  }) {
+    final formKey = GlobalKey<FormState>();
+    final staffRoles = AccountingConfig.staffRemunerationMonthly.keys.toList();
+    final months = [
+      'April 2026', 'May 2026', 'June 2026', 'July 2026',
+      'August 2026', 'September 2026', 'October 2026', 'November 2026',
+      'December 2026', 'January 2027', 'February 2027', 'March 2027',
+    ];
+
+    String selectedRole = (preselectedRole != null && staffRoles.contains(preselectedRole))
+        ? preselectedRole
+        : staffRoles.first;
+    String selectedMonth = (preselectedMonth != null && months.contains(preselectedMonth))
+        ? preselectedMonth
+        : _selectedRemunerationMonth;
+
+    final defaultAmt = AccountingConfig.staffRemunerationMonthly[selectedRole] ?? 0.0;
+    final amountCtrl = TextEditingController(text: defaultAmt.toStringAsFixed(0));
+    final paidToCtrl = TextEditingController(text: selectedRole);
+    DateTime paymentDate = DateTime.now();
+    String paymentMode = 'Bank Transfer / NEFT / IMPS';
+    final refCtrl = TextEditingController();
+    final descCtrl = TextEditingController(text: 'Staff Remuneration - $selectedRole ($selectedMonth)');
+    PlatformFile? voucherFile;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDS) {
+          final double allocated = AccountingConfig.staffRemunerationMonthly[selectedRole] ?? 0.0;
+          final double totalHeadSpent = currentSpentMap?['Staff Remuneration'] ?? 0.0;
+          final double totalHeadBudget = AccountingConfig.getBudgetHead('Staff Remuneration')?.yearlyBudget ?? 630468.0;
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.indigo.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.badge, color: Colors.indigo, size: 24),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Pay Staff Remuneration',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      Text('Staff & Security Payroll Budget (FY 2026-27)',
+                          style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 580,
+              child: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Role & Month Selector
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: DropdownButtonFormField<String>(
+                              initialValue: selectedRole,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Staff Position / Role *',
+                                prefixIcon: Icon(Icons.engineering),
+                                border: OutlineInputBorder(),
+                              ),
+                              items: staffRoles.map((role) {
+                                final rAmt = AccountingConfig.staffRemunerationMonthly[role] ?? 0.0;
+                                return DropdownMenuItem(
+                                  value: role,
+                                  child: Text(
+                                    '$role (₹${rAmt.toInt()}/mo)',
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                );
+                              }).toList(),
+                              onChanged: (val) {
+                                if (val != null) {
+                                  setDS(() {
+                                    selectedRole = val;
+                                    final amt = AccountingConfig.staffRemunerationMonthly[val] ?? 0.0;
+                                    amountCtrl.text = amt.toStringAsFixed(0);
+                                    paidToCtrl.text = val;
+                                    descCtrl.text = 'Staff Remuneration - $val ($selectedMonth)';
+                                  });
+                                }
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 2,
+                            child: DropdownButtonFormField<String>(
+                              initialValue: selectedMonth,
+                              decoration: const InputDecoration(
+                                labelText: 'Salary Month *',
+                                prefixIcon: Icon(Icons.calendar_month),
+                                border: OutlineInputBorder(),
+                              ),
+                              items: months
+                                  .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13))))
+                                  .toList(),
+                              onChanged: (val) {
+                                if (val != null) {
+                                  setDS(() {
+                                    selectedMonth = val;
+                                    descCtrl.text = 'Staff Remuneration - $selectedRole ($selectedMonth)';
+                                  });
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Budget Rate Info Pill
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.indigo.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.info_outline, size: 18, color: Colors.indigo),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Budget Rate: ${currencyFmt.format(allocated)}/month  |  Annual Head Spent: ${currencyFmt.format(totalHeadSpent)} of ${currencyFmt.format(totalHeadBudget)}',
+                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.indigo.shade900),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Amount & Payee Name
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 5,
+                            child: TextFormField(
+                              controller: amountCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: const InputDecoration(
+                                labelText: 'Amount (₹) *',
+                                prefixIcon: Icon(Icons.currency_rupee),
+                                border: OutlineInputBorder(),
+                              ),
+                              validator: (val) {
+                                if (val == null || val.trim().isEmpty) return 'Enter amount';
+                                final n = double.tryParse(val.trim());
+                                if (n == null || n <= 0) return 'Valid amount';
+                                return null;
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 7,
+                            child: TextFormField(
+                              controller: paidToCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'Staff Name / Payee *',
+                                prefixIcon: Icon(Icons.person),
+                                border: OutlineInputBorder(),
+                              ),
+                              validator: (val) {
+                                if (val == null || val.trim().isEmpty) return 'Payee name required';
+                                return null;
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Payment Date & Payment Mode
+                      Row(
+                        children: [
+                          Expanded(
+                            child: InkWell(
+                              onTap: () async {
+                                final picked = await showDatePicker(
+                                  context: ctx,
+                                  initialDate: paymentDate,
+                                  firstDate: DateTime(2025, 4, 1),
+                                  lastDate: DateTime(2028, 3, 31),
+                                );
+                                if (picked != null) {
+                                  setDS(() => paymentDate = picked);
+                                }
+                              },
+                              child: InputDecorator(
+                                decoration: const InputDecoration(
+                                  labelText: 'Payment Date *',
+                                  prefixIcon: Icon(Icons.calendar_today),
+                                  border: OutlineInputBorder(),
+                                ),
+                                child: Text(dateFmt.format(paymentDate), style: const TextStyle(fontSize: 13)),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: paymentMode,
+                              decoration: const InputDecoration(
+                                labelText: 'Payment Mode *',
+                                prefixIcon: Icon(Icons.payments),
+                                border: OutlineInputBorder(),
+                              ),
+                              items: AccountingConfig.paymentModes
+                                  .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 12))))
+                                  .toList(),
+                              onChanged: (val) {
+                                if (val != null) setDS(() => paymentMode = val);
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Reference Number & Description
+                      TextFormField(
+                        controller: refCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Cheque No. / Bank UTR / Ref (Optional)',
+                          prefixIcon: Icon(Icons.numbers),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: descCtrl,
+                        maxLines: 2,
+                        decoration: const InputDecoration(
+                          labelText: 'Notes / Remuneration Details',
+                          prefixIcon: Icon(Icons.notes),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Mandatory Salary Slip / Voucher Upload
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: voucherFile == null ? Colors.red.shade50 : Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: voucherFile == null ? Colors.red.shade300 : Colors.green.shade300,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  voucherFile == null ? Icons.attach_file : Icons.check_circle,
+                                  color: voucherFile == null ? Colors.red.shade900 : Colors.green.shade900,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Salary Voucher / Signed Receipt / Slip (MANDATORY) *',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
+                                          color: voucherFile == null ? Colors.red.shade900 : Colors.green.shade900,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Attach signed payment voucher, salary slip, or bank debit advice.',
+                                        style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: voucherFile == null ? Colors.indigo : Colors.teal,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  icon: const Icon(Icons.upload_file, size: 16),
+                                  label: Text(voucherFile == null ? 'Attach Slip' : 'Change'),
+                                  onPressed: () async {
+                                    final file = await pickFile(context: context);
+                                    if (file != null) {
+                                      setDS(() => voucherFile = file);
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                            if (voucherFile != null) ...[
+                              const Divider(height: 16),
+                              Row(
+                                children: [
+                                  const Icon(Icons.check_circle, color: Colors.green, size: 16),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      'Selected: ${voucherFile!.name}',
+                                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.close, size: 16, color: Colors.red),
+                                    tooltip: 'Remove',
+                                    onPressed: () => setDS(() => voucherFile = null),
+                                  ),
+                                ],
+                              ),
+                            ] else ...[
+                              const SizedBox(height: 6),
+                              const Text(
+                                '⚠️ Cannot proceed without supporting salary voucher / payment slip.',
+                                style: TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.indigo.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                icon: isSubmitting
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white))
+                    : const Icon(Icons.check),
+                label: const Text('Confirm & Post Staff Remuneration'),
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        if (!formKey.currentState!.validate()) return;
+                        final scaffoldMessenger = ScaffoldMessenger.of(context);
+                        final dialogNav = Navigator.of(ctx);
+
+                        if (voucherFile == null) {
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.red.shade800,
+                              content: const Text('Supporting document / voucher is strictly mandatory for Staff Remuneration.'),
+                            ),
+                          );
+                          return;
+                        }
+
+                        setDS(() => isSubmitting = true);
+                        final double amount = double.parse(amountCtrl.text.trim());
+                        final adminUser = FirebaseAuth.instance.currentUser;
+                        final recordedBy = adminUser?.email ?? adminUser?.uid ?? 'Admin';
+
+                        final service = StaffRemunerationService();
+                        final result = await service.recordStaffPayment(
+                          staffRole: selectedRole,
+                          payeeName: paidToCtrl.text.trim(),
+                          remunerationMonth: selectedMonth,
+                          amount: amount,
+                          paymentDate: paymentDate,
+                          paymentMode: paymentMode,
+                          voucherFile: voucherFile!,
+                          referenceNumber: refCtrl.text.trim(),
+                          description: descCtrl.text.trim(),
+                          recordedBy: recordedBy,
+                        );
+
+                        if (result.success) {
+                          dialogNav.pop();
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.green.shade700,
+                              content: Text('Staff Remuneration for $selectedRole ($selectedMonth) of ₹$amount posted successfully! Voucher: ${result.voucherNumber}'),
+                            ),
+                          );
+                        } else {
+                          setDS(() => isSubmitting = false);
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.red.shade800,
+                              content: Text(result.error ?? 'Failed to record staff payment'),
+                            ),
+                          );
+                        }
+                      },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ─── UI Component: Staff Remuneration Monthly Status Tracker ───────────────
+  Widget _buildStaffRemunerationTrackerCard(
+    List<QueryDocumentSnapshot> allDocs,
+    Map<String, double> headExpenditures, [
+    List<BudgetHead>? activeHeads,
+  ]) {
+    final service = StaffRemunerationService();
+    final statusList = service.computeMonthlyStatus(
+      selectedMonth: _selectedRemunerationMonth,
+      transactions: allDocs,
+    );
+
+    final months = [
+      'April 2026', 'May 2026', 'June 2026', 'July 2026',
+      'August 2026', 'September 2026', 'October 2026', 'November 2026',
+      'December 2026', 'January 2027', 'February 2027', 'March 2027',
+    ];
+
+    const double totalMonthlyBudget = 52539.0;
+    double disbursedThisMonth = 0.0;
+    int paidCount = 0;
+
+    for (final s in statusList) {
+      if (s.isPaid) {
+        disbursedThisMonth += (s.paidAmount ?? s.budgetAmount);
+        paidCount++;
+      }
+    }
+
+    final double pct = (disbursedThisMonth / totalMonthlyBudget).clamp(0.0, 1.0);
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header Row with Month Selector
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.indigo.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.people_alt, color: Colors.indigo, size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Staff Remuneration & Payroll Tracker',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '11 Staff & Security Positions • Monthly Budget ₹52,539',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Month Selector Dropdown
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _selectedRemunerationMonth,
+                      icon: const Icon(Icons.calendar_month, size: 18, color: Colors.indigo),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                      items: months.map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() => _selectedRemunerationMonth = val);
+                        }
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Progress Bar & Stats
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.indigo.shade50.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.indigo.shade100),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '$_selectedRemunerationMonth Disbursement: $paidCount / 11 Positions Paid',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        '${currencyFmt.format(disbursedThisMonth)} / ${currencyFmt.format(totalMonthlyBudget)} (${(pct * 100).toStringAsFixed(0)}%)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: paidCount == 11 ? Colors.green.shade800 : Colors.indigo.shade900,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: pct,
+                      minHeight: 8,
+                      backgroundColor: Colors.grey.shade200,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        paidCount == 11 ? Colors.green : Colors.indigo.shade600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // Itemized Staff Grid / List
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: statusList.map((s) {
+                return SizedBox(
+                  width: 340,
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: s.isPaid ? Colors.green.shade50 : Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: s.isPaid ? Colors.green.shade200 : Colors.grey.shade300,
+                        width: s.isPaid ? 1.5 : 1,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: s.isPaid ? Colors.green.shade100 : Colors.grey.shade100,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            s.isPaid ? Icons.check_circle : Icons.person_outline,
+                            size: 18,
+                            color: s.isPaid ? Colors.green.shade800 : Colors.grey.shade700,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                s.role,
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Budget: ${currencyFmt.format(s.budgetAmount)}',
+                                style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                              ),
+                              if (s.isPaid && s.payeeName != null) ...[
+                                Text(
+                                  'Paid to: ${s.payeeName}',
+                                  style: TextStyle(fontSize: 10, color: Colors.green.shade900),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        if (s.isPaid) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade100,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Paid',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green.shade900,
+                              ),
+                            ),
+                          ),
+                          if (s.documentUrl != null && s.documentUrl!.isNotEmpty) ...[
+                            const SizedBox(width: 4),
+                            IconButton(
+                              icon: const Icon(Icons.description, size: 18, color: Colors.indigo),
+                              tooltip: 'View Attached Voucher (${s.documentFileName ?? "Slip"})',
+                              padding: const EdgeInsets.all(4),
+                              constraints: const BoxConstraints(),
+                              onPressed: () => _showDocumentPreview(
+                                s.documentUrl!,
+                                s.documentFileName ?? 'Salary_Voucher.pdf',
+                              ),
+                            ),
+                          ],
+                        ] else ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.shade100,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Pending',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.amber.shade900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1786,7 +2479,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                           icon: const Icon(Icons.attach_file, size: 16),
                           label: Text(receiptFile == null ? 'Attach' : 'Change'),
                           onPressed: () async {
-                            final file = await pickFile();
+                            final file = await pickFile(context: context);
                             if (file != null) {
                               setDS(() => receiptFile = file);
                             }
@@ -1959,13 +2652,8 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     }
 
     final bytes = utf8.encode(buffer.toString());
-    final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.AnchorElement(href: url)
-      ..setAttribute(
-          'download', 'Ramkrishnapuram_Accounts_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv')
-      ..click();
-    html.Url.revokeObjectUrl(url);
+    final fileName = 'Ramkrishnapuram_Accounts_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv';
+    downloadBytes(bytes, fileName, mimeType: 'text/csv;charset=utf-8');
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Transactions exported to CSV successfully!')),
@@ -2233,6 +2921,20 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
             children: [
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.indigo.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                ),
+                icon: const Icon(Icons.badge, size: 18),
+                label: const Text('Pay Staff Remuneration',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                onPressed: () => _openPayStaffRemunerationDialog(
+                  preselectedMonth: _selectedRemunerationMonth,
+                  currentSpentMap: headExpenditures,
+                ),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red.shade700,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
@@ -2449,9 +3151,10 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
       return (data['type'] ?? '').toString().toUpperCase() == 'EXPENDITURE';
     }).toList();
 
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
@@ -2460,9 +3163,24 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
               const Spacer(),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.indigo.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                ),
+                icon: const Icon(Icons.badge, size: 18),
+                label: const Text('Pay Staff Remuneration',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                onPressed: () => _openPayStaffRemunerationDialog(
+                  preselectedMonth: _selectedRemunerationMonth,
+                  currentSpentMap: headExpenditures,
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red.shade700,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                 ),
                 icon: const Icon(Icons.add),
                 label: const Text('Record New Expense'),
@@ -2471,18 +3189,33 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
             ],
           ),
           const SizedBox(height: 16),
-          Expanded(
-            child: expenseDocs.isEmpty
-                ? const Center(child: Text('No expenditures recorded yet.'))
-                : Card(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    child: ListView.separated(
-                      itemCount: expenseDocs.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (ctx, i) => _buildTransactionListTile(expenseDocs[i]),
-                    ),
+
+          // Monthly Staff Remuneration & Payroll Tracker
+          _buildStaffRemunerationTrackerCard(allDocs, headExpenditures, activeHeads),
+          const SizedBox(height: 24),
+
+          // All Expenditure Entries
+          const Text('All Expenditure Vouchers & Entries',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          expenseDocs.isEmpty
+              ? const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Center(child: Text('No expenditures recorded yet.')),
                   ),
-          ),
+                )
+              : Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: expenseDocs.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (ctx, i) => _buildTransactionListTile(expenseDocs[i]),
+                  ),
+                ),
         ],
       ),
     );
@@ -2817,6 +3550,17 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                                   constraints: const BoxConstraints(),
                                   onPressed: () => _showDocumentPreview(head.momDocumentUrl!, head.momFileName ?? 'MoM_Resolution.pdf'),
                                 ),
+                              if (head.name == 'Staff Remuneration')
+                                IconButton(
+                                  icon: const Icon(Icons.badge, size: 18, color: Colors.indigo),
+                                  tooltip: 'Pay Staff Remuneration',
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () => _openPayStaffRemunerationDialog(
+                                    preselectedMonth: _selectedRemunerationMonth,
+                                    currentSpentMap: headExpenditures,
+                                  ),
+                                ),
                               IconButton(
                                 icon: const Icon(Icons.edit, size: 17, color: Colors.blueGrey),
                                 tooltip: 'Edit Budget Head (MoM Required)',
@@ -3065,9 +3809,31 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '${isExpense ? 'Paid To:' : 'From:'} $entity  •  Date: ${dateFmt.format(pDate)}  •  Mode: $mode ${ref.isNotEmpty ? "($ref)" : ""}',
-                    style: const TextStyle(fontSize: 12),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          '${isExpense ? 'Paid To:' : 'From:'} $entity  •  Date: ${dateFmt.format(pDate)}  •  Mode: $mode ${ref.isNotEmpty ? "($ref)" : ""}',
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (data['staffRole'] != null && data['staffRole'].toString().isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.indigo.shade50,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.indigo.shade200),
+                          ),
+                          child: Text(
+                            'Staff: ${data['staffRole']}${data['remunerationMonth'] != null ? " (${data['remunerationMonth']})" : ""}',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.indigo.shade900),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   if ((data['description']?.toString() ?? '').isNotEmpty)
                     Text(

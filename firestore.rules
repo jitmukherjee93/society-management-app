@@ -117,15 +117,8 @@ service cloud.firestore {
     }
 
     match /notifications/{notificationId} {
-      allow read, write: if isAdmin();
+      allow read: if isAuthenticated();
       allow create: if isAuthenticated();
-      allow read: if isAuthenticated() && (
-        (resource.data.targetRole == 'ADMIN' && isAdmin()) ||
-        resource.data.targetUid == request.auth.uid ||
-        (resource.data.targetUids != null && request.auth.uid in resource.data.targetUids) ||
-        resource.data.targetRole == 'ALL' ||
-        resource.data.targetRole == 'RESIDENT'
-      );
       allow update, delete: if isAuthenticated() && (
         isAdmin() ||
         (resource.data != null && (
@@ -133,6 +126,7 @@ service cloud.firestore {
           (resource.data.targetUids != null && request.auth.uid in resource.data.targetUids)
         ))
       );
+      allow write: if isAdmin();
     }
 
     // Society Accounts & Budget Management Rules
