@@ -16,6 +16,8 @@ import '../../theme/app_decorations.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/app_feedback.dart';
 import '../../widgets/receipt_preview_dialog.dart';
+import '../../models/notice_model.dart';
+import '../../widgets/notices/notice_card_widget.dart';
 
 bool _isNotificationForResident(Map<String, dynamic> data, User? user, [String? userFlat, String? fullFlat]) {
   if (user == null) return false;
@@ -1804,7 +1806,7 @@ class NotificationsTab extends StatelessWidget {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
-            var docs = snapshot.data?.docs ?? [];
+            final docs = snapshot.data?.docs ?? [];
             if (docs.isEmpty) {
               return const Padding(
                 padding: EdgeInsets.symmetric(vertical: 20),
@@ -1815,55 +1817,60 @@ class NotificationsTab extends StatelessWidget {
               );
             }
 
-            docs.sort((a, b) {
-              final aPinned =
-                  (a.data() as Map<String, dynamic>)['isPinned'] ?? false;
-              final bPinned =
-                  (b.data() as Map<String, dynamic>)['isPinned'] ?? false;
-              if (aPinned && !bPinned) return -1;
-              if (!aPinned && bPinned) return 1;
-              return 0; // retain createdAt sort order
+            final notices = docs.map((d) => NoticeModel.fromFirestore(d)).toList();
+
+            notices.sort((a, b) {
+              if (a.isPinned && !b.isPinned) return -1;
+              if (!a.isPinned && b.isPinned) return 1;
+              return b.createdAt.compareTo(a.createdAt);
             });
 
-            return ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: docs.length,
-              itemBuilder: (context, index) {
-                final data = docs[index].data() as Map<String, dynamic>;
-                final isPinned = data['isPinned'] ?? false;
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final isTwoColumn = constraints.maxWidth >= 600;
 
-                return Card(
-                  elevation: isPinned ? 4 : 1,
-                  color: isPinned ? Colors.teal.shade50 : null,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            if (isPinned)
-                              const Icon(Icons.push_pin,
-                                  color: Colors.teal, size: 20),
-                            if (isPinned) const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                data['title'] ?? '',
-                                style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ],
+                if (isTwoColumn) {
+                  final col1 = <NoticeModel>[];
+                  final col2 = <NoticeModel>[];
+                  for (int i = 0; i < notices.length; i++) {
+                    if (i % 2 == 0) {
+                      col1.add(notices[i]);
+                    } else {
+                      col2.add(notices[i]);
+                    }
+                  }
+
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: col1.map((n) => NoticeCardWidget(key: ValueKey(n.id), notice: n, isAdmin: false)).toList(),
                         ),
-                        const SizedBox(height: 8),
-                        Text(data['message'] ?? '',
-                            style: const TextStyle(fontSize: 16)),
-                      ],
-                    ),
-                  ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: col2.map((n) => NoticeCardWidget(key: ValueKey(n.id), notice: n, isAdmin: false)).toList(),
+                        ),
+                      ),
+                    ],
+                  );
+                }
+
+                return ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: notices.length,
+                  itemBuilder: (context, index) {
+                    return NoticeCardWidget(
+                      key: ValueKey(notices[index].id),
+                      notice: notices[index],
+                      isAdmin: false,
+                    );
+                  },
                 );
               },
             );

@@ -2905,8 +2905,6 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     DocumentSnapshot? annualBudgetDoc,
   ) {
     final recentDocs = allDocs.take(8).toList();
-    final annualBudgetData = annualBudgetDoc?.data() as Map<String, dynamic>?;
-    final bool isLocked = annualBudgetData?['isLocked'] == true;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -2954,25 +2952,6 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                 label: const Text('Record Other Income (Inflow)',
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 onPressed: _openRecordIncomeDialog,
-              ),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isLocked ? Colors.deepPurple.shade700 : Colors.indigo.shade700,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                ),
-                icon: Icon(isLocked ? Icons.lock : Icons.upload_file, size: 18),
-                label: Text(
-                  isLocked
-                      ? 'Master Budget (${AccountingConfig.currentFinancialYear}) [Locked]'
-                      : 'Upload Annual Budget Plan',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                onPressed: () => _handleAnnualBudgetUpload(
-                  annualBudgetDoc,
-                  approvedAnnualBudget,
-                  approvedMonthlyBudget,
-                ),
               ),
               OutlinedButton.icon(
                 icon: const Icon(Icons.download, size: 18),

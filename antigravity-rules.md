@@ -35,5 +35,11 @@ Do not just claim a task is done; prove it using Antigravity's evidence-based ar
 * **Automated Tests:** Write unit tests for all business logic (like maintenance fee calculations). Provide structured logs of passing/failing tests in the artifact viewer.
 * **Terminal Operations:** Respect the developer's terminal execution settings (Off, Auto, or Turbo). Always prompt for permission (`Request Review`) before running database migrations, destructive file operations, or installing unverified packages.
 
-## 5. Final Walkthrough 
+## 5. Deployment vs Local Iteration Rule
+> **MANDATORY LOCAL EXECUTION & HOT RELOAD RULE:**
+> - **Always Hot Reload / Refresh Locally:** Whenever a local code change or fix is made to Dart/Flutter files, always immediately trigger a **Hot Reload** (or **Hot Restart / Hot Refresh** as required) so the running application is kept up-to-date in real time.
+> - **Only Deploy When Explicitly Asked:** Never perform remote release builds or deployments (`firebase deploy`, `flutter build web --release`, etc.) unless the user explicitly instructs to deploy.
+> - **Local Verification:** Always verify changes locally using static analysis (`dart analyze` -> 0 issues) and the test suite (`flutter test`).
+
+## 6. Final Walkthrough 
 Upon completion of a task, compile a **Walkthrough** artifact summarizing the changes, files modified, and exact steps the developer should take to manually verify the deployment locally.
