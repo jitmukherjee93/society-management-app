@@ -24,6 +24,7 @@ class ReceiptPdfService {
     required double carParkingCharges,
     required double bikeParkingCharges,
     required double pujaSubscription,
+    double fine = 0.0,
     required double totalAmount,
     required String vehicleReg,
     required String paymentMode,
@@ -234,22 +235,43 @@ class ReceiptPdfService {
                                   ),
                                   pw.SizedBox(height: 2),
                                   pw.Text(
-                                    'Maint. :  Rs. ${baseMaintenance.toStringAsFixed(0)}',
+                                    'Maint. :  Rs. ${((maintenancePaidMonths != null && maintenancePaidMonths.isNotEmpty) ? (baseMaintenance / maintenancePaidMonths.length) : baseMaintenance).toStringAsFixed(0)}',
                                     style: const pw.TextStyle(fontSize: 8.5),
                                   ),
                                   if (carParkingCharges > 0) ...[
                                     pw.SizedBox(height: 2),
                                     pw.Text(
-                                      'Car Park : Rs. ${carParkingCharges.toStringAsFixed(0)}',
+                                      'Car Park : Rs. ${((parkingPaidMonths != null && parkingPaidMonths.isNotEmpty) ? (carParkingCharges / parkingPaidMonths.length) : carParkingCharges).toStringAsFixed(0)}',
                                       style: const pw.TextStyle(fontSize: 8.5),
                                     ),
                                   ],
                                   if (bikeParkingCharges > 0) ...[
                                     pw.SizedBox(height: 2),
                                     pw.Text(
-                                      'Bike Park : Rs. ${bikeParkingCharges.toStringAsFixed(0)}',
+                                      'Bike Park : Rs. ${((parkingPaidMonths != null && parkingPaidMonths.isNotEmpty) ? (bikeParkingCharges / parkingPaidMonths.length) : bikeParkingCharges).toStringAsFixed(0)}',
                                       style: const pw.TextStyle(fontSize: 8.5),
                                     ),
+                                  ],
+                                  if (maintenancePaidMonths != null && maintenancePaidMonths.length > 1) ...[
+                                    pw.SizedBox(height: 3),
+                                    pw.Text(
+                                      'Total (${maintenancePaidMonths.length} Mos):',
+                                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 7.5),
+                                    ),
+                                    pw.Text(
+                                      'Maint: Rs. ${baseMaintenance.toStringAsFixed(0)}',
+                                      style: const pw.TextStyle(fontSize: 8),
+                                    ),
+                                    if (carParkingCharges > 0)
+                                      pw.Text(
+                                        'Car Park: Rs. ${carParkingCharges.toStringAsFixed(0)}',
+                                        style: const pw.TextStyle(fontSize: 8),
+                                      ),
+                                    if (bikeParkingCharges > 0)
+                                      pw.Text(
+                                        'Bike Park: Rs. ${bikeParkingCharges.toStringAsFixed(0)}',
+                                        style: const pw.TextStyle(fontSize: 8),
+                                      ),
                                   ],
                                 ],
                               ),
@@ -367,6 +389,13 @@ class ReceiptPdfService {
                               ],
                             ),
                           ],
+                          if (totalParkingCharges <= 0 && parkingExcludedMonths != null && parkingExcludedMonths.isNotEmpty) ...[
+                            pw.SizedBox(height: 3),
+                            pw.Text(
+                              'Note: Vehicle parking opted-out for: ${parkingExcludedMonths.join(', ')}',
+                              style: pw.TextStyle(fontSize: 7.5, fontStyle: pw.FontStyle.italic, color: PdfColors.grey700),
+                            ),
+                          ],
                           pw.SizedBox(height: 4),
 
                           // Cash / Cheque / UTR No. line
@@ -461,8 +490,24 @@ class ReceiptPdfService {
                           crossAxisAlignment: pw.CrossAxisAlignment.end,
                           children: [
                             pw.Container(height: 18), // Header row spacer
-                            pw.Container(height: 18), // Maint row spacer
-                            pw.Container(height: 18), // Parking row spacer
+                            pw.Container(
+                              height: 18,
+                              alignment: pw.Alignment.centerRight,
+                              padding: const pw.EdgeInsets.only(right: 4),
+                              child: pw.Text(
+                                'Maintenance',
+                                style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
+                              ),
+                            ),
+                            pw.Container(
+                              height: 18,
+                              alignment: pw.Alignment.centerRight,
+                              padding: const pw.EdgeInsets.only(right: 4),
+                              child: pw.Text(
+                                'Parking',
+                                style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
+                              ),
+                            ),
                             pw.Container(
                               height: 18,
                               alignment: pw.Alignment.centerRight,
@@ -472,6 +517,16 @@ class ReceiptPdfService {
                                 style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
                               ),
                             ),
+                            if (fine > 0)
+                              pw.Container(
+                                height: 18,
+                                alignment: pw.Alignment.centerRight,
+                                padding: const pw.EdgeInsets.only(right: 4),
+                                child: pw.Text(
+                                  'Late Fine',
+                                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
+                                ),
+                              ),
                             pw.Container(
                               height: 22,
                               alignment: pw.Alignment.centerRight,
@@ -519,6 +574,9 @@ class ReceiptPdfService {
                               _buildAmountRow(totalParkingCharges),
                               // Row 3: Special Fund / Puja
                               _buildAmountRow(pujaSubscription),
+                              // Optional Row: Late Fine
+                              if (fine > 0)
+                                _buildAmountRow(fine),
                               // TOTAL Row with top double/heavy border
                               pw.Container(
                                 height: 22,
@@ -656,6 +714,7 @@ class ReceiptPdfService {
     required double carParkingCharges,
     required double bikeParkingCharges,
     required double pujaSubscription,
+    double fine = 0.0,
     required double totalAmount,
     required String vehicleReg,
     required String paymentMode,
@@ -678,6 +737,7 @@ class ReceiptPdfService {
       carParkingCharges: carParkingCharges,
       bikeParkingCharges: bikeParkingCharges,
       pujaSubscription: pujaSubscription,
+      fine: fine,
       totalAmount: totalAmount,
       vehicleReg: vehicleReg,
       paymentMode: paymentMode,
@@ -712,6 +772,7 @@ class ReceiptPdfService {
     required double carParkingCharges,
     required double bikeParkingCharges,
     required double pujaSubscription,
+    double fine = 0.0,
     required double totalAmount,
     required String vehicleReg,
     required String paymentMode,
@@ -740,6 +801,7 @@ class ReceiptPdfService {
         carParkingCharges: carParkingCharges,
         bikeParkingCharges: bikeParkingCharges,
         pujaSubscription: pujaSubscription,
+        fine: fine,
         totalAmount: totalAmount,
         vehicleReg: vehicleReg,
         paymentMode: paymentMode,

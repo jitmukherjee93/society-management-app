@@ -6,6 +6,8 @@ import '../../widgets/pdf_iframe.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_decorations.dart';
 import '../../widgets/app_dialog.dart';
+import 'package:intl/intl.dart';
+import '../../models/accounting_heads.dart';
 import 'tabs/manage_society_tab.dart';
 import 'tabs/accounts_tab.dart';
 import 'tabs/generate_maintenance_tab.dart';
@@ -837,6 +839,27 @@ class _AdminDashboardState extends State<AdminDashboard> {
           child: Divider(height: 1, color: AppColors.border),
         ),
         actions: [
+          if (AccountingConfig.simulatedDate != null)
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.warningSurface,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: AppColors.warningBorder),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.calendar_today_rounded, size: 14, color: AppColors.warningDark),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Simulated Date: ${DateFormat('dd MMMM yyyy').format(AccountingConfig.currentDate)}',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warningDark),
+                  ),
+                ],
+              ),
+            ),
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('notifications')
@@ -894,7 +917,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ),
         ],
       ),
-      body: pages[_currentIndex],
+      body: IndexedStack(index: _currentIndex, children: pages),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
           border: Border(top: BorderSide(color: AppColors.border, width: 0.9)),

@@ -1,3 +1,5 @@
+import 'package:intl/intl.dart';
+
 // Ramkrishnapuram Residents' Welfare Association
 // Official Budget 2026-27 Accounting Heads and Configuration
 // Updated strictly as per "Updated RKP Budget.pdf"
@@ -6,7 +8,7 @@ class BudgetHead {
   final String name;
   final String category;
   final double yearlyBudget;
-  final double monthlyBudget;
+  final double? _explicitMonthlyBudget;
   final bool isDocRequired;
   final String description;
   final bool isRevised;
@@ -22,7 +24,7 @@ class BudgetHead {
     required this.name,
     required this.category,
     required this.yearlyBudget,
-    required this.monthlyBudget,
+    double? monthlyBudget,
     this.isDocRequired = true,
     this.description = '',
     this.isRevised = false,
@@ -33,7 +35,9 @@ class BudgetHead {
     this.revisionReason,
     this.revisedBy,
     this.revisedAt,
-  });
+  }) : _explicitMonthlyBudget = monthlyBudget;
+
+  double get monthlyBudget => _explicitMonthlyBudget ?? (yearlyBudget / 12);
 
   BudgetHead copyWith({
     String? name,
@@ -71,32 +75,105 @@ class BudgetHead {
 }
 
 class AccountingConfig {
-  static const String currentFinancialYear = '2026-27';
+  /// Simulated date for testing. Set to null for normal operation (uses DateTime.now()).
+  static DateTime? simulatedDate;
 
-  static const List<String> financialYearMonths = [
-    'April 2026',
-    'May 2026',
-    'June 2026',
-    'July 2026',
-    'August 2026',
-    'September 2026',
-    'October 2026',
-    'November 2026',
-    'December 2026',
-    'January 2027',
-    'February 2027',
-    'March 2027',
-  ];
+  /// Current active date (either simulated or system now)
+  static DateTime get currentDate => simulatedDate ?? DateTime.now();
+
+  /// Generates the canonical financial year label (e.g. '2026-27')
+  static String getFinancialYear([DateTime? date]) {
+    final d = date ?? currentDate;
+    final startYear = d.month >= 4 ? d.year : d.year - 1;
+    final endYear = (startYear + 1) % 100;
+    return '$startYear-${endYear.toString().padLeft(2, '0')}';
+  }
+
+  /// Dynamically computes financial year months for a given financial year or date
+  static List<String> getFinancialYearMonths([DateTime? date]) {
+    final d = date ?? currentDate;
+    final startYear = d.month >= 4 ? d.year : d.year - 1;
+    return [
+      'April $startYear',
+      'May $startYear',
+      'June $startYear',
+      'July $startYear',
+      'August $startYear',
+      'September $startYear',
+      'October $startYear',
+      'November $startYear',
+      'December $startYear',
+      'January ${startYear + 1}',
+      'February ${startYear + 1}',
+      'March ${startYear + 1}',
+    ];
+  }
+
+  /// Current active financial year string
+  static String get currentFinancialYear => getFinancialYear();
+
+  /// Chronological list of months in the active financial year
+  static List<String> get financialYearMonths => getFinancialYearMonths();
 
   /// Returns the 0-based index of a month within the FY, or -1 if unknown
   static int getMonthIndex(String monthName) {
     final clean = monthName.trim();
-    for (int i = 0; i < financialYearMonths.length; i++) {
-      if (financialYearMonths[i].toLowerCase() == clean.toLowerCase()) return i;
+    final months = financialYearMonths;
+    for (int i = 0; i < months.length; i++) {
+      if (months[i].toLowerCase() == clean.toLowerCase()) return i;
       // Partial check like "September" matching "September 2026"
-      if (financialYearMonths[i].toLowerCase().startsWith(clean.toLowerCase())) return i;
+      if (months[i].toLowerCase().startsWith(clean.toLowerCase())) return i;
     }
     return -1;
+  }
+
+  /// Determines if a month string (e.g. 'April 2026', 'March 2027', 'January 2026') is in the past
+  /// relative to [referenceDate] (defaults to [currentDate]).
+  /// Accurately handles prior financial years and arbitrary historical dates.
+  static bool isMonthPast(String monthStr, [DateTime? referenceDate]) {
+    final now = referenceDate ?? currentDate;
+    final clean = monthStr.trim();
+    if (clean.isEmpty) return false;
+
+    // Try full 'MMMM yyyy' parsing first (e.g. "April 2026")
+    try {
+      final parsed = DateFormat('MMMM yyyy').parse(clean);
+      if (parsed.year < now.year) return true;
+      if (parsed.year == now.year && parsed.month < now.month) return true;
+      return false;
+    } catch (_) {}
+
+    // Fallback: If month does not have year (e.g. "April"), resolve year from active FY
+    final idx = getMonthIndex(clean);
+    if (idx != -1) {
+      final fullMonthName = financialYearMonths[idx];
+      try {
+        final parsed = DateFormat('MMMM yyyy').parse(fullMonthName);
+        if (parsed.year < now.year) return true;
+        if (parsed.year == now.year && parsed.month < now.month) return true;
+        return false;
+      } catch (_) {}
+
+      final curMonthName = DateFormat('MMMM yyyy').format(now);
+      final curIdx = getMonthIndex(curMonthName);
+      return curIdx != -1 && idx < curIdx;
+    }
+
+    return false;
+  }
+
+  static int _voucherSeq = 0;
+
+  /// Generates a collision-resistant monotonic voucher code for accounting entries (e.g. 'INC-2627-12345' or 'EXP-2627-12345')
+  static String generateVoucherCode([String prefix = 'INC']) {
+    final d = currentDate;
+    final startYear = d.month >= 4 ? d.year : d.year - 1;
+    final endYear = (startYear + 1) % 100;
+    final fy = '${(startYear % 100).toString().padLeft(2, '0')}${endYear.toString().padLeft(2, '0')}';
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    _voucherSeq = (_voucherSeq + 1) % 1000;
+    final suffix = ((timestamp + _voucherSeq) % 90000 + 10000).toString();
+    return '$prefix-$fy-$suffix';
   }
 
   static const List<String> meetingTypes = [
@@ -432,30 +509,23 @@ class AccountingConfig {
     'Demand Draft',
   ];
 
-  /// Calculate itemized maintenance breakdown for FY 2026-27 strictly as per approved budget
+  /// Calculate itemized maintenance breakdown for active FY strictly as per approved budget
   static FlatMaintenanceBreakdown calculateMaintenanceBreakdown({
     required String flatNumber,
     int carCount = 0,
     int bikeCount = 0,
+    double fine = 0.0,
   }) {
     final clean = flatNumber.trim().toUpperCase();
-    String block = 'A';
-    if (clean.startsWith('B') || clean.contains('B-') || clean.contains('B ')) {
-      block = 'B';
-    } else if (clean.startsWith('C') || clean.contains('C-') || clean.contains('C ')) {
-      block = 'C';
-    } else if (clean.startsWith('D') || clean.contains('D-') || clean.contains('D ')) {
-      block = 'D';
-    } else if (clean.startsWith('A') || clean.contains('A-') || clean.contains('A ')) {
-      block = 'A';
-    }
+    final match = RegExp(r'^([A-D])(?=[- ]|$)').firstMatch(clean);
+    final String block = match != null ? match.group(1)! : 'A';
 
     final rateData = blockRateBreakup[block] ?? blockRateBreakup['A']!;
     final double baseMaint = (rateData['maintenance'] ?? rateData['total'] ?? 390).toDouble();
     final double pujaSub = 0.0;
     final double carCharges = carCount * (parkingRates['Four-Wheeler'] ?? 430).toDouble();
     final double bikeCharges = bikeCount * (parkingRates['Two-Wheeler'] ?? 100).toDouble();
-    final double total = baseMaint + carCharges + bikeCharges;
+    final double total = baseMaint + carCharges + bikeCharges + fine;
 
     return FlatMaintenanceBreakdown(
       block: block,
@@ -466,22 +536,23 @@ class AccountingConfig {
       carParkingCharges: carCharges,
       bikeCount: bikeCount,
       bikeParkingCharges: bikeCharges,
+      fine: fine,
       totalMonthlyDue: total,
     );
   }
 
   /// Calculate maintenance breakdown from user profile document data
-  static FlatMaintenanceBreakdown calculateFromUserData(Map<String, dynamic> userData) {
+  static FlatMaintenanceBreakdown calculateFromUserData(Map<String, dynamic> userData, {double fine = 0.0}) {
     final flatNumber = (userData['flatNumber'] ?? 'A-101').toString();
     final block = (userData['block'] ?? '').toString().trim().toUpperCase();
     
-    // Count active approved cars
+    // Count active approved cars (capped at 1 per society rule)
     int carCount = 0;
     if (userData['isCarOwner'] == true && (userData['carReg']?.toString().trim().isNotEmpty ?? false)) {
       carCount = 1;
     }
 
-    // Count active approved bikes
+    // Count active approved bikes (max 2 per society rule)
     int bikeCount = 0;
     if (userData['isBikeOwner'] == true && (userData['bikeReg']?.toString().trim().isNotEmpty ?? false)) {
       bikeCount++;
@@ -499,11 +570,12 @@ class AccountingConfig {
       flatNumber: effectiveFlat,
       carCount: carCount,
       bikeCount: bikeCount,
+      fine: fine,
     );
   }
 }
 
-/// Itemized Flat Maintenance Breakdown for FY 2026-27
+/// Itemized Flat Maintenance Breakdown
 class FlatMaintenanceBreakdown {
   final String block;
   final String flatNumber;
@@ -513,6 +585,7 @@ class FlatMaintenanceBreakdown {
   final double carParkingCharges;
   final int bikeCount;
   final double bikeParkingCharges;
+  final double fine;
   final double totalMonthlyDue;
 
   const FlatMaintenanceBreakdown({
@@ -524,6 +597,7 @@ class FlatMaintenanceBreakdown {
     required this.carParkingCharges,
     required this.bikeCount,
     required this.bikeParkingCharges,
+    this.fine = 0.0,
     required this.totalMonthlyDue,
   });
 
@@ -536,6 +610,7 @@ class FlatMaintenanceBreakdown {
     'carParkingCharges': carParkingCharges,
     'bikeCount': bikeCount,
     'bikeParkingCharges': bikeParkingCharges,
+    if (fine > 0) 'fine': fine,
     'totalMonthlyDue': totalMonthlyDue,
     'financialYear': AccountingConfig.currentFinancialYear,
   };

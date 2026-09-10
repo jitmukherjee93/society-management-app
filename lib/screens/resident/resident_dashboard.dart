@@ -139,7 +139,7 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           });
         },
       ),
-      const ResidentHelpdeskTab(),
+      ResidentHelpdeskTab(userFlat: userFlat),
       MaintenanceTab(
         key: ValueKey(_selectedMaintenanceMonth ?? 'maint_default'),
         initialSelectedMonth: _selectedMaintenanceMonth,
@@ -235,7 +235,7 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
               ),
             ],
           ),
-          body: pages[_currentIndex],
+          body: IndexedStack(index: _currentIndex, children: pages),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _currentIndex,
             indicatorColor: AppColors.primarySurface,
@@ -265,7 +265,7 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => const PreApproveVisitorScreen(),
+                        builder: (_) => PreApproveVisitorScreen(userFlat: userFlat),
                       ),
                     );
                   },
@@ -411,8 +411,9 @@ class _HomeTabState extends State<HomeTab> {
 
     if (!context.mounted) return;
 
-    showDialog(
-      context: context,
+    try {
+      await showDialog(
+        context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (_, setDS) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -1061,6 +1062,14 @@ class _HomeTabState extends State<HomeTab> {
         ),
       ),
     );
+  } finally {
+      mobileCtrl.dispose();
+      waCtrl.dispose();
+      emailCtrl.dispose();
+      carRegCtrl.dispose();
+      bikeRegCtrl.dispose();
+      bike2RegCtrl.dispose();
+    }
   }
 
   @override
@@ -1891,16 +1900,12 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
     bool isDefaulter = false,
   }) {
     if (unpaidDocs.isNotEmpty) {
-      final currentCalMonth = AppFormatters.monthYear(DateTime.now());
-      final curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
-
       // Find first payable unpaid doc (current/future month OR past month with fine)
       QueryDocumentSnapshot? payableDoc;
       for (final doc in unpaidDocs) {
         final d = doc.data() as Map<String, dynamic>;
         final m = d['month']?.toString() ?? '';
-        final mIdx = AccountingConfig.getMonthIndex(m);
-        final bool isPast = (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx);
+        final bool isPast = AccountingConfig.isMonthPast(m);
         final fine = (d['fine'] as num?)?.toDouble() ?? (d['lateFee'] as num?)?.toDouble() ?? 0.0;
         if (!isPast || fine > 0) {
           payableDoc = doc;
@@ -1951,26 +1956,30 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
         .where((m) => m.isNotEmpty)
         .toSet();
 
-    final currentCalMonth = AppFormatters.monthYear(DateTime.now());
-    String nextMonth = currentCalMonth;
+    final currentCalMonth = AppFormatters.monthYear(AccountingConfig.currentDate);
+    String? nextMonth;
     if (AccountingConfig.financialYearMonths.contains(currentCalMonth) && !paidOrPendingMonths.contains(currentCalMonth)) {
       nextMonth = currentCalMonth;
     } else {
       final curIdx = AccountingConfig.getMonthIndex(currentCalMonth);
       if (curIdx != -1) {
-        nextMonth = AccountingConfig.financialYearMonths.skip(curIdx).firstWhere(
-          (m) => !paidOrPendingMonths.contains(m),
-          orElse: () => AccountingConfig.financialYearMonths.firstWhere(
-            (m) => !paidOrPendingMonths.contains(m),
-            orElse: () => currentCalMonth,
-          ),
-        );
-      } else {
-        nextMonth = AccountingConfig.financialYearMonths.firstWhere(
-          (m) => !paidOrPendingMonths.contains(m),
-          orElse: () => AccountingConfig.financialYearMonths.first,
-        );
+        for (int i = curIdx; i < AccountingConfig.financialYearMonths.length; i++) {
+          final m = AccountingConfig.financialYearMonths[i];
+          if (!paidOrPendingMonths.contains(m)) {
+            nextMonth = m;
+            break;
+          }
+        }
       }
+    }
+
+    if (nextMonth == null) {
+      AppFeedback.showInfo(
+        context,
+        'All maintenance for FY ${AccountingConfig.currentFinancialYear} has already been paid in advance!',
+        title: 'Fully Paid',
+      );
+      return;
     }
 
     final advanceDueData = <String, dynamic>{
@@ -2011,10 +2020,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
     final month = (dueData['month'] ?? 'Current Month').toString();
     final double amount = (dueData['amount'] as num?)?.toDouble() ?? 0.0;
 
-    final String currentCalMonth = AppFormatters.monthYear(DateTime.now());
-    final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
-    final int mIdx = AccountingConfig.getMonthIndex(month);
-    final bool isPastMonth = (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx);
+    final bool isPastMonth = AccountingConfig.isMonthPast(month);
     final double fineAmt = (dueData['fine'] as num?)?.toDouble() ?? (dueData['lateFee'] as num?)?.toDouble() ?? 0.0;
 
     if (isPastMonth && fineAmt <= 0) {
@@ -2288,14 +2294,15 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                         });
                       }
 
-                      final String currentCalMonth = AppFormatters.monthYear(DateTime.now());
-                      final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
+                      // Check if resident has historical arrears or opening balance carried over
+                      final double openingArrears = (userData['openingBalance'] as num?)?.toDouble() ??
+                          (userData['arrears'] as num?)?.toDouble() ?? 0.0;
+                      final bool hasHistoricalArrears = openingArrears > 0 || userData['hasArrears'] == true;
 
-                      // Defaulter check: user has uncleared dues for any past month (month < currentCalMonth)
-                      final bool isDefaulter = unpaidDocs.any((d) {
+                      // Defaulter check: user has uncleared dues for any past month or opening arrears
+                      final bool isDefaulter = hasHistoricalArrears || unpaidDocs.any((d) {
                         final m = (d.data() as Map<String, dynamic>)['month']?.toString() ?? '';
-                        final mIdx = AccountingConfig.getMonthIndex(m);
-                        return curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx;
+                        return AccountingConfig.isMonthPast(m);
                       });
 
                       return Column(
@@ -2488,21 +2495,25 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                               final carCharges = (data['carParkingCharges'] as num?)?.toDouble() ?? breakdown.carParkingCharges;
                               final bikeCharges = (data['bikeParkingCharges'] as num?)?.toDouble() ?? breakdown.bikeParkingCharges;
 
-                              final mIdx = AccountingConfig.getMonthIndex(month);
-                              final bool isPastMonth = (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx);
+                              final bool isParkingOnly = data['isParkingOnlyBill'] == true ||
+                                  ((data['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0;
+
+                              final bool isPastMonth = AccountingConfig.isMonthPast(month);
                               final fineAmt = (data['fine'] as num?)?.toDouble() ?? (data['lateFee'] as num?)?.toDouble() ?? 0.0;
-                              final bool canPayPastMonth = !isPastMonth || fineAmt > 0;
+                              final bool canPayPastMonth = isParkingOnly || !isPastMonth || fineAmt > 0;
 
                               return Card(
                                 margin: const EdgeInsets.only(bottom: 12),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),
                                   side: BorderSide(
-                                    color: isFocusMonth ? Colors.teal : Colors.red.shade200,
-                                    width: isFocusMonth ? 2 : 1,
+                                    color: isParkingOnly
+                                        ? Colors.amber.shade400
+                                        : (isFocusMonth ? Colors.teal : Colors.red.shade200),
+                                    width: (isFocusMonth || isParkingOnly) ? 2 : 1,
                                   ),
                                 ),
-                                elevation: isFocusMonth ? 4 : 2,
+                                elevation: (isFocusMonth || isParkingOnly) ? 4 : 2,
                                 child: Padding(
                                   padding: const EdgeInsets.all(16),
                                   child: Column(
@@ -2516,12 +2527,18 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                               Container(
                                                 padding: const EdgeInsets.all(8),
                                                 decoration: BoxDecoration(
-                                                  color: isFocusMonth ? Colors.teal.shade50 : Colors.red.shade50,
+                                                  color: isParkingOnly
+                                                      ? Colors.amber.shade50
+                                                      : (isFocusMonth ? Colors.teal.shade50 : Colors.red.shade50),
                                                   borderRadius: BorderRadius.circular(8),
                                                 ),
                                                 child: Icon(
-                                                  isFocusMonth ? Icons.star_rate_rounded : Icons.receipt_long,
-                                                  color: isFocusMonth ? Colors.teal : Colors.red,
+                                                  isParkingOnly
+                                                      ? Icons.local_parking_rounded
+                                                      : (isFocusMonth ? Icons.star_rate_rounded : Icons.receipt_long),
+                                                  color: isParkingOnly
+                                                      ? Colors.amber.shade800
+                                                      : (isFocusMonth ? Colors.teal : Colors.red),
                                                 ),
                                               ),
                                               const SizedBox(width: 10),
@@ -2531,10 +2548,20 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                                   Row(
                                                     children: [
                                                       Text(
-                                                        'Maintenance Bill: $month',
+                                                        isParkingOnly ? 'Parking Dues: $month' : 'Maintenance Bill: $month',
                                                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                                                       ),
-                                                      if (isFocusMonth) ...[
+                                                      if (isParkingOnly) ...[
+                                                        const SizedBox(width: 6),
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.amber.shade100,
+                                                            borderRadius: BorderRadius.circular(4),
+                                                          ),
+                                                          child: Text('PARKING ONLY', style: TextStyle(color: Colors.amber.shade900, fontWeight: FontWeight.bold, fontSize: 9)),
+                                                        ),
+                                                      ] else if (isFocusMonth) ...[
                                                         const SizedBox(width: 6),
                                                         Container(
                                                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -2560,7 +2587,9 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                             style: TextStyle(
                                               fontWeight: FontWeight.bold,
                                               fontSize: 18,
-                                              color: isFocusMonth ? Colors.teal.shade800 : Colors.red,
+                                              color: isParkingOnly
+                                                  ? Colors.amber.shade900
+                                                  : (isFocusMonth ? Colors.teal.shade800 : Colors.red),
                                             ),
                                           ),
                                         ],
@@ -2570,16 +2599,23 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                       // Itemized Breakdown Line
                                       Builder(
                                         builder: (context) {
+                                          final breakdownText = isParkingOnly
+                                              ? 'Breakdown: Car Parking: ${_currencyFmt.format(carCharges)}${bikeCharges > 0 ? ' • Bike Parking: ${_currencyFmt.format(bikeCharges)}' : ''}${fineAmt > 0 ? ' • Late Fine: ${_currencyFmt.format(fineAmt)}' : ''}'
+                                              : 'Breakdown: Maintenance: ${_currencyFmt.format(baseMaint)}${carCharges > 0 ? ' • Car Parking: ${_currencyFmt.format(carCharges)}' : ''}${bikeCharges > 0 ? ' • Bike Parking: ${_currencyFmt.format(bikeCharges)}' : ''}${fineAmt > 0 ? ' • Late Fine: ${_currencyFmt.format(fineAmt)}' : ''}';
                                           return Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                             decoration: BoxDecoration(
-                                              color: Colors.grey.shade50,
+                                              color: isParkingOnly ? Colors.amber.shade50.withValues(alpha: 0.5) : Colors.grey.shade50,
                                               borderRadius: BorderRadius.circular(6),
-                                              border: Border.all(color: Colors.grey.shade200),
+                                              border: Border.all(color: isParkingOnly ? Colors.amber.shade200 : Colors.grey.shade200),
                                             ),
                                             child: Text(
-                                              'Breakdown: Maintenance: ${_currencyFmt.format(baseMaint)}${carCharges > 0 ? ' • Car Parking: ${_currencyFmt.format(carCharges)}' : ''}${bikeCharges > 0 ? ' • Bike Parking: ${_currencyFmt.format(bikeCharges)}' : ''}${fineAmt > 0 ? ' • Late Fine: ${_currencyFmt.format(fineAmt)}' : ''}',
-                                              style: TextStyle(fontSize: 11, color: Colors.grey.shade800, fontWeight: FontWeight.w500),
+                                              breakdownText,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: isParkingOnly ? Colors.amber.shade900 : Colors.grey.shade800,
+                                                fontWeight: FontWeight.w500,
+                                              ),
                                             ),
                                           );
                                         },
@@ -2640,17 +2676,21 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
                                           canPayPastMonth
-                                              ? AppBadge.error('PAYMENT DUE')
+                                              ? (isParkingOnly ? AppBadge.warning('PARKING DUE') : AppBadge.error('PAYMENT DUE'))
                                               : AppBadge.warning('PAST DUE • AWAITING FINE'),
                                           ElevatedButton.icon(
                                             style: ElevatedButton.styleFrom(
-                                              backgroundColor: canPayPastMonth ? AppColors.primary : Colors.grey.shade400,
+                                              backgroundColor: canPayPastMonth
+                                                  ? (isParkingOnly ? Colors.amber.shade800 : AppColors.primary)
+                                                  : Colors.grey.shade400,
                                               foregroundColor: Colors.white,
                                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                             ),
-                                            icon: Icon(canPayPastMonth ? Icons.payment_rounded : Icons.lock_clock_rounded, size: 16),
+                                            icon: Icon(canPayPastMonth ? (isParkingOnly ? Icons.local_parking_rounded : Icons.payment_rounded) : Icons.lock_clock_rounded, size: 16),
                                             label: Text(
-                                              canPayPastMonth ? 'Pay Maintenance Bill' : 'Awaiting Admin Late Fine',
+                                              canPayPastMonth
+                                                  ? (isParkingOnly ? 'Pay Parking Bill' : 'Pay Maintenance Bill')
+                                                  : 'Awaiting Admin Late Fine',
                                               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                                             ),
                                             onPressed: canPayPastMonth
@@ -2670,10 +2710,42 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                             }),
 
                             // Pending Approval Bills (Displaying Unique ID: 16-Char UTR / Bank Ref / Cheque)
-                            ...pendingApprovalDocs.map((doc) {
+                            ...(() {
+                              final Map<String, QueryDocumentSnapshot> groupedPending = {};
+                              for (final doc in pendingApprovalDocs) {
+                                final data = doc.data() as Map<String, dynamic>;
+                                final uid = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? '').toString().trim();
+                                final parentId = (data['multiMonthParentDueId'] ?? '').toString().trim();
+
+                                String key;
+                                if (parentId.isNotEmpty) {
+                                  key = 'PARENT_$parentId';
+                                } else if (uid.isNotEmpty && uid != 'N/A' && uid != 'CASH-OFFICE') {
+                                  key = 'UID_$uid';
+                                } else {
+                                  key = 'DOC_${doc.id}';
+                                }
+
+                                if (!groupedPending.containsKey(key)) {
+                                  groupedPending[key] = doc;
+                                } else {
+                                  final existingData = groupedPending[key]!.data() as Map<String, dynamic>;
+                                  if ((data['isMultiMonthPayment'] == true || data['multiMonthTotalAmount'] != null) &&
+                                      existingData['isMultiMonthPayment'] != true && existingData['multiMonthTotalAmount'] == null) {
+                                    groupedPending[key] = doc;
+                                  }
+                                }
+                              }
+                              return groupedPending.values;
+                            })().map((doc) {
                               final data = doc.data() as Map<String, dynamic>;
-                              final month = data['month'] ?? '';
-                              final amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
+                              final isMultiMonth = data['isMultiMonthPayment'] == true || data['multiMonthTotalAmount'] != null;
+                              final month = (isMultiMonth && data['multiMonthSummary'] != null)
+                                  ? data['multiMonthSummary'].toString()
+                                  : (data['month'] ?? '').toString();
+                              final amt = isMultiMonth
+                                  ? ((data['multiMonthTotalAmount'] as num?)?.toDouble() ?? (data['amount'] as num?)?.toDouble() ?? 0.0)
+                                  : ((data['amount'] as num?)?.toDouble() ?? 0.0);
                               final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? 'N/A').toString();
                               final mode = data['paymentMode'] ?? 'Online Payment';
                               final category = data['paymentCategory'] ?? (mode.contains('Cheque') || mode.contains('Cash') ? 'OFFLINE' : 'ONLINE');
@@ -2774,7 +2846,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                 final data = paidDocs[index].data() as Map<String, dynamic>;
                                 final month = data['month'] ?? '';
                                 final amount = data['amount'] ?? 0;
-                                final receiptNo = data['receiptNumber'] ?? 'REC-2627-${(data['paidAt'] != null ? data['paidAt'].hashCode % 10000 : 1001)}';
+                                final receiptNo = data['receiptNumber'] ?? 'REC-2627-${(data['paidAt'] != null ? data['paidAt'].hashCode.abs() % 10000 : 1001)}';
                                 final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? '').toString();
                                 
                                 String dateStr = 'Recently Paid';
@@ -2901,6 +2973,24 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
   late double _bikeRate;
   int _selectedDurationMonths = 1;
 
+  bool get isExistingDue => widget.dueId.isNotEmpty;
+  bool get isParkingOnlyDue =>
+      isExistingDue &&
+      (widget.dueData['isParkingOnlyBill'] == true ||
+          ((widget.dueData['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0);
+
+  double get _existingDueAmount =>
+      (widget.dueData['amount'] as num?)?.toDouble() ?? widget.amount;
+  double get _existingDueBaseMaint =>
+      (widget.dueData['baseMaintenance'] as num?)?.toDouble() ?? 0.0;
+  double get _existingDueCarParking =>
+      (widget.dueData['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
+  double get _existingDueBikeParking =>
+      (widget.dueData['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0;
+  double get _existingDueFine =>
+      (widget.dueData['fine'] as num?)?.toDouble() ??
+      (widget.dueData['lateFee'] as num?)?.toDouble() ?? 0.0;
+
   @override
   void initState() {
     super.initState();
@@ -2927,7 +3017,9 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
     }
 
     // Default primary month configuration
-    final bool defaultParking = (_carCount > 0 || _bikeCount > 0) && (widget.dueData['parkingIncluded'] != false);
+    final bool defaultParking = isExistingDue
+        ? (_existingDueCarParking > 0 || _existingDueBikeParking > 0)
+        : ((_carCount > 0 || _bikeCount > 0) && (widget.dueData['parkingIncluded'] != false));
     _monthConfigs = [
       {
         'month': widget.month,
@@ -2940,12 +3032,10 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
   List<String> _buildConsecutiveSchedule() {
     final String startMonth = widget.month;
     final int startIdx = AccountingConfig.getMonthIndex(startMonth);
-    final String currentCalMonth = AppFormatters.monthYear(DateTime.now());
-    final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
-    final bool isPast = (curMonthIdx != -1 && startIdx != -1 && startIdx < curMonthIdx);
+    final bool isPast = AccountingConfig.isMonthPast(startMonth);
 
-    // If user is a defaulter, or if paying a past overdue month, only 1 single month is allowed
-    if (widget.isDefaulter || isPast || startIdx == -1) {
+    // If paying an existing due, defaulter, or past overdue month, only 1 single month is allowed
+    if (isExistingDue || widget.isDefaulter || isPast || startIdx == -1) {
       return [startMonth];
     }
 
@@ -2961,6 +3051,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
   }
 
   void _setDurationMonths(int count) {
+    if (isExistingDue) return;
     final schedule = _buildConsecutiveSchedule();
     final clampedCount = count.clamp(1, schedule.length);
     setState(() {
@@ -2996,9 +3087,12 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
     );
   }
 
-  double get _currentPayableTotal => (_multiMonthCalculation['totalAmount'] as num).toDouble();
+  double get _currentPayableTotal => isExistingDue
+      ? _existingDueAmount
+      : (_multiMonthCalculation['totalAmount'] as num).toDouble();
 
   void _toggleParking(int index, bool val) {
+    if (isExistingDue) return;
     setState(() {
       _monthConfigs[index]['includeParking'] = val;
     });
@@ -3025,11 +3119,20 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
       final paymentModeName = _onlineMode == 'UPI' ? 'UPI (GPay / PhonePe / Paytm / BHIM)' : 'Bank Transfer (NEFT / IMPS / RTGS)';
       final payable = _currentPayableTotal;
 
+      final billMonthConfigs = isExistingDue
+          ? [
+              {
+                'month': widget.month,
+                'includeParking': (_existingDueCarParking > 0 || _existingDueBikeParking > 0),
+              }
+            ]
+          : _monthConfigs;
+
       await BillingService.submitMultiMonthPayment(
         primaryDueId: widget.dueId,
         flatNumber: widget.flat,
         block: _block,
-        monthConfigs: _monthConfigs,
+        monthConfigs: billMonthConfigs,
         paymentMode: paymentModeName,
         paymentCategory: 'ONLINE',
         uniqueId: utr,
@@ -3040,15 +3143,23 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
           'residentName': widget.userData['name'] ?? widget.dueData['residentName'],
           'carCount': _carCount,
           'bikeCount': _bikeCount,
-          'fine': _dueFine,
+          'fine': isExistingDue ? _existingDueFine : _dueFine,
+          'isParkingOnlyBill': isParkingOnlyDue,
+          'baseMaintenance': isExistingDue ? _existingDueBaseMaint : _baseMaintenanceRate,
+          'carParkingCharges': isExistingDue ? _existingDueCarParking : (_carCount * _carRate),
+          'bikeParkingCharges': isExistingDue ? _existingDueBikeParking : (_bikeCount * _bikeRate),
+          'amount': isExistingDue ? _existingDueAmount : payable,
         },
       );
 
       if (mounted) {
         Navigator.pop(context);
+        final billDesc = isExistingDue
+            ? (isParkingOnlyDue ? 'parking dues for ${widget.month}' : 'maintenance bill for ${widget.month}')
+            : '${_monthConfigs.length} month(s)';
         AppFeedback.showSuccess(
           context,
-          'Online payment with 16-digit Unique ID ($utr) for ${_monthConfigs.length} month(s) submitted for Admin approval!',
+          'Online payment with 16-digit Unique ID ($utr) for $billDesc submitted for Admin approval!',
         );
       }
     } catch (e) {
@@ -3074,11 +3185,20 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
       final userUid = user?.uid ?? '';
       final payable = _currentPayableTotal;
 
+      final billMonthConfigs = isExistingDue
+          ? [
+              {
+                'month': widget.month,
+                'includeParking': (_existingDueCarParking > 0 || _existingDueBikeParking > 0),
+              }
+            ]
+          : _monthConfigs;
+
       await BillingService.submitMultiMonthPayment(
         primaryDueId: widget.dueId,
         flatNumber: widget.flat,
         block: _block,
-        monthConfigs: _monthConfigs,
+        monthConfigs: billMonthConfigs,
         paymentMode: 'Cheque to Cashier',
         paymentCategory: 'OFFLINE',
         uniqueId: uniqueId,
@@ -3091,15 +3211,23 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
           'residentName': widget.userData['name'] ?? widget.dueData['residentName'],
           'carCount': _carCount,
           'bikeCount': _bikeCount,
-          'fine': _dueFine,
+          'fine': isExistingDue ? _existingDueFine : _dueFine,
+          'isParkingOnlyBill': isParkingOnlyDue,
+          'baseMaintenance': isExistingDue ? _existingDueBaseMaint : _baseMaintenanceRate,
+          'carParkingCharges': isExistingDue ? _existingDueCarParking : (_carCount * _carRate),
+          'bikeParkingCharges': isExistingDue ? _existingDueBikeParking : (_bikeCount * _bikeRate),
+          'amount': isExistingDue ? _existingDueAmount : payable,
         },
       );
 
       if (mounted) {
         Navigator.pop(context);
+        final billDesc = isExistingDue
+            ? (isParkingOnlyDue ? 'parking dues for ${widget.month}' : 'maintenance bill for ${widget.month}')
+            : '${_monthConfigs.length} month(s)';
         AppFeedback.showSuccess(
           context,
-          'Cheque details ($uniqueId) for ${_monthConfigs.length} month(s) submitted for Admin approval!',
+          'Cheque details ($uniqueId) for $billDesc submitted for Admin approval!',
         );
       }
     } catch (e) {
@@ -3121,8 +3249,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
 
     final schedule = _buildConsecutiveSchedule();
 
-    final String currentCalMonth = AppFormatters.monthYear(DateTime.now());
-    final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
+    final String currentCalMonth = AppFormatters.monthYear(AccountingConfig.currentDate);
 
     return DefaultTabController(
       length: 2,
@@ -3152,7 +3279,9 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                       ),
                       const SizedBox(width: 10),
                       Text(
-                        widget.dueId.isNotEmpty ? 'Pay Maintenance Bill' : 'Pay Advance Maintenance',
+                        isExistingDue
+                            ? (isParkingOnlyDue ? 'Pay Parking Dues' : 'Pay Maintenance Bill')
+                            : 'Pay Advance Maintenance',
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
                       ),
                     ],
@@ -3165,293 +3294,383 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
               ),
               const SizedBox(height: 8),
 
-              // If Defaulter: Show warning notice banner
-              if (widget.isDefaulter) ...[
+              // If Paying an Existing Due: Show single bill summary card without multi-month or future month options
+              if (isExistingDue) ...[
                 Container(
-                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: isParkingOnlyDue ? Colors.amber.shade50 : AppColors.primarySurface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isParkingOnlyDue ? Colors.amber.shade300 : AppColors.primary.withValues(alpha: 0.25),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                isParkingOnlyDue ? Icons.local_parking_rounded : Icons.home_rounded,
+                                size: 18,
+                                color: isParkingOnlyDue ? Colors.amber.shade900 : AppColors.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Flat ${widget.flat} (Block $_block)',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: isParkingOnlyDue ? Colors.amber.shade100 : Colors.indigo.shade100,
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: Text(
+                              isParkingOnlyDue ? 'PARKING DUE' : 'MAINTENANCE DUE',
+                              style: TextStyle(
+                                color: isParkingOnlyDue ? Colors.amber.shade900 : Colors.indigo.shade900,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Billing Month: ${widget.month}',
+                                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.slate800),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  isParkingOnlyDue
+                                      ? 'Car: ${widget.currencyFmt.format(_existingDueCarParking)}${_existingDueBikeParking > 0 ? ' • Bike: ${widget.currencyFmt.format(_existingDueBikeParking)}' : ''}${_existingDueFine > 0 ? ' • Fine: ${widget.currencyFmt.format(_existingDueFine)}' : ''}'
+                                      : 'Maint: ${widget.currencyFmt.format(_existingDueBaseMaint)}${_existingDueCarParking > 0 ? ' • Car: ${widget.currencyFmt.format(_existingDueCarParking)}' : ''}${_existingDueBikeParking > 0 ? ' • Bike: ${widget.currencyFmt.format(_existingDueBikeParking)}' : ''}${_existingDueFine > 0 ? ' • Fine: ${widget.currencyFmt.format(_existingDueFine)}' : ''}',
+                                  style: const TextStyle(fontSize: 11.5, color: AppColors.slate600),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              const Text('Total Payable', style: TextStyle(fontSize: 10.5, color: AppColors.slate600)),
+                              Text(
+                                widget.currencyFmt.format(_existingDueAmount),
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: isParkingOnlyDue ? Colors.amber.shade900 : AppColors.primaryDark,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                // If Defaulter: Show warning notice banner for voluntary advance
+                if (widget.isDefaulter) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.amber.shade300),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Defaulter Notice: Multi-Month Advance Locked',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: Colors.amber.shade900),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Multi-month advance payment is locked until maintenance is settled and cleared up to last month.',
+                                style: TextStyle(fontSize: 11.5, color: Colors.amber.shade900),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+
+                // Multi-Month Advance Payment Selector Section
+                Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.amber.shade50,
+                    color: AppColors.slate50,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.amber.shade300),
+                    border: Border.all(color: AppColors.slate200),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.date_range_rounded, size: 16, color: AppColors.primary),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Billing Months ($mCount Selected)',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
+                              ),
+                            ],
+                          ),
+                          if (widget.isDefaulter)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.shade100,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text('LOCKED TO 1 MONTH', style: TextStyle(color: Colors.amber.shade900, fontWeight: FontWeight.bold, fontSize: 10)),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // "How many months would you like to pay?" Dropdown Selector
+                      if (!widget.isDefaulter && schedule.length > 1) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          margin: const EdgeInsets.only(bottom: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.event_repeat_rounded, size: 16, color: AppColors.primary),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'How many months would you like to pay?',
+                                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: AppColors.slate900),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              DropdownButtonFormField<int>(
+                                initialValue: _selectedDurationMonths,
+                                isExpanded: true,
+                                decoration: InputDecoration(
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: AppColors.slate300)),
+                                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: AppColors.slate300)),
+                                  fillColor: AppColors.slate50,
+                                  filled: true,
+                                ),
+                                items: List.generate(schedule.length, (i) {
+                                  final count = i + 1;
+                                  final startM = schedule.first;
+                                  final endM = schedule[i];
+                                  final label = count == 1
+                                      ? '1 Month ($startM)'
+                                      : '$count Months ($startM – $endM)';
+                                  return DropdownMenuItem<int>(
+                                    value: count,
+                                    child: Text(label, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.slate800)),
+                                  );
+                                }),
+                                onChanged: (val) {
+                                  if (val != null) _setDurationMonths(val);
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+
+                      // List of selected months with per-month parking toggles
+                      ..._monthConfigs.asMap().entries.map((entry) {
+                        final idx = entry.key;
+                        final cfg = entry.value;
+                        final mName = cfg['month'].toString();
+                        final incParking = cfg['includeParking'] == true;
+
+                        final bool isCurrentCalMonth = (mName == currentCalMonth);
+                        final bool isPastDue = AccountingConfig.isMonthPast(mName);
+                        final bool isAdvance = !isPastDue && !isCurrentCalMonth;
+
+                        final double mCarAmt = incParking ? _carCount * _carRate : 0.0;
+                        final double mBikeAmt = incParking ? _bikeCount * _bikeRate : 0.0;
+                        final double monthTotal = _baseMaintenanceRate + mCarAmt + mBikeAmt + (idx == 0 ? _dueFine : 0.0);
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: AppColors.slate200),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(
+                                        mName,
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate800),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      if (isCurrentCalMonth)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primarySurface,
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: const Text('CURRENT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.primary)),
+                                        )
+                                      else if (isPastDue)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                          decoration: BoxDecoration(
+                                            color: Colors.amber.shade100,
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: Text('PAST DUE', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.amber.shade900)),
+                                        )
+                                      else if (isAdvance)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                          decoration: BoxDecoration(
+                                            color: Colors.indigo.shade50,
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: Text('ADVANCE', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.indigo.shade700)),
+                                        ),
+                                    ],
+                                  ),
+                                  Text(
+                                    widget.currencyFmt.format(monthTotal),
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+
+                              // Maintenance & Vehicle Parking breakdown
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    'Base Maintenance: ${widget.currencyFmt.format(_baseMaintenanceRate)}${idx == 0 && _dueFine > 0 ? ' • Late Fine: ${widget.currencyFmt.format(_dueFine)}' : ''}',
+                                    style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                                  ),
+                                  if (_hasVehicles)
+                                    InkWell(
+                                      onTap: () => _toggleParking(idx, !incParking),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          SizedBox(
+                                            height: 20,
+                                            width: 20,
+                                            child: Checkbox(
+                                              value: incParking,
+                                              onChanged: (val) => _toggleParking(idx, val ?? false),
+                                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            'Include Parking (${widget.currencyFmt.format((_carCount * _carRate) + (_bikeCount * _bikeRate))})',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: incParking ? FontWeight.bold : FontWeight.normal,
+                                              color: incParking ? AppColors.primary : AppColors.slate500,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  else
+                                    const Text('No Vehicle Registered', style: TextStyle(fontSize: 10.5, color: AppColors.slate400)),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // Total Summary Banner Card
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.primarySurface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
                   ),
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Defaulter Notice: Multi-Month Advance Locked',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: Colors.amber.shade900),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              'Multi-month advance payment is locked until maintenance is settled and cleared up to last month.',
-                              style: TextStyle(fontSize: 11.5, color: Colors.amber.shade900),
-                            ),
-                          ],
-                        ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Flat ${widget.flat} • $mCount Month${mCount > 1 ? 's' : ''}',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
+                          ),
+                          Text(
+                            'Maint: ${widget.currencyFmt.format(totalMaint)}${totalPark > 0 ? ' • Park: ${widget.currencyFmt.format(totalPark)}' : ''}${_dueFine > 0 ? ' • Late Fine: ${widget.currencyFmt.format(_dueFine)}' : ''}',
+                            style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                          ),
+                        ],
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          const Text('Total Payable', style: TextStyle(fontSize: 10, color: AppColors.slate600)),
+                          Text(
+                            widget.currencyFmt.format(totalPayable),
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 8),
               ],
-
-              // Multi-Month Advance Payment Selector Section
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.slate50,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppColors.slate200),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.date_range_rounded, size: 16, color: AppColors.primary),
-                            const SizedBox(width: 6),
-                            Text(
-                              'Billing Months ($mCount Selected)',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
-                            ),
-                          ],
-                        ),
-                        if (widget.isDefaulter)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.shade100,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text('LOCKED TO 1 MONTH', style: TextStyle(color: Colors.amber.shade900, fontWeight: FontWeight.bold, fontSize: 10)),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-
-                    // "How many months would you like to pay?" Dropdown Selector
-                    if (!widget.isDefaulter && schedule.length > 1) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        margin: const EdgeInsets.only(bottom: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Row(
-                              children: [
-                                Icon(Icons.event_repeat_rounded, size: 16, color: AppColors.primary),
-                                SizedBox(width: 6),
-                                Text(
-                                  'How many months would you like to pay?',
-                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: AppColors.slate900),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            DropdownButtonFormField<int>(
-                              initialValue: _selectedDurationMonths,
-                              isExpanded: true,
-                              decoration: InputDecoration(
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: AppColors.slate300)),
-                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: AppColors.slate300)),
-                                fillColor: AppColors.slate50,
-                                filled: true,
-                              ),
-                              items: List.generate(schedule.length, (i) {
-                                final count = i + 1;
-                                final startM = schedule.first;
-                                final endM = schedule[i];
-                                final label = count == 1
-                                    ? '1 Month ($startM)'
-                                    : '$count Months ($startM – $endM)';
-                                return DropdownMenuItem<int>(
-                                  value: count,
-                                  child: Text(label, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.slate800)),
-                                );
-                              }),
-                              onChanged: (val) {
-                                if (val != null) _setDurationMonths(val);
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-
-                    // List of selected months with per-month parking toggles
-                    ..._monthConfigs.asMap().entries.map((entry) {
-                      final idx = entry.key;
-                      final cfg = entry.value;
-                      final mName = cfg['month'].toString();
-                      final incParking = cfg['includeParking'] == true;
-
-                      final mIdx = AccountingConfig.getMonthIndex(mName);
-                      final bool isCurrentCalMonth = (mIdx != -1 && mIdx == curMonthIdx);
-                      final bool isPastDue = (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx);
-                      final bool isAdvance = (curMonthIdx != -1 && mIdx != -1 && mIdx > curMonthIdx);
-
-                      final double mCarAmt = incParking ? _carCount * _carRate : 0.0;
-                      final double mBikeAmt = incParking ? _bikeCount * _bikeRate : 0.0;
-                      final double monthTotal = _baseMaintenanceRate + mCarAmt + mBikeAmt + (idx == 0 ? _dueFine : 0.0);
-
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 6),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.slate200),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Row(
-                                  children: [
-                                    Text(
-                                      mName,
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate800),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    if (isCurrentCalMonth)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                        decoration: BoxDecoration(
-                                          color: AppColors.primarySurface,
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: const Text('CURRENT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.primary)),
-                                      )
-                                    else if (isPastDue)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                        decoration: BoxDecoration(
-                                          color: Colors.amber.shade100,
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: Text('PAST DUE', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.amber.shade900)),
-                                      )
-                                    else if (isAdvance)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                        decoration: BoxDecoration(
-                                          color: Colors.indigo.shade50,
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: Text('ADVANCE', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.indigo.shade700)),
-                                      ),
-                                  ],
-                                ),
-                                Text(
-                                  widget.currencyFmt.format(monthTotal),
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-
-                            // Maintenance & Vehicle Parking breakdown
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Base Maintenance: ${widget.currencyFmt.format(_baseMaintenanceRate)}${idx == 0 && _dueFine > 0 ? ' • Late Fine: ${widget.currencyFmt.format(_dueFine)}' : ''}',
-                                  style: const TextStyle(fontSize: 11, color: AppColors.slate600),
-                                ),
-                                if (_hasVehicles)
-                                  InkWell(
-                                    onTap: () => _toggleParking(idx, !incParking),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        SizedBox(
-                                          height: 20,
-                                          width: 20,
-                                          child: Checkbox(
-                                            value: incParking,
-                                            onChanged: (val) => _toggleParking(idx, val ?? false),
-                                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          'Include Parking (${widget.currencyFmt.format((_carCount * _carRate) + (_bikeCount * _bikeRate))})',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: incParking ? FontWeight.bold : FontWeight.normal,
-                                            color: incParking ? AppColors.primary : AppColors.slate500,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  )
-                                else
-                                  const Text('No Vehicle Registered', style: TextStyle(fontSize: 10.5, color: AppColors.slate400)),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-
-              // Total Summary Banner Card
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.primarySurface,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Flat ${widget.flat} • $mCount Month${mCount > 1 ? 's' : ''}',
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
-                        ),
-                        Text(
-                          'Maint: ${widget.currencyFmt.format(totalMaint)}${totalPark > 0 ? ' • Park: ${widget.currencyFmt.format(totalPark)}' : ''}${_dueFine > 0 ? ' • Late Fine: ${widget.currencyFmt.format(_dueFine)}' : ''}',
-                          style: const TextStyle(fontSize: 11, color: AppColors.slate600),
-                        ),
-                      ],
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        const Text('Total Payable', style: TextStyle(fontSize: 10, color: AppColors.slate600)),
-                        Text(
-                          widget.currencyFmt.format(totalPayable),
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
               const SizedBox(height: 12),
 
               // TabBar Navigation (Online vs Offline)
@@ -3496,7 +3715,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     _buildOnlineTab(),
 
                     // Tab 2: Offline Payments
-                    _buildOfflineTab(),
+                    _buildOfflineTab(totalPayable),
                   ],
                 ),
               ),
@@ -3643,7 +3862,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
     );
   }
 
-  Widget _buildOfflineTab() {
+  Widget _buildOfflineTab(double totalPayable) {
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3816,7 +4035,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                   const Divider(height: 1, color: AppColors.successBorder),
                   const SizedBox(height: 8),
                   Text(
-                    '1. Please visit the Society Office and hand over the exact cash of ${widget.currencyFmt.format(widget.amount)} to the Society Cashier / Treasurer.',
+                    '1. Please visit the Society Office and hand over the exact cash of ${widget.currencyFmt.format(totalPayable)} to the Society Cashier / Treasurer.',
                     style: const TextStyle(fontSize: 12, height: 1.4, color: AppColors.slate800),
                   ),
                   const SizedBox(height: 4),
@@ -3857,7 +4076,8 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
 
 // ------ Pre-Approve Visitor Screen ------
 class PreApproveVisitorScreen extends StatefulWidget {
-  const PreApproveVisitorScreen({super.key});
+  final String? userFlat;
+  const PreApproveVisitorScreen({super.key, this.userFlat});
 
   @override
   State<PreApproveVisitorScreen> createState() => _PreApproveVisitorScreenState();
@@ -3882,8 +4102,11 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
           throw Exception('User is not logged in');
         }
         // Fetch host flat number
-        final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-        final flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
+        String flatNumber = widget.userFlat ?? '';
+        if (flatNumber.isEmpty) {
+          final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+          flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
+        }
 
         final passResult = await VisitorPassService.createVisitorPass(
           residentUid: user.uid,
@@ -4043,7 +4266,8 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
 }
 
 class ResidentHelpdeskTab extends StatefulWidget {
-  const ResidentHelpdeskTab({super.key});
+  final String? userFlat;
+  const ResidentHelpdeskTab({super.key, this.userFlat});
 
   @override
   State<ResidentHelpdeskTab> createState() => _ResidentHelpdeskTabState();
@@ -4056,96 +4280,104 @@ class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
     String category = 'Maintenance';
     final formKey = GlobalKey<FormState>();
 
-    await AppDialog.show(
-      context: context,
-      title: 'Raise a Helpdesk Ticket',
-      subtitle: 'Submit a complaint or service request to Society Admin',
-      icon: Icons.support_agent_rounded,
-      iconColor: AppColors.primary,
-      iconBgColor: AppColors.primarySurface,
-      body: StatefulBuilder(
-        builder: (ctx, setDlgState) {
-          return Form(
-            key: formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                DropdownButtonFormField<String>(
-                  initialValue: category,
-                  decoration: const InputDecoration(labelText: 'Category *'),
-                  items: const [
-                    DropdownMenuItem(value: 'Maintenance', child: Text('Maintenance / Electrical / Plumbing')),
-                    DropdownMenuItem(value: 'Security', child: Text('Security & Gate')),
-                    DropdownMenuItem(value: 'Cleanliness', child: Text('Cleanliness & Waste Management')),
-                    DropdownMenuItem(value: 'Other', child: Text('Other / General Query')),
-                  ],
-                  onChanged: (val) => setDlgState(() => category = val!),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: titleController,
-                  decoration: const InputDecoration(
-                    labelText: 'Issue Subject / Title *',
-                    hintText: 'e.g. Water seepage in master bedroom balcony',
+    try {
+      await AppDialog.show(
+        context: context,
+        title: 'Raise a Helpdesk Ticket',
+        subtitle: 'Submit a complaint or service request to Society Admin',
+        icon: Icons.support_agent_rounded,
+        iconColor: AppColors.primary,
+        iconBgColor: AppColors.primarySurface,
+        body: StatefulBuilder(
+          builder: (ctx, setDlgState) {
+            return Form(
+              key: formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: category,
+                    decoration: const InputDecoration(labelText: 'Category *'),
+                    items: const [
+                      DropdownMenuItem(value: 'Maintenance', child: Text('Maintenance / Electrical / Plumbing')),
+                      DropdownMenuItem(value: 'Security', child: Text('Security & Gate')),
+                      DropdownMenuItem(value: 'Cleanliness', child: Text('Cleanliness & Waste Management')),
+                      DropdownMenuItem(value: 'Other', child: Text('Other / General Query')),
+                    ],
+                    onChanged: (val) => setDlgState(() => category = val!),
                   ),
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Title is required' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: descController,
-                  decoration: const InputDecoration(
-                    labelText: 'Detailed Description *',
-                    hintText: 'Describe the issue clearly...',
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: titleController,
+                    decoration: const InputDecoration(
+                      labelText: 'Issue Subject / Title *',
+                      hintText: 'e.g. Water seepage in master bedroom balcony',
+                    ),
+                    validator: (v) => v == null || v.trim().isEmpty ? 'Title is required' : null,
                   ),
-                  maxLines: 4,
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Description is required' : null,
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-      actions: [
-        OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
-          onPressed: () async {
-            if (!formKey.currentState!.validate()) return;
-            try {
-              final user = FirebaseAuth.instance.currentUser;
-              if (user == null) {
-                if (context.mounted) AppFeedback.showError(context, 'Session expired. Please log in again.');
-                return;
-              }
-              final uid = user.uid;
-              final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
-              final flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
-              
-              await FirebaseFirestore.instance.collection('complaints').add({
-                'title': titleController.text.trim(),
-                'description': descController.text.trim(),
-                'category': category,
-                'status': 'OPEN',
-                'residentUid': uid,
-                'flatNumber': flatNumber,
-                'createdAt': FieldValue.serverTimestamp(),
-                'updatedAt': FieldValue.serverTimestamp(),
-              });
-              
-              if (mounted) {
-                Navigator.pop(context);
-                AppFeedback.showSuccess(context, 'Ticket submitted successfully!');
-              }
-            } catch (e) {
-              if (mounted) {
-                AppFeedback.showError(context, 'Error raising ticket: $e');
-              }
-            }
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: descController,
+                    decoration: const InputDecoration(
+                      labelText: 'Detailed Description *',
+                      hintText: 'Describe the issue clearly...',
+                    ),
+                    maxLines: 4,
+                    validator: (v) => v == null || v.trim().isEmpty ? 'Description is required' : null,
+                  ),
+                ],
+              ),
+            );
           },
-          child: const Text('Submit Ticket'),
         ),
-      ],
-    );
+        actions: [
+          OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+            onPressed: () async {
+              if (!formKey.currentState!.validate()) return;
+              try {
+                final user = FirebaseAuth.instance.currentUser;
+                if (user == null) {
+                  if (context.mounted) AppFeedback.showError(context, 'Session expired. Please log in again.');
+                  return;
+                }
+                final uid = user.uid;
+                String flatNumber = widget.userFlat ?? '';
+                if (flatNumber.isEmpty) {
+                  final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+                  flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
+                }
+                
+                await FirebaseFirestore.instance.collection('complaints').add({
+                  'title': titleController.text.trim(),
+                  'description': descController.text.trim(),
+                  'category': category,
+                  'status': 'OPEN',
+                  'residentUid': uid,
+                  'flatNumber': flatNumber,
+                  'createdAt': FieldValue.serverTimestamp(),
+                  'updatedAt': FieldValue.serverTimestamp(),
+                });
+                
+                if (mounted) {
+                  Navigator.pop(context);
+                  AppFeedback.showSuccess(context, 'Ticket submitted successfully!');
+                }
+              } catch (e) {
+                if (mounted) {
+                  AppFeedback.showError(context, 'Error raising ticket: $e');
+                }
+              }
+            },
+            child: const Text('Submit Ticket'),
+          ),
+        ],
+      );
+    } finally {
+      titleController.dispose();
+      descController.dispose();
+    }
   }
 
   @override

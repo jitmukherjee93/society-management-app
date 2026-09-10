@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 
@@ -374,10 +373,10 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
   }
 
   // ─── Dialog: One-Time Annual Budget Plan Upload ─────────────────────────────
-  void _openUploadAnnualBudgetDialog(
+  Future<void> _openUploadAnnualBudgetDialog(
     double totalApprovedAnnualBudget,
     double totalApprovedMonthlyBudget,
-  ) {
+  ) async {
     final formKey = GlobalKey<FormState>();
     String selectedFY = AccountingConfig.currentFinancialYear;
     String meetingType = AccountingConfig.meetingTypes.first;
@@ -386,8 +385,9 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     PlatformFile? masterDocFile;
     bool isSubmitting = false;
 
-    showDialog(
-      context: context,
+    try {
+      await showDialog(
+        context: context,
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDS) {
@@ -729,10 +729,13 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
         },
       ),
     );
+  } finally {
+    notesCtrl.dispose();
   }
+}
 
   // ─── Dialog: Edit Budget Head (Requires MoM) ──────────────────────────────
-  void _openEditBudgetHeadDialog(BudgetHead head) {
+  Future<void> _openEditBudgetHeadDialog(BudgetHead head) async {
     final formKey = GlobalKey<FormState>();
     final yearlyCtrl = TextEditingController(text: head.yearlyBudget.toStringAsFixed(0));
     final monthlyCtrl = TextEditingController(text: head.monthlyBudget.toStringAsFixed(0));
@@ -742,8 +745,9 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     PlatformFile? momFile;
     bool isSubmitting = false;
 
-    showDialog(
-      context: context,
+    try {
+      await showDialog(
+        context: context,
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDS) {
@@ -1150,10 +1154,15 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
         },
       ),
     );
+  } finally {
+    yearlyCtrl.dispose();
+    monthlyCtrl.dispose();
+    reasonCtrl.dispose();
   }
+}
 
   // ─── Dialog: Record New Expenditure ────────────────────────────────────────
-  void _openRecordExpenseDialog(Map<String, double> currentSpentMap, [List<BudgetHead>? availableHeads]) {
+  Future<void> _openRecordExpenseDialog(Map<String, double> currentSpentMap, [List<BudgetHead>? availableHeads]) async {
     final formKey = GlobalKey<FormState>();
     final headsList = availableHeads ?? AccountingConfig.expenditureHeads;
     String selectedHead = headsList.first.name;
@@ -1166,8 +1175,9 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     PlatformFile? voucherFile;
     bool isSubmitting = false;
 
-    showDialog(
-      context: context,
+    try {
+      await showDialog(
+        context: context,
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDS) {
@@ -1555,8 +1565,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                         setDS(() => isSubmitting = true);
                         try {
                           final double amount = double.parse(amountCtrl.text.trim());
-                          final timestamp = DateTime.now().millisecondsSinceEpoch;
-                          final voucherCode = 'EXP-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
+                          final voucherCode = AccountingConfig.generateVoucherCode('EXP');
 
                           String? docUrl;
                           String? docFileName;
@@ -1579,6 +1588,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                             'description': descCtrl.text.trim(),
                             'documentUrl': docUrl,
                             'documentFileName': docFileName,
+                            'financialYear': AccountingConfig.currentFinancialYear,
                             'recordedBy': adminUser?.email ?? adminUser?.uid ?? 'Admin',
                             'createdAt': FieldValue.serverTimestamp(),
                           });
@@ -1603,14 +1613,20 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
         },
       ),
     );
+    } finally {
+      amountCtrl.dispose();
+      paidToCtrl.dispose();
+      refCtrl.dispose();
+      descCtrl.dispose();
+    }
   }
 
   // ─── Dialog: Pay Staff Remuneration (Voucher & Budget Aligned) ─────────────
-  void _openPayStaffRemunerationDialog({
+  Future<void> _openPayStaffRemunerationDialog({
     String? preselectedRole,
     String? preselectedMonth,
     Map<String, double>? currentSpentMap,
-  }) {
+  }) async {
     final formKey = GlobalKey<FormState>();
     final staffRoles = AccountingConfig.staffRemunerationMonthly.keys.toList();
     final months = [
@@ -1636,9 +1652,10 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     PlatformFile? voucherFile;
     bool isSubmitting = false;
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    try {
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDS) {
           final double allocated = AccountingConfig.staffRemunerationMonthly[selectedRole] ?? 0.0;
@@ -2043,6 +2060,12 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
         },
       ),
     );
+    } finally {
+      amountCtrl.dispose();
+      paidToCtrl.dispose();
+      refCtrl.dispose();
+      descCtrl.dispose();
+    }
   }
 
   // ─── UI Component: Staff Remuneration Monthly Status Tracker ───────────────
@@ -2298,7 +2321,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
   }
 
   // ─── Dialog: Record Other Income ───────────────────────────────────────────
-  void _openRecordIncomeDialog() {
+  Future<void> _openRecordIncomeDialog() async {
     final formKey = GlobalKey<FormState>();
     String selectedHead = AccountingConfig.incomeHeads.first;
     final amountCtrl = TextEditingController();
@@ -2310,9 +2333,10 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     PlatformFile? receiptFile;
     bool isSubmitting = false;
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
+    try {
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDS) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -2518,8 +2542,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                       setDS(() => isSubmitting = true);
                       try {
                         final double amount = double.parse(amountCtrl.text.trim());
-                        final timestamp = DateTime.now().millisecondsSinceEpoch;
-                        final voucherCode = 'INC-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
+                        final voucherCode = AccountingConfig.generateVoucherCode('INC');
 
                         String? docUrl;
                         String? docFileName;
@@ -2542,6 +2565,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                           'description': descCtrl.text.trim(),
                           'documentUrl': docUrl,
                           'documentFileName': docFileName,
+                          'financialYear': AccountingConfig.currentFinancialYear,
                           'recordedBy': adminUser?.email ?? adminUser?.uid ?? 'Admin',
                           'createdAt': FieldValue.serverTimestamp(),
                         });
@@ -2565,6 +2589,12 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
         ),
       ),
     );
+    } finally {
+      amountCtrl.dispose();
+      receivedFromCtrl.dispose();
+      refCtrl.dispose();
+      descCtrl.dispose();
+    }
   }
 
   // ─── Delete Transaction ────────────────────────────────────────────────────
@@ -2598,16 +2628,15 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     if (confirm != true) return;
 
     try {
-      final docUrl = data['documentUrl']?.toString();
-      if (docUrl != null && docUrl.isNotEmpty) {
-        try {
-          await FirebaseStorage.instance.refFromURL(docUrl).delete();
-        } catch (_) {}
-      }
-      await FirebaseFirestore.instance.collection('society_transactions').doc(docId).delete();
+      await FirebaseFirestore.instance.collection('society_transactions').doc(docId).update({
+        'isVoid': true,
+        'voidedAt': FieldValue.serverTimestamp(),
+        'voidedBy': FirebaseAuth.instance.currentUser?.email ?? 'Admin',
+        'status': 'VOIDED',
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$voucher voided successfully.')),
+          SnackBar(content: Text('$voucher marked as VOIDED.')),
         );
       }
     } catch (e) {
@@ -2741,6 +2770,18 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
 
                 for (final doc in allDocs) {
                   final data = doc.data() as Map<String, dynamic>;
+                  if (data['isVoid'] == true) continue;
+
+                  DateTime? txnDate;
+                  if (data['paymentDate'] is Timestamp) {
+                    txnDate = (data['paymentDate'] as Timestamp).toDate();
+                  } else if (data['paymentDate'] is String) {
+                    txnDate = DateTime.tryParse(data['paymentDate']);
+                  }
+                  final String txFY = data['financialYear']?.toString() ??
+                      (txnDate != null ? AccountingConfig.getFinancialYear(txnDate) : AccountingConfig.currentFinancialYear);
+                  if (txFY != AccountingConfig.currentFinancialYear) continue;
+
                   final double amt = (data['amount'] as num?)?.toDouble() ?? 0.0;
                   final String type = (data['type'] ?? '').toString().toUpperCase();
                   final String head = data['accountHead'] ?? 'Uncategorized';

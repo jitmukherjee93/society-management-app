@@ -53,10 +53,7 @@ class StaffRemunerationService {
   FirebaseFirestore get firestore => _customFirestore ?? FirebaseFirestore.instance;
 
   /// Generate standardized expenditure voucher number
-  String generateVoucherNumber() {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return 'EXP-2627-${(timestamp % 100000).toString().padLeft(5, '0')}';
-  }
+  String generateVoucherNumber() => AccountingConfig.generateVoucherCode('EXP');
 
   /// Record a staff remuneration payment with mandatory document attachment
   Future<StaffPaymentRecordResult> recordStaffPayment({
@@ -72,9 +69,26 @@ class StaffRemunerationService {
     required String recordedBy,
   }) async {
     try {
+      // 1. Guard against duplicate payments for the same role + month
+      final existingSnap = await firestore
+          .collection('society_transactions')
+          .where('accountHead', isEqualTo: 'Staff Remuneration')
+          .where('staffRole', isEqualTo: staffRole)
+          .where('remunerationMonth', isEqualTo: remunerationMonth)
+          .get();
+
+      final activePaid = existingSnap.docs.where((d) => d.data()['isVoid'] != true).toList();
+      if (activePaid.isNotEmpty) {
+        final existingVoucher = activePaid.first.data()['voucherNumber'] ?? 'Existing Voucher';
+        return StaffPaymentRecordResult(
+          success: false,
+          error: '$staffRole has already been paid for $remunerationMonth ($existingVoucher).',
+        );
+      }
+
       final voucherNumber = generateVoucherNumber();
 
-      // 1. Upload voucher/salary slip
+      // 2. Upload voucher/salary slip
       final docUrl = await uploadFile(
         voucherFile,
         'society_accounts_vouchers/${voucherNumber}_${voucherFile.name}',

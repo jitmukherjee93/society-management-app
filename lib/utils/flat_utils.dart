@@ -6,17 +6,19 @@ class FlatUtils {
     final trimmed = rawFlat.trim().toUpperCase();
     if (trimmed.isEmpty) return '';
 
-    // If already contains hyphen (e.g., 'B-312')
+    // If already contains hyphen (e.g., 'B-312' or 'B-312-A')
     if (trimmed.contains('-')) {
       final parts = trimmed.split('-');
-      if (parts.length == 2) {
-        return '${parts[0].trim()}-${parts[1].trim()}';
+      if (parts.length >= 2) {
+        final block = parts[0].trim();
+        final rest = parts.sublist(1).map((p) => p.trim()).join('-');
+        return '$block-$rest';
       }
       return trimmed;
     }
 
-    // Match leading block letter followed by flat digits (e.g., 'B312' -> 'B-312')
-    final match = RegExp(r'^([A-D])(\d{3,4})$').firstMatch(trimmed);
+    // Match leading block letter followed by separator or digits (e.g., 'B 312' or 'B312' -> 'B-312')
+    final match = RegExp(r'^([A-D])[\s-]*([0-9A-Za-z]+)$').firstMatch(trimmed);
     if (match != null) {
       return '${match.group(1)}-${match.group(2)}';
     }
@@ -24,13 +26,13 @@ class FlatUtils {
     return trimmed;
   }
 
-  /// Extracts the block letter (A, B, C, D) from a flat number
+  /// Extracts the block letter (A, B, C, D) strictly from a flat number
   static String extractBlock(String? rawFlat) {
     final norm = normalize(rawFlat);
-    if (norm.startsWith('A')) return 'A';
-    if (norm.startsWith('B')) return 'B';
-    if (norm.startsWith('C')) return 'C';
-    if (norm.startsWith('D')) return 'D';
+    final match = RegExp(r'^([A-D])(?=[- ]|$)').firstMatch(norm);
+    if (match != null) {
+      return match.group(1)!;
+    }
     return 'General';
   }
 

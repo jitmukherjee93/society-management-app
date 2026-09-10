@@ -66,9 +66,16 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         setState(() => _isUploading = true);
 
         final fileBytes = await files.first.readAsBytes();
-        final csvString = utf8.decode(fileBytes);
-        final List<List<dynamic>> csvTable =
-            CsvDecoder().convert(csvString);
+        String csvString;
+        try {
+          csvString = utf8.decode(fileBytes);
+        } catch (_) {
+          csvString = latin1.decode(fileBytes);
+        }
+        if (csvString.startsWith('\uFEFF')) {
+          csvString = csvString.substring(1);
+        }
+        final List<List<dynamic>> csvTable = CsvDecoder().convert(csvString);
 
         if (csvTable.length <= 1) {
           throw Exception('CSV file is empty or missing data rows.');
@@ -86,6 +93,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         final carRegIndex = header.indexWhere((h) => h.contains('car reg'));
         final bikeOwnerIndex = header.indexWhere((h) => h.contains('bike owner'));
         final bikeRegIndex = header.indexWhere((h) => h.contains('bike reg'));
+        final bike2RegIndex = header.indexWhere((h) => h.contains('bike 2') || h.contains('second bike') || h.contains('bike2'));
 
         if (flatIndex == -1 || nameIndex == -1 || whatsappIndex == -1 || mobileIndex == -1) {
           throw Exception(
@@ -101,10 +109,12 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         // Pre-fetch all existing users once to eliminate N+1 network queries in the loop
         final existingUsersSnap = await FirebaseFirestore.instance.collection('users').get();
         final Map<String, Map<String, int>> cachedVehicleCounts = {};
+        final Map<String, List<Map<String, dynamic>>> existingUsersByFlat = {};
         for (final uDoc in existingUsersSnap.docs) {
           final uData = uDoc.data();
           final fId = (uData['flatNumber'] ?? '').toString().trim().toUpperCase();
           if (fId.isEmpty) continue;
+          existingUsersByFlat.putIfAbsent(fId, () => []).add(uData);
           final current = cachedVehicleCounts.putIfAbsent(fId, () => {'cars': 0, 'bikes': 0});
           if (uData['isCarOwner'] == true && (uData['carReg']?.toString().trim().isNotEmpty ?? false)) {
             current['cars'] = (current['cars'] ?? 0) + 1;
@@ -117,75 +127,128 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
           }
         }
 
-        for (var i = 1; i < csvTable.length; i++) {
-          final row = csvTable[i];
-          if (row.isEmpty ||
-              row.length <= flatIndex ||
-              row[flatIndex].toString().trim().isEmpty) { continue; }
+        // Initialize single secondary auth app for batch CSV operations
+        FirebaseApp? batchSecondaryApp;
+        FirebaseAuth? batchAuth;
+        try {
+          batchSecondaryApp = await Firebase.initializeApp(
+            name: 'CsvBatchApp_${DateTime.now().microsecondsSinceEpoch}',
+            options: Firebase.app().options,
+          );
+          batchAuth = FirebaseAuth.instanceFor(app: batchSecondaryApp);
+        } catch (e) {
+          debugPrint('Notice: Batch auth app init: $e');
+        }
 
-          final flatNo = row[flatIndex].toString().trim();
-          final name = row[nameIndex].toString().trim();
-          final whatsapp = row[whatsappIndex].toString().trim();
-          final mobile = row[mobileIndex].toString().trim();
+        try {
+          for (var i = 1; i < csvTable.length; i++) {
+            final row = csvTable[i];
+            if (row.isEmpty ||
+                row.length <= flatIndex ||
+                row[flatIndex].toString().trim().isEmpty) { continue; }
 
-          final List<String> rowErrors = [];
+            final flatNo = row[flatIndex].toString().trim();
+            final name = row[nameIndex].toString().trim();
+            final whatsapp = row[whatsappIndex].toString().trim();
+            final mobile = row[mobileIndex].toString().trim();
 
-          if (!kFlatNoRegex.hasMatch(flatNo)) rowErrors.add('Flat No must be 3 digits');
-          if (!kPhoneRegex.hasMatch(whatsapp)) rowErrors.add('WhatsApp No must be 10 digits');
-          if (!kPhoneRegex.hasMatch(mobile)) rowErrors.add('Mobile No must be 10 digits');
+            final List<String> rowErrors = [];
 
-          final block = blockIndex != -1 && row.length > blockIndex
-              ? row[blockIndex].toString().trim().toUpperCase()
-              : '';
-          if (!validBlocks.contains(block)) rowErrors.add('Block must be A, B, C or D');
+            if (!kFlatNoRegex.hasMatch(flatNo)) rowErrors.add('Flat No must be 3 digits');
+            if (!kPhoneRegex.hasMatch(whatsapp)) rowErrors.add('WhatsApp No must be 10 digits');
+            if (!kPhoneRegex.hasMatch(mobile)) rowErrors.add('Mobile No must be 10 digits');
 
-          final isCarOwner = carOwnerIndex != -1 && row.length > carOwnerIndex
-              ? row[carOwnerIndex].toString().trim().toLowerCase() == 'yes'
-              : false;
-          final carReg = carRegIndex != -1 && row.length > carRegIndex
-              ? row[carRegIndex].toString().trim()
-              : '';
-          final isBikeOwner = bikeOwnerIndex != -1 && row.length > bikeOwnerIndex
-              ? row[bikeOwnerIndex].toString().trim().toLowerCase() == 'yes'
-              : false;
-          final bikeReg = bikeRegIndex != -1 && row.length > bikeRegIndex
-              ? row[bikeRegIndex].toString().trim()
-              : '';
+            final block = blockIndex != -1 && row.length > blockIndex
+                ? row[blockIndex].toString().trim().toUpperCase()
+                : '';
+            if (!validBlocks.contains(block)) rowErrors.add('Block must be A, B, C or D');
 
-          if (isCarOwner && carReg.isEmpty) rowErrors.add('Car Reg No required');
-          if (isBikeOwner && bikeReg.isEmpty) rowErrors.add('Bike Reg No required');
+            final isCarOwner = carOwnerIndex != -1 && row.length > carOwnerIndex
+                ? row[carOwnerIndex].toString().trim().toLowerCase() == 'yes'
+                : false;
+            final carReg = carRegIndex != -1 && row.length > carRegIndex
+                ? row[carRegIndex].toString().trim()
+                : '';
+            final isBikeOwner = bikeOwnerIndex != -1 && row.length > bikeOwnerIndex
+                ? row[bikeOwnerIndex].toString().trim().toLowerCase() == 'yes'
+                : false;
+            final bikeReg = bikeRegIndex != -1 && row.length > bikeRegIndex
+                ? row[bikeRegIndex].toString().trim()
+                : '';
+            final bike2Reg = bike2RegIndex != -1 && row.length > bike2RegIndex
+                ? row[bike2RegIndex].toString().trim()
+                : '';
+            final bool hasBike2 = isBikeOwner && bike2Reg.isNotEmpty;
 
-          final docId = (block.isNotEmpty && !flatNo.contains('-'))
-              ? '$block-$flatNo'
-              : flatNo;
-          final normDocId = docId.toUpperCase();
+            if (isCarOwner && carReg.isEmpty) rowErrors.add('Car Reg No required');
+            if (isBikeOwner && bikeReg.isEmpty) rowErrors.add('Bike Reg No required');
 
-          if (isCarOwner || isBikeOwner) {
-            final currentCounts = cachedVehicleCounts[normDocId] ?? {'cars': 0, 'bikes': 0};
-            final existingCars = currentCounts['cars'] ?? 0;
-            final existingBikes = currentCounts['bikes'] ?? 0;
-            final batchCars = csvFlatCars[normDocId] ?? 0;
-            final batchBikes = csvFlatBikes[normDocId] ?? 0;
+            final docId = (block.isNotEmpty && !flatNo.contains('-'))
+                ? '$block-$flatNo'
+                : flatNo;
+            final normDocId = docId.toUpperCase();
 
-            if (isCarOwner && (existingCars + batchCars + 1 > 1)) {
-              rowErrors.add('Flat $docId exceeds car quota (max 1 car per flat)');
+            if (isCarOwner || isBikeOwner) {
+              final currentCounts = cachedVehicleCounts[normDocId] ?? {'cars': 0, 'bikes': 0};
+              final existingCars = currentCounts['cars'] ?? 0;
+              final existingBikes = currentCounts['bikes'] ?? 0;
+              final batchCars = csvFlatCars[normDocId] ?? 0;
+              final batchBikes = csvFlatBikes[normDocId] ?? 0;
+
+              // Check if row is updating an existing resident
+              final existingUserList = existingUsersByFlat[normDocId] ?? [];
+              final existingUser = existingUserList.where((u) {
+                final p = (u['phone'] ?? '').toString();
+                final n = (u['name'] ?? '').toString().toLowerCase();
+                return p == '+91$mobile' || p == mobile || n == name.toLowerCase();
+              }).firstOrNull;
+
+              final userPrevCars = (existingUser?['isCarOwner'] == true && (existingUser?['carReg']?.toString().trim().isNotEmpty ?? false)) ? 1 : 0;
+              final userPrevBikes = ((existingUser?['isBikeOwner'] == true && (existingUser?['bikeReg']?.toString().trim().isNotEmpty ?? false)) ? 1 : 0) +
+                  ((existingUser?['hasBike2'] == true && (existingUser?['bike2Reg']?.toString().trim().isNotEmpty ?? false)) ? 1 : 0);
+
+              final requestedBikes = (isBikeOwner ? 1 : 0) + (hasBike2 ? 1 : 0);
+
+              if (isCarOwner && (existingCars - userPrevCars + batchCars + 1 > 1)) {
+                rowErrors.add('Flat $docId exceeds car quota (max 1 car per flat)');
+              }
+              if (isBikeOwner && (existingBikes - userPrevBikes + batchBikes + requestedBikes > 2)) {
+                rowErrors.add('Flat $docId exceeds bike quota (max 2 bikes per flat)');
+              }
             }
-            if (isBikeOwner && (existingBikes + batchBikes + 1 > 2)) {
-              rowErrors.add('Flat $docId exceeds bike quota (max 2 bikes per flat)');
+
+            if (rowErrors.isNotEmpty) {
+              errors.add('Row ${i + 1}: ${rowErrors.join(', ')}');
+              continue;
             }
+
+            if (isCarOwner) csvFlatCars[normDocId] = (csvFlatCars[normDocId] ?? 0) + 1;
+            if (isBikeOwner) {
+              csvFlatBikes[normDocId] = (csvFlatBikes[normDocId] ?? 0) + (hasBike2 ? 2 : 1);
+            }
+
+            await _saveRecord(
+              flatNo,
+              name,
+              whatsapp,
+              mobile,
+              block,
+              isCarOwner,
+              carReg,
+              isBikeOwner,
+              bikeReg,
+              hasBike2: hasBike2,
+              bike2Reg: bike2Reg.isNotEmpty ? bike2Reg : null,
+              secondaryAuth: batchAuth,
+            );
+            count++;
           }
-
-          if (rowErrors.isNotEmpty) {
-            errors.add('Row ${i + 1}: ${rowErrors.join(', ')}');
-            continue;
+        } finally {
+          if (batchSecondaryApp != null) {
+            try {
+              await batchSecondaryApp.delete();
+            } catch (_) {}
           }
-
-          if (isCarOwner) csvFlatCars[normDocId] = (csvFlatCars[normDocId] ?? 0) + 1;
-          if (isBikeOwner) csvFlatBikes[normDocId] = (csvFlatBikes[normDocId] ?? 0) + 1;
-
-          await _saveRecord(flatNo, name, whatsapp, mobile, block,
-              isCarOwner, carReg, isBikeOwner, bikeReg);
-          count++;
         }
 
         if (mounted) {
@@ -298,6 +361,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     String? email,
     String? rentAgreementUrl,
     String? rentAgreementFileName,
+    FirebaseAuth? secondaryAuth,
   }) async {
     final docId = (block.isNotEmpty && !flatNo.contains('-'))
         ? '$block-$flatNo'
@@ -314,13 +378,19 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
 
     // Automatically create user account in Firebase Auth without signing out current admin
     String? newUid;
+    FirebaseApp? localSecondaryApp;
     try {
-      final appName = 'AuthApp_${DateTime.now().microsecondsSinceEpoch}';
-      final secondaryApp = await Firebase.initializeApp(
-        name: appName,
-        options: Firebase.app().options,
-      );
-      final auth = FirebaseAuth.instanceFor(app: secondaryApp);
+      final FirebaseAuth auth;
+      if (secondaryAuth != null) {
+        auth = secondaryAuth;
+      } else {
+        final appName = 'AuthApp_${DateTime.now().microsecondsSinceEpoch}';
+        localSecondaryApp = await Firebase.initializeApp(
+          name: appName,
+          options: Firebase.app().options,
+        );
+        auth = FirebaseAuth.instanceFor(app: localSecondaryApp);
+      }
       try {
         final userCred = await auth.createUserWithEmailAndPassword(
           email: authEmail,
@@ -344,9 +414,12 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       } catch (e) {
         debugPrint('Auth user creation general error: $e');
       }
-      await secondaryApp.delete();
-    } catch (e) {
-      debugPrint('Auth user creation secondary app error ($authEmail): $e');
+    } finally {
+      if (localSecondaryApp != null) {
+        try {
+          await localSecondaryApp.delete();
+        } catch (_) {}
+      }
     }
 
     // Ensure flat document exists
@@ -361,10 +434,14 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       final prevOwners = await FirebaseFirestore.instance
           .collection('users')
           .where('flatNumber', isEqualTo: docId)
-          .where('role', isEqualTo: 'Owner')
+          .where('occupantType', isEqualTo: 'Owner')
           .get();
       for (final doc in prevOwners.docs) {
-        await doc.reference.update({'role': 'Resident'});
+        await doc.reference.update({
+          'occupantType': 'Resident',
+          'isOwner': false,
+          'isRentee': true,
+        });
       }
     }
 
@@ -625,7 +702,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
 
   // ─── Dialogs ─────────────────────────────────────────────────────────────────
 
-  void _addRecordDialog() {
+  Future<void> _addRecordDialog() async {
     final formKey = GlobalKey<FormState>();
     final flatCtrl = TextEditingController();
     final nameCtrl = TextEditingController();
@@ -670,8 +747,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       }
     }
 
-    AppDialog.show(
-      context: context,
+    try {
+      await AppDialog.show(
+        context: context,
       title: 'Add Member Record',
       subtitle: 'Register flat owner details & vehicles',
       icon: Icons.person_add,
@@ -836,6 +914,16 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         ),
       ),
     );
+  } finally {
+      flatCtrl.dispose();
+      nameCtrl.dispose();
+      emailCtrl.dispose();
+      waCtrl.dispose();
+      mobileCtrl.dispose();
+      carRegCtrl.dispose();
+      bikeRegCtrl.dispose();
+      bike2RegCtrl.dispose();
+    }
   }
 
   Future<void> _addRenteeDialog(String flatId, String block) async {
@@ -860,8 +948,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     PlatformFile? rentAgreementFile;
 
     if (!mounted) return;
-    await AppDialog.show(
-      context: context,
+    try {
+      await AppDialog.show(
+        context: context,
       title: 'Add Rentee',
       subtitle: 'Flat: $flatId',
       icon: Icons.person_add_alt_1,
@@ -1046,6 +1135,15 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         ),
       ),
     );
+  } finally {
+      nameCtrl.dispose();
+      emailCtrl.dispose();
+      waCtrl.dispose();
+      mobileCtrl.dispose();
+      carRegCtrl.dispose();
+      bikeRegCtrl.dispose();
+      bike2RegCtrl.dispose();
+    }
 
     // If dialog was closed/cancelled without saving a rentee, check if flat has any existing rentee. If not, reset isRented to false.
     if (!renteeAdded) {
@@ -1106,8 +1204,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     bool hasAttemptedSubmit = false;
 
     if (!mounted) return;
-    AppDialog.show(
-      context: context,
+    try {
+      await AppDialog.show(
+        context: context,
       title: 'Edit Member Details',
       subtitle: currentData['name']?.toString() ?? 'Member',
       icon: Icons.edit_note_rounded,
@@ -1249,6 +1348,15 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         ),
       ),
     );
+  } finally {
+      nameCtrl.dispose();
+      emailCtrl.dispose();
+      waCtrl.dispose();
+      mobileCtrl.dispose();
+      carRegCtrl.dispose();
+      bikeRegCtrl.dispose();
+      bike2RegCtrl.dispose();
+    }
   }
 
   void _showDocumentDialog(String url, String fileName) {
@@ -1326,6 +1434,10 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         if (approvedReg != null && approvedReg.isNotEmpty) {
           updateData['carReg'] = approvedReg;
           updateData['isCarOwner'] = true;
+          if (userData['pendingCarRcUrl'] != null) {
+            updateData['carRcUrl'] = userData['pendingCarRcUrl'];
+            updateData['carRcFileName'] = userData['pendingCarRcFileName'];
+          }
         }
         updateData['pendingCarReg'] = FieldValue.delete();
         updateData['pendingCarRcUrl'] = FieldValue.delete();
@@ -1336,6 +1448,10 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         if (approvedReg != null && approvedReg.isNotEmpty) {
           updateData['bikeReg'] = approvedReg;
           updateData['isBikeOwner'] = true;
+          if (userData['pendingBikeRcUrl'] != null) {
+            updateData['bikeRcUrl'] = userData['pendingBikeRcUrl'];
+            updateData['bikeRcFileName'] = userData['pendingBikeRcFileName'];
+          }
         }
         updateData['pendingBikeReg'] = FieldValue.delete();
         updateData['pendingBikeRcUrl'] = FieldValue.delete();
@@ -1346,6 +1462,10 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         if (approvedReg != null && approvedReg.isNotEmpty) {
           updateData['bike2Reg'] = approvedReg;
           updateData['hasBike2'] = true;
+          if (userData['pendingBike2RcUrl'] != null) {
+            updateData['bike2RcUrl'] = userData['pendingBike2RcUrl'];
+            updateData['bike2RcFileName'] = userData['pendingBike2RcFileName'];
+          }
         }
         updateData['pendingBike2Reg'] = FieldValue.delete();
         updateData['pendingBike2RcUrl'] = FieldValue.delete();
@@ -1393,16 +1513,17 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     }
   }
 
-  void _rejectVehicleUpdate(
+  Future<void> _rejectVehicleUpdate(
     String userDocId,
     Map<String, dynamic> userData,
     String vehicleType,
-  ) {
+  ) async {
     final reasonCtrl = TextEditingController();
     final formKey = GlobalKey<FormState>();
 
-    AppDialog.show(
-      context: context,
+    try {
+      await AppDialog.show(
+        context: context,
       title: 'Reject $vehicleType Update',
       subtitle: 'Provide rejection rationale for the resident',
       icon: Icons.cancel_outlined,
@@ -1470,6 +1591,19 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
 
                       await FirebaseFirestore.instance.collection('users').doc(userDocId).update(updateData);
 
+                      // Clean up rejected RC from Cloud Storage
+                      final rejectedRcUrl = (vehicleType == 'Car'
+                              ? userData['pendingCarRcUrl']
+                              : (vehicleType == 'Bike 2'
+                                  ? userData['pendingBike2RcUrl']
+                                  : userData['pendingBikeRcUrl']))
+                          ?.toString();
+                      if (rejectedRcUrl != null && rejectedRcUrl.isNotEmpty) {
+                        try {
+                          await FirebaseStorage.instance.refFromURL(rejectedRcUrl).delete();
+                        } catch (_) {}
+                      }
+
                       // Notify resident
                       final targetUid = userData['uid']?.toString();
                       if (targetUid != null && targetUid.isNotEmpty) {
@@ -1515,6 +1649,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         ),
       ),
     );
+  } finally {
+      reasonCtrl.dispose();
+    }
   }
 
   void _showFlatDetailsModal(BuildContext context, String flatId, Map<String, dynamic> flatData) {

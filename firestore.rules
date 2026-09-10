@@ -67,24 +67,20 @@ service cloud.firestore {
 
     match /maintenance_dues/{dueId} {
       allow read: if isAuthenticated();
-      allow create, delete: if isAdmin();
+      allow delete: if isAdmin();
+
+      // Allow admins full create access.
+      // Allow authenticated residents to create advance/early bills when submitting for approval
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.status == 'PAYMENT_PENDING_APPROVAL'
+      );
+
+      // Allow admins full update access.
+      // Allow authenticated residents to update dues when submitting payment for approval
       allow update: if isAdmin() || (
         isAuthenticated() &&
-        request.resource.data.status == 'PAYMENT_PENDING_APPROVAL' &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'status',
-          'paymentCategory',
-          'paymentMode',
-          'uniqueId',
-          'utrNumber',
-          'referenceNumber',
-          'submittedAt',
-          'submittedByUid',
-          'submittedByEmail',
-          'amount',
-          'chequeNumber',
-          'chequeBank'
-        ])
+        request.resource.data.status == 'PAYMENT_PENDING_APPROVAL'
       );
     }
 
@@ -126,7 +122,6 @@ service cloud.firestore {
           (resource.data.targetUids != null && request.auth.uid in resource.data.targetUids)
         ))
       );
-      allow write: if isAdmin();
     }
 
     // Society Accounts & Budget Management Rules

@@ -6,6 +6,7 @@ import '../../../models/accounting_heads.dart';
 import '../../../utils/app_formatters.dart';
 import '../../../utils/flat_utils.dart';
 import '../../../services/billing_service.dart';
+import '../../../services/notification_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../theme/app_decorations.dart';
 import '../../../widgets/app_dialog.dart';
@@ -33,33 +34,19 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
 
   final _lateFineController = TextEditingController(text: '100');
 
-  final List<String> _monthsList = [
-    'April 2026',
-    'May 2026',
-    'June 2026',
-    'July 2026',
-    'August 2026',
-    'September 2026',
-    'October 2026',
-    'November 2026',
-    'December 2026',
-    'January 2027',
-    'February 2027',
-    'March 2027',
-  ];
+  List<String> get _monthsList => AccountingConfig.financialYearMonths;
 
-  bool get _isPastMonth {
-    final curIdx = AccountingConfig.getMonthIndex(DateFormat('MMMM yyyy').format(DateTime.now()));
-    final selIdx = AccountingConfig.getMonthIndex(_selectedMonth);
-    return curIdx != -1 && selIdx != -1 && selIdx < curIdx;
-  }
+  bool get _isPastMonth => AccountingConfig.isMonthPast(_selectedMonth);
 
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
+    final now = AccountingConfig.currentDate;
     final currentMonthStr = DateFormat('MMMM yyyy').format(now);
-    _selectedMonth = _monthsList.contains(currentMonthStr) ? currentMonthStr : 'September 2026';
+    final months = _monthsList;
+    _selectedMonth = months.contains(currentMonthStr)
+        ? currentMonthStr
+        : (months.isNotEmpty ? months.first : 'December 2026');
   }
 
   @override
@@ -206,7 +193,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         _resultMsg = null;
       });
 
-      final double fineAmt = double.tryParse(_lateFineController.text.trim()) ?? 0.0;
+      final double fineAmt = _isPastMonth ? (double.tryParse(_lateFineController.text.trim()) ?? 0.0) : 0.0;
       if (_isPastMonth && fineAmt <= 0) {
         setState(() => _isProcessing = false);
         if (mounted) {
@@ -261,7 +248,8 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         // Check if bill already exists
         final existingDoc = existingFlats[flatKey];
         if (existingDoc == null) {
-          final newDueDoc = duesRef.doc();
+          final canonicalDocId = '${flatKey}_${_selectedMonth.replaceAll(' ', '_')}';
+          final newDueDoc = duesRef.doc(canonicalDocId);
           final rName = (uData['name'] ?? uData['ownerName'] ?? '').toString().trim();
           final cReg = (uData['carReg'] ?? uData['carRegistration'] ?? uData['fourWheelerReg'] ?? '').toString().trim();
           final bReg = (uData['bikeReg'] ?? uData['bike1Registration'] ?? uData['bikeRegistration'] ?? uData['twoWheelerReg'] ?? '').toString().trim();
@@ -398,7 +386,13 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         );
 
         // Open official receipt voucher preview
+        final isMulti = data['isMultiMonthPayment'] == true || data['multiMonthTotalAmount'] != null;
+        final fullAmount = isMulti
+            ? ((data['multiMonthTotalAmount'] as num?)?.toDouble() ?? (data['amount'] as num?)?.toDouble() ?? 0.0)
+            : ((data['amount'] as num?)?.toDouble() ?? 0.0);
         final receiptData = Map<String, dynamic>.from(data);
+        receiptData['amount'] = fullAmount;
+        receiptData['multiMonthTotalAmount'] = fullAmount;
         receiptData['receiptNumber'] = voucherCode;
         receiptData['status'] = 'PAID_VERIFIED';
         ReceiptPreviewDialog.show(
@@ -416,105 +410,146 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     }
   }
 
-  void _showRejectDialog(String dueId, Map<String, dynamic> data) {
-    final reasonController = TextEditingController(text: 'Unique ID / Reference not reflected in Society Bank Statement');
+  Future<void> _showRejectDialog(String dueId, Map<String, dynamic> data) async {
+    final reasonController = TextEditingController();
     final flat = (data['flatNumber'] ?? 'Unknown').toString();
     final month = (data['month'] ?? '').toString();
     final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? 'N/A').toString();
     final mode = (data['paymentMode'] ?? 'Payment').toString();
 
-    AppDialog.show(
-      context: context,
-      title: 'Reject Payment Submission',
-      subtitle: 'Flat $flat • $month ($mode)',
-      icon: Icons.cancel_outlined,
-      iconColor: AppColors.error,
-      maxWidth: 480,
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.errorSurface,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.errorBorder),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.info_outline, size: 16, color: AppColors.error),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Unique ID: $uniqueId\nResetting will mark the bill as UNPAID and notify the resident to re-submit.',
-                    style: const TextStyle(fontSize: 11, color: AppColors.error, height: 1.3),
-                  ),
+    String? confirmedReason;
+    try {
+      confirmedReason = await AppDialog.show<String>(
+        context: context,
+        title: 'Reject Payment Submission',
+        subtitle: 'Flat $flat • $month ($mode)',
+        icon: Icons.cancel_outlined,
+        iconColor: AppColors.error,
+        maxWidth: 480,
+        content: StatefulBuilder(
+          builder: (ctx, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.errorSurface,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.errorBorder),
                 ),
-              ],
-            ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, size: 16, color: AppColors.error),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Unique ID: $uniqueId\nRejecting will mark the bill as UNPAID and notify the resident with the reason.',
+                        style: const TextStyle(fontSize: 11, color: AppColors.error, height: 1.3),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text('Quick reasons:', style: TextStyle(fontSize: 11, color: AppColors.slate600, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  'Reference not in Bank Statement',
+                  'Incorrect payment amount',
+                  'Illegible payment proof / screenshot',
+                  'Wrong bank account credited',
+                ].map((preset) => InkWell(
+                  onTap: () {
+                    reasonController.text = preset;
+                    setDialogState(() {});
+                  },
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: reasonController.text == preset ? AppColors.primarySurface : AppColors.slate100,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: reasonController.text == preset ? AppColors.primary : AppColors.slate300),
+                    ),
+                    child: Text(
+                      preset,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: reasonController.text == preset ? AppColors.primary : AppColors.slate700,
+                        fontWeight: reasonController.text == preset ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                )).toList(),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: reasonController,
+                maxLines: 3,
+                onChanged: (_) => setDialogState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Reason for Rejection *',
+                  hintText: 'Explain why the payment could not be verified...',
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: reasonController,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Reason for Rejection *',
-              hintText: 'Explain why the payment could not be verified...',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
             ),
+            onPressed: () {
+              final reason = reasonController.text.trim();
+              if (reason.isEmpty) return;
+              Navigator.pop(context, reason);
+            },
+            child: const Text('Confirm Rejection'),
           ),
         ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            reasonController.dispose();
-            Navigator.pop(context);
-          },
-          child: const Text('Cancel'),
-        ),
-        const SizedBox(width: 8),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.error,
-            foregroundColor: Colors.white,
-          ),
-          onPressed: () async {
-            final reason = reasonController.text.trim();
-            if (reason.isEmpty) return;
-            reasonController.dispose();
-            Navigator.pop(context);
+      );
+    } finally {
+      reasonController.dispose();
+    }
 
-            setState(() => _processingDues.add(dueId));
-            try {
-              await BillingService.rejectPayment(
-                dueId: dueId,
-                flatNumber: flat,
-                month: month,
-                paymentMode: mode,
-                uniqueId: uniqueId,
-                reason: reason,
-              );
+    if (confirmedReason == null || confirmedReason.isEmpty) return;
 
-              if (mounted) {
-                AppFeedback.showWarning(
-                  context,
-                  'Payment rejected. Resident ($flat) has been notified to meet the authorities in person to resolve conflicts.',
-                  title: 'Payment Rejected',
-                );
-              }
-            } catch (e) {
-              if (mounted) {
-                AppFeedback.showError(context, 'Error rejecting payment: $e');
-              }
-            } finally {
-              if (mounted) setState(() => _processingDues.remove(dueId));
-            }
-          },
-          child: const Text('Confirm Rejection'),
-        ),
-      ],
-    );
+    setState(() => _processingDues.add(dueId));
+    try {
+      await BillingService.rejectPayment(
+        dueId: dueId,
+        flatNumber: flat,
+        month: month,
+        paymentMode: mode,
+        uniqueId: uniqueId,
+        reason: confirmedReason,
+      );
+
+      if (mounted) {
+        AppFeedback.showWarning(
+          context,
+          'Payment rejected. Resident ($flat) has been notified to meet the authorities in person to resolve conflicts.',
+          title: 'Payment Rejected',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        AppFeedback.showError(context, 'Error rejecting payment: $e');
+      }
+    } finally {
+      if (mounted) setState(() => _processingDues.remove(dueId));
+    }
   }
 
   Future<void> _resetDueToUnpaid(String docId, String flat) async {
@@ -557,64 +592,62 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
 
   Future<void> _recordCashPayment(String docId, String flat, double amount, String month) async {
     final notesController = TextEditingController(text: 'Received cash at Society Office');
-    final confirm = await AppDialog.show<bool>(
-      context: context,
-      title: 'Record Cash: Flat $flat',
-      subtitle: '$month • Amount: ${AppFormatters.currency(amount)}',
-      icon: Icons.payments_rounded,
-      iconColor: AppColors.success,
-      iconBgColor: AppColors.successSurface,
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: AppColors.slate50,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.slate200),
+    bool? confirm;
+    String notes = '';
+    try {
+      confirm = await AppDialog.show<bool>(
+        context: context,
+        title: 'Record Cash: Flat $flat',
+        subtitle: '$month • Amount: ${AppFormatters.currency(amount)}',
+        icon: Icons.payments_rounded,
+        iconColor: AppColors.success,
+        iconBgColor: AppColors.successSurface,
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.slate50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.slate200),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Maintenance Amount:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
+                  Text(AppFormatters.currency(amount), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900)),
+                ],
+              ),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('Maintenance Amount:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
-                Text(AppFormatters.currency(amount), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900)),
-              ],
+            const SizedBox(height: 12),
+            TextField(
+              controller: notesController,
+              decoration: const InputDecoration(
+                labelText: 'Cashier Notes / Handover Ref',
+                hintText: 'e.g. Received cash at Society Office',
+              ),
             ),
+          ],
+        ),
+        actions: [
+          OutlinedButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: notesController,
-            decoration: const InputDecoration(
-              labelText: 'Cashier Notes / Handover Ref',
-              hintText: 'e.g. Received cash at Society Office',
-            ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Confirm Cash & Issue Receipt'),
           ),
         ],
-      ),
-      actions: [
-        OutlinedButton(
-          onPressed: () {
-            notesController.dispose();
-            Navigator.pop(context, false);
-          },
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Confirm Cash & Issue Receipt'),
-        ),
-      ],
-    );
-
-    if (confirm != true) {
+      );
+      notes = notesController.text.trim();
+    } finally {
       notesController.dispose();
-      return;
     }
 
-    final notes = notesController.text.trim();
-    notesController.dispose();
+    if (confirm != true) return;
 
     try {
       final voucherCode = await BillingService.recordCashPayment(
@@ -710,89 +743,89 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     final puja = (data['pujaSubscription'] as num?)?.toDouble() ?? 0.0;
     final subTotal = baseMaint + puja + carCharges + bikeCharges;
 
-    final confirm = await AppDialog.show<bool>(
-      context: context,
-      title: 'Assess Late Fine',
-      subtitle: 'Flat $flat • $month',
-      icon: Icons.gavel_rounded,
-      iconColor: AppColors.warning,
-      iconBgColor: AppColors.warningSurface,
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.slate50,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.slate200),
-            ),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Base Maintenance + Parking:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
-                    Text(AppFormatters.currency(subTotal), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.slate800)),
-                  ],
-                ),
-                if (currentFine > 0) ...[
-                  const SizedBox(height: 4),
+    bool? confirm;
+    String fineText = '';
+    try {
+      confirm = await AppDialog.show<bool>(
+        context: context,
+        title: 'Assess Late Fine',
+        subtitle: 'Flat $flat • $month',
+        icon: Icons.gavel_rounded,
+        iconColor: AppColors.warning,
+        iconBgColor: AppColors.warningSurface,
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.slate50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.slate200),
+              ),
+              child: Column(
+                children: [
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('Current Assessed Fine:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
-                      Text(AppFormatters.currency(currentFine), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warningDark)),
+                      const Text('Base Maintenance + Parking:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
+                      Text(AppFormatters.currency(subTotal), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.slate800)),
                     ],
                   ),
+                  if (currentFine > 0) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Current Assessed Fine:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
+                        Text(AppFormatters.currency(currentFine), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warningDark)),
+                      ],
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: fineCtrl,
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            decoration: const InputDecoration(
-              labelText: 'Late Fine Amount (₹) *',
-              hintText: 'e.g. 100',
-              prefixText: '₹ ',
+            const SizedBox(height: 12),
+            TextField(
+              controller: fineCtrl,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: const InputDecoration(
+                labelText: 'Late Fine Amount (₹) *',
+                hintText: 'e.g. 100',
+                prefixText: '₹ ',
+              ),
             ),
+            const SizedBox(height: 8),
+            const Text(
+              'Residents can only pay past-month bills once an Admin issues or updates the late fine.',
+              style: TextStyle(fontSize: 11, color: AppColors.slate500, fontStyle: FontStyle.italic),
+            ),
+          ],
+        ),
+        actions: [
+          OutlinedButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Residents can only pay past-month bills once an Admin issues or updates the late fine.',
-            style: TextStyle(fontSize: 11, color: AppColors.slate500, fontStyle: FontStyle.italic),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Update Fine & Total'),
           ),
         ],
-      ),
-      actions: [
-        OutlinedButton(
-          onPressed: () {
-            fineCtrl.dispose();
-            Navigator.pop(context, false);
-          },
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.primary,
-            foregroundColor: Colors.white,
-          ),
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Update Fine & Total'),
-        ),
-      ],
-    );
-
-    if (confirm != true) {
+      );
+      fineText = fineCtrl.text.trim();
+    } finally {
       fineCtrl.dispose();
-      return;
     }
 
-    final newFine = double.tryParse(fineCtrl.text.trim()) ?? 0.0;
-    fineCtrl.dispose();
+    if (confirm != true) return;
+
+    final newFine = double.tryParse(fineText) ?? 0.0;
 
     setState(() => _processingDues.add(dueId));
     try {
@@ -831,6 +864,138 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     }
   }
 
+  Future<void> _issueParkingGapBill(Map<String, dynamic> gapInfo) async {
+    final flat = (gapInfo['flat'] ?? '').toString();
+    final missing = List<String>.from(gapInfo['missingMonths'] ?? []);
+    final int carCount = (gapInfo['carCount'] as num?)?.toInt() ?? 0;
+    final int bikeCount = (gapInfo['bikeCount'] as num?)?.toInt() ?? 0;
+    final double carMonthly = carCount * (AccountingConfig.parkingRates['Four-Wheeler'] ?? 430).toDouble();
+    final double bikeMonthly = bikeCount * (AccountingConfig.parkingRates['Two-Wheeler'] ?? 100).toDouble();
+    final double monthlyParking = carMonthly + bikeMonthly;
+    final double totalPayable = monthlyParking * missing.length;
+
+    final confirm = await AppDialog.show<bool>(
+      context: context,
+      title: 'Issue Parking Gap Bill',
+      subtitle: 'Flat $flat • ${missing.length} Month(s)',
+      icon: Icons.directions_car_rounded,
+      iconColor: AppColors.primary,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This will generate an official parking dues bill for Flat $flat for the following unbilled/opted-out months:',
+            style: const TextStyle(fontSize: 12.5, color: AppColors.slate700),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.slate50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.slate200),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Registered Vehicles:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
+                    Text('$carCount Car(s), $bikeCount Bike(s)', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Monthly Rate:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
+                    Text(AppFormatters.currency(monthlyParking), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Total Payable (${missing.length} Mos):', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.slate800)),
+                    Text(AppFormatters.currency(totalPayable), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.primary)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Months: ${missing.join(', ')}',
+            style: const TextStyle(fontSize: 11.5, color: AppColors.slate600, fontStyle: FontStyle.italic),
+          ),
+        ],
+      ),
+      actions: [
+        OutlinedButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Confirm & Issue Bill'),
+        ),
+      ],
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _isProcessing = true);
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      for (final m in missing) {
+        final docId = '${flat}_${m.replaceAll(' ', '_')}_parking';
+        final dRef = FirebaseFirestore.instance.collection('maintenance_dues').doc(docId);
+        batch.set(dRef, {
+          'flatNumber': flat,
+          'block': FlatUtils.extractBlock(flat),
+          'month': m,
+          'residentName': gapInfo['residentName'],
+          'amount': monthlyParking,
+          'baseMaintenance': 0.0,
+          'pujaSubscription': 0.0,
+          'carParkingCharges': carMonthly,
+          'bikeParkingCharges': bikeMonthly,
+          'carCount': carCount,
+          'bikeCount': bikeCount,
+          'parkingIncluded': true,
+          'isParkingOnlyBill': true,
+          'status': 'UNPAID',
+          'financialYear': AccountingConfig.currentFinancialYear,
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      await NotificationService.notifyResident(
+        flatNumber: flat,
+        title: 'Parking Dues Bill Issued: ${missing.join(', ')}',
+        message: 'An official parking dues bill of ${AppFormatters.currency(totalPayable)} for ${missing.length} month(s) has been issued for Flat $flat. Tap to view and pay.',
+        type: 'MAINTENANCE_DUE',
+        extraData: {
+          'flatNumber': flat,
+          'amount': totalPayable,
+          'months': missing,
+        },
+        batch: batch,
+      );
+
+      await batch.commit();
+
+      if (mounted) {
+        AppFeedback.showSuccess(context, 'Parking dues bill issued for Flat $flat (${missing.length} month(s)).');
+      }
+    } catch (e) {
+      if (mounted) AppFeedback.showError(context, 'Error issuing parking bill: $e');
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -858,6 +1023,37 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                 final bTime = (bData['submittedAt'] as Timestamp?)?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
                 return bTime.compareTo(aTime);
               });
+
+              // Group pending dues by transaction so multi-month payments only show 1 card
+              final Map<String, QueryDocumentSnapshot> groupedPendingMap = {};
+              for (final doc in pendingDocs) {
+                final data = doc.data() as Map<String, dynamic>;
+                final uid = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? '').toString().trim();
+                final parentId = (data['multiMonthParentDueId'] ?? '').toString().trim();
+                final flat = (data['flatNumber'] ?? '').toString().trim();
+
+                String groupKey;
+                if (parentId.isNotEmpty) {
+                  groupKey = 'PARENT_${flat}_$parentId';
+                } else if (uid.isNotEmpty && uid != 'N/A' && uid != 'CASH-OFFICE') {
+                  groupKey = 'UID_${flat}_$uid';
+                } else {
+                  groupKey = 'DOC_${doc.id}';
+                }
+
+                if (!groupedPendingMap.containsKey(groupKey)) {
+                  groupedPendingMap[groupKey] = doc;
+                } else {
+                  // Prefer doc that has isMultiMonthPayment == true or has multiMonthTotalAmount as the primary representative
+                  final existingData = groupedPendingMap[groupKey]!.data() as Map<String, dynamic>;
+                  if ((data['isMultiMonthPayment'] == true || data['multiMonthTotalAmount'] != null) &&
+                      existingData['isMultiMonthPayment'] != true && existingData['multiMonthTotalAmount'] == null) {
+                    groupedPendingMap[groupKey] = doc;
+                  }
+                }
+              }
+
+              final displayPendingDocs = groupedPendingMap.values.toList();
 
               return Container(
                 margin: const EdgeInsets.only(bottom: 20),
@@ -900,7 +1096,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                         borderRadius: BorderRadius.circular(10),
                                       ),
                                       child: Text(
-                                        '${pendingDocs.length}',
+                                        '${displayPendingDocs.length}',
                                         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
                                       ),
                                     ),
@@ -920,15 +1116,18 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                     ListView.separated(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      itemCount: pendingDocs.length,
+                      itemCount: displayPendingDocs.length,
                       separatorBuilder: (context, index) => const Divider(height: 1, color: AppColors.warningBorder),
                       itemBuilder: (context, index) {
-                        final d = pendingDocs[index];
+                        final d = displayPendingDocs[index];
                         final data = d.data() as Map<String, dynamic>;
                         final dueId = d.id;
                         final flat = (data['flatNumber'] ?? 'Unknown').toString();
                         final month = (data['month'] ?? '').toString();
-                        final amount = (data['amount'] as num?)?.toDouble() ?? 0.0;
+                        final isMultiMonth = data['isMultiMonthPayment'] == true || data['multiMonthTotalAmount'] != null;
+                        final amount = isMultiMonth
+                            ? ((data['multiMonthTotalAmount'] as num?)?.toDouble() ?? (data['amount'] as num?)?.toDouble() ?? 0.0)
+                            : ((data['amount'] as num?)?.toDouble() ?? 0.0);
                         final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? 'N/A').toString();
                         final paymentMode = (data['paymentMode'] ?? 'Online Payment').toString();
                         final paymentCategory = (data['paymentCategory'] ?? (paymentMode.contains('Cheque') || paymentMode.contains('Cash') ? 'OFFLINE' : 'ONLINE')).toString();
@@ -1251,7 +1450,9 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                 final m = (d['month'] ?? '').toString().trim();
                 if (m.isNotEmpty) flatMaintMonths[flat]!.add(m);
 
-                final bool incParking = d['parkingIncluded'] != false && ((d['carParkingCharges'] as num?)?.toDouble() ?? 0) > 0;
+                final double carParking = ((d['carParkingCharges'] as num?)?.toDouble() ?? 0);
+                final double bikeParking = ((d['bikeParkingCharges'] as num?)?.toDouble() ?? 0);
+                final bool incParking = d['parkingIncluded'] != false && (carParking > 0 || bikeParking > 0);
                 if (incParking && m.isNotEmpty) {
                   flatParkingMonths[flat]!.add(m);
                 }
@@ -1265,7 +1466,12 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                 }
               }
 
+              final now = AccountingConfig.currentDate;
+              final curMonthStr = DateFormat('MMMM yyyy').format(now);
+              final curMonthIdx = AccountingConfig.getMonthIndex(curMonthStr);
+
               // Filter flats with gap: maintenance months paid where parking was excluded/unpaid, and flat has car
+              // Only alert for months that have actually arrived (curMonthIdx or _selectedMonth)
               final gapFlats = <Map<String, dynamic>>[];
 
               flatMaintMonths.forEach((flat, maintSet) {
@@ -1276,9 +1482,16 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
 
                 if (carCount > 0 || bikeCount > 0) {
                   final missingParking = maintSet.where((m) => !parkSet.contains(m)).toList();
-                  if (missingParking.isNotEmpty) {
+                  // A month is due only if the calendar has reached it OR the admin has selected it for billing
+                  final dueMissingParking = missingParking.where((m) {
+                    final mIdx = AccountingConfig.getMonthIndex(m);
+                    if (mIdx == -1) return false;
+                    return mIdx <= curMonthIdx || m == _selectedMonth;
+                  }).toList();
+
+                  if (dueMissingParking.isNotEmpty) {
                     // Sort missing months by FY order
-                    missingParking.sort((a, b) => AccountingConfig.getMonthIndex(a).compareTo(AccountingConfig.getMonthIndex(b)));
+                    dueMissingParking.sort((a, b) => AccountingConfig.getMonthIndex(a).compareTo(AccountingConfig.getMonthIndex(b)));
                     gapFlats.add({
                       'flat': flat,
                       'residentName': info['residentName'] ?? 'Flat Occupant',
@@ -1288,7 +1501,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                       'bikeCount': bikeCount,
                       'maintMonths': maintSet.toList()..sort((a, b) => AccountingConfig.getMonthIndex(a).compareTo(AccountingConfig.getMonthIndex(b))),
                       'parkingMonths': parkSet.toList()..sort((a, b) => AccountingConfig.getMonthIndex(a).compareTo(AccountingConfig.getMonthIndex(b))),
-                      'missingMonths': missingParking,
+                      'missingMonths': dueMissingParking,
                     });
                   }
                 }
@@ -1344,7 +1557,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                   ],
                                 ),
                                 const Text(
-                                  'Flats with active maintenance in advance but lapsed / opted-out vehicle parking charges',
+                                  'Flats with active maintenance in advance but vehicle parking charges now due',
                                   style: TextStyle(fontSize: 11, color: AppColors.slate600),
                                 ),
                               ],
@@ -1395,7 +1608,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                       borderRadius: BorderRadius.circular(6),
                                     ),
                                     child: Text(
-                                      '${missing.length} Mo. Parking Unpaid',
+                                      '${missing.length} Mo. Parking Due',
                                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10),
                                     ),
                                   ),
@@ -1411,7 +1624,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                 spacing: 4,
                                 runSpacing: 4,
                                 children: [
-                                  const Text('Unpaid Parking Months: ', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.error)),
+                                  const Text('Due Parking Months: ', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.error)),
                                   ...missing.map((m) => Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
                                     decoration: BoxDecoration(
@@ -1422,6 +1635,24 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                     child: Text(m, style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: AppColors.error)),
                                   )),
                                 ],
+                              ),
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: OutlinedButton.icon(
+                                  icon: const Icon(Icons.receipt_long_rounded, size: 14),
+                                  label: Text(
+                                    'Issue Parking Bill (${missing.length} Mo)',
+                                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppColors.error,
+                                    side: const BorderSide(color: AppColors.errorBorder),
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                    minimumSize: const Size(0, 30),
+                                  ),
+                                  onPressed: () => _issueParkingGapBill(g),
+                                ),
                               ),
                             ],
                           ),
@@ -1580,7 +1811,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                       final status = data['status'] ?? 'UNPAID';
                       final fineAmt = (data['fine'] as num?)?.toDouble() ?? (data['lateFee'] as num?)?.toDouble() ?? 0.0;
                       final dueMonth = (data['month'] ?? _selectedMonth).toString();
-                      final dueCurIdx = AccountingConfig.getMonthIndex(DateFormat('MMMM yyyy').format(DateTime.now()));
+                      final dueCurIdx = AccountingConfig.getMonthIndex(DateFormat('MMMM yyyy').format(AccountingConfig.currentDate));
                       final dueIdx = AccountingConfig.getMonthIndex(dueMonth);
                       final isDuePast = dueCurIdx != -1 && dueIdx != -1 && dueIdx < dueCurIdx;
                       final isPending = status == 'PAYMENT_PENDING_APPROVAL' || status == 'PAID_OFFLINE_PENDING';

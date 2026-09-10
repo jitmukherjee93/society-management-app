@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../models/accounting_heads.dart';
+import '../utils/currency_math.dart';
 import '../services/receipt_pdf_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/number_to_words.dart';
@@ -18,6 +20,7 @@ class ReceiptPreviewDialog extends StatefulWidget {
   final double carParkingCharges;
   final double bikeParkingCharges;
   final double pujaSubscription;
+  final double fine;
   final double totalAmount;
   final String vehicleReg;
   final String paymentMode;
@@ -41,6 +44,7 @@ class ReceiptPreviewDialog extends StatefulWidget {
     required this.carParkingCharges,
     required this.bikeParkingCharges,
     required this.pujaSubscription,
+    this.fine = 0.0,
     required this.totalAmount,
     required this.vehicleReg,
     required this.paymentMode,
@@ -176,6 +180,8 @@ class ReceiptPreviewDialog extends StatefulWidget {
     final month = (dueData['month'] ?? 'Current Month').toString();
     final fy = (dueData['financialYear'] ?? '2026-2027').toString();
 
+    final isMultiMonth = dueData['isMultiMonthPayment'] == true || dueData['multiMonthTotalAmount'] != null;
+
     final amt = (dueData['amount'] as num?)?.toDouble() ?? 0.0;
     final car = (dueData['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
     final bike = (dueData['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0;
@@ -191,6 +197,46 @@ class ReceiptPreviewDialog extends StatefulWidget {
         ? ((rawPuja > 0 && rawBase < 350) ? (rawBase + rawPuja) : rawBase)
         : (amt >= totalParking ? amt - totalParking : amt);
     const puja = 0.0;
+
+    List<String>? maintenancePaidMonths;
+    if (dueData['maintenancePaidMonths'] is List) {
+      maintenancePaidMonths = (dueData['maintenancePaidMonths'] as List).map((e) => e.toString()).toList();
+    }
+    List<String>? parkingPaidMonths;
+    if (dueData['parkingPaidMonths'] is List) {
+      parkingPaidMonths = (dueData['parkingPaidMonths'] as List).map((e) => e.toString()).toList();
+    }
+    List<String>? parkingExcludedMonths;
+    if (dueData['parkingExcludedMonths'] is List) {
+      parkingExcludedMonths = (dueData['parkingExcludedMonths'] as List).map((e) => e.toString()).toList();
+    }
+
+    final maintMonthsCount = (maintenancePaidMonths != null && maintenancePaidMonths.isNotEmpty)
+        ? maintenancePaidMonths.length
+        : 1;
+
+    final carRate = (AccountingConfig.parkingRates['Four-Wheeler'] ?? 430).toDouble();
+    final bikeRate = (AccountingConfig.parkingRates['Two-Wheeler'] ?? 100).toDouble();
+    final effectiveCarCount = carCount ?? ((car > 0) ? 1 : 0);
+    final effectiveBikeCount = bikeCount ?? ((bike > 0) ? 1 : 0);
+
+    final double effectiveBaseMaint = isMultiMonth
+        ? CurrencyMath.roundPaise(base * maintMonthsCount)
+        : base;
+
+    final double effectiveCarParking = isMultiMonth
+        ? CurrencyMath.roundPaise(effectiveCarCount * carRate * (parkingPaidMonths?.length ?? 0))
+        : car;
+
+    final double effectiveBikeParking = isMultiMonth
+        ? CurrencyMath.roundPaise(effectiveBikeCount * bikeRate * (parkingPaidMonths?.length ?? 0))
+        : bike;
+
+    final double effectiveFine = (dueData['fine'] as num?)?.toDouble() ?? (dueData['lateFee'] as num?)?.toDouble() ?? 0.0;
+
+    final double effectiveTotalAmount = isMultiMonth
+        ? ((dueData['multiMonthTotalAmount'] as num?)?.toDouble() ?? CurrencyMath.roundPaise(effectiveBaseMaint + effectiveCarParking + effectiveBikeParking + effectiveFine))
+        : amt;
 
     final receiptNo = receiptNumber ??
         (dueData['receiptNumber'] ?? 'INC-2627-${(dueData['paidAt'] != null ? dueData['paidAt'].hashCode % 100000 : 10001).toString().padLeft(5, '0')}').toString();
@@ -214,10 +260,10 @@ class ReceiptPreviewDialog extends StatefulWidget {
       bikeReg: dueData['bikeReg'] ?? dueData['bike1Registration'] ?? dueData['bikeRegistration'] ?? dueData['twoWheelerReg'],
       bike2Reg: dueData['bike2Reg'] ?? dueData['bike2Registration'],
       fallback: dueData['vehicleReg']?.toString(),
-      carCount: carCount,
-      bikeCount: bikeCount,
-      carParkingCharges: car,
-      bikeParkingCharges: bike,
+      carCount: effectiveCarCount,
+      bikeCount: effectiveBikeCount,
+      carParkingCharges: effectiveCarParking,
+      bikeParkingCharges: effectiveBikeParking,
     );
 
     final initialName = residentName ??
@@ -226,19 +272,6 @@ class ReceiptPreviewDialog extends StatefulWidget {
          dueData['ownerName'] ??
          dueData['submittedBy'] ??
          '').toString().trim();
-
-    List<String>? maintenancePaidMonths;
-    if (dueData['maintenancePaidMonths'] is List) {
-      maintenancePaidMonths = (dueData['maintenancePaidMonths'] as List).map((e) => e.toString()).toList();
-    }
-    List<String>? parkingPaidMonths;
-    if (dueData['parkingPaidMonths'] is List) {
-      parkingPaidMonths = (dueData['parkingPaidMonths'] as List).map((e) => e.toString()).toList();
-    }
-    List<String>? parkingExcludedMonths;
-    if (dueData['parkingExcludedMonths'] is List) {
-      parkingExcludedMonths = (dueData['parkingExcludedMonths'] as List).map((e) => e.toString()).toList();
-    }
 
     showDialog(
       context: context,
@@ -251,11 +284,12 @@ class ReceiptPreviewDialog extends StatefulWidget {
         block: block,
         month: month,
         financialYear: fy,
-        baseMaintenance: base,
-        carParkingCharges: car,
-        bikeParkingCharges: bike,
+        baseMaintenance: effectiveBaseMaint,
+        carParkingCharges: effectiveCarParking,
+        bikeParkingCharges: effectiveBikeParking,
         pujaSubscription: puja,
-        totalAmount: amt,
+        fine: effectiveFine,
+        totalAmount: effectiveTotalAmount,
         vehicleReg: initialVReg,
         paymentMode: mode,
         referenceNumber: ref,
@@ -340,6 +374,20 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
   Widget build(BuildContext context) {
     final amountInWords = NumberToWords.convert(widget.totalAmount);
     final totalParking = widget.carParkingCharges + widget.bikeParkingCharges;
+
+    final int mCount = (widget.maintenancePaidMonths != null && widget.maintenancePaidMonths!.isNotEmpty)
+        ? widget.maintenancePaidMonths!.length
+        : 1;
+    final int pCount = (widget.parkingPaidMonths != null && widget.parkingPaidMonths!.isNotEmpty)
+        ? widget.parkingPaidMonths!.length
+        : mCount;
+    final double monthlyBaseRate = widget.baseMaintenance / mCount;
+    final double monthlyCarRate = (widget.carParkingCharges > 0 && pCount > 0)
+        ? (widget.carParkingCharges / pCount)
+        : 0.0;
+    final double monthlyBikeRate = (widget.bikeParkingCharges > 0 && pCount > 0)
+        ? (widget.bikeParkingCharges / pCount)
+        : 0.0;
 
     // Months list for matrix
     const months = [
@@ -567,23 +615,32 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                                   Row(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      // Rates per month
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          const Text('Rate Per Month', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
-                                          const SizedBox(height: 2),
-                                          Text('Maint. :  Rs. ${widget.baseMaintenance.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
-                                          if (widget.carParkingCharges > 0) ...[
-                                            const SizedBox(height: 2),
-                                            Text('Car Park : Rs. ${widget.carParkingCharges.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
-                                          ],
-                                          if (widget.bikeParkingCharges > 0) ...[
-                                            const SizedBox(height: 2),
-                                            Text('Bike Park : Rs. ${widget.bikeParkingCharges.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
-                                          ],
-                                        ],
-                                      ),
+                                       // Rates per month
+                                       Column(
+                                         crossAxisAlignment: CrossAxisAlignment.start,
+                                         children: [
+                                           const Text('Rate Per Month', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                           const SizedBox(height: 2),
+                                           Text('Maint. :  Rs. ${monthlyBaseRate.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
+                                           if (monthlyCarRate > 0) ...[
+                                             const SizedBox(height: 2),
+                                             Text('Car Park : Rs. ${monthlyCarRate.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
+                                           ],
+                                           if (monthlyBikeRate > 0) ...[
+                                             const SizedBox(height: 2),
+                                             Text('Bike Park : Rs. ${monthlyBikeRate.toStringAsFixed(0)}', style: const TextStyle(fontSize: 11)),
+                                           ],
+                                           if (mCount > 1) ...[
+                                             const SizedBox(height: 4),
+                                             Text('Total ($mCount Mos):', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 10, color: Colors.black87)),
+                                             Text('Maint: Rs. ${widget.baseMaintenance.toStringAsFixed(0)}', style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600)),
+                                             if (widget.carParkingCharges > 0)
+                                               Text('Car Park: Rs. ${widget.carParkingCharges.toStringAsFixed(0)}', style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600)),
+                                             if (widget.bikeParkingCharges > 0)
+                                               Text('Bike Park: Rs. ${widget.bikeParkingCharges.toStringAsFixed(0)}', style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600)),
+                                           ],
+                                         ],
+                                       ),
                                       const SizedBox(width: 14),
 
                                       // Center 12-Month Matrix
@@ -760,18 +817,34 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                             ),
                             const SizedBox(width: 8),
 
-                            // RIGHT AREA: Labels (Special Fund, TOTAL) + TABLE (Rs. | P.)
+                            // RIGHT AREA: Labels (Maintenance, Parking, Special Fund, TOTAL) + TABLE (Rs. | P.)
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                // Labels column aligned with rows 3 and 4 of table
+                                // Labels column aligned with rows of table
                                 Column(
                                   crossAxisAlignment: CrossAxisAlignment.end,
                                   children: [
                                     const SizedBox(height: 20), // Header spacer
-                                    const SizedBox(height: 24), // Maint spacer
-                                    const SizedBox(height: 24), // Parking spacer
+                                    Container(
+                                      height: 24,
+                                      alignment: Alignment.centerRight,
+                                      padding: const EdgeInsets.only(right: 6),
+                                      child: const Text(
+                                        'Maintenance',
+                                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10.5),
+                                      ),
+                                    ),
+                                    Container(
+                                      height: 24,
+                                      alignment: Alignment.centerRight,
+                                      padding: const EdgeInsets.only(right: 6),
+                                      child: const Text(
+                                        'Parking',
+                                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10.5),
+                                      ),
+                                    ),
                                     Container(
                                       height: 24,
                                       alignment: Alignment.centerRight,
@@ -781,6 +854,16 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                                         style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10.5),
                                       ),
                                     ),
+                                    if (widget.fine > 0)
+                                      Container(
+                                        height: 24,
+                                        alignment: Alignment.centerRight,
+                                        padding: const EdgeInsets.only(right: 6),
+                                        child: const Text(
+                                          'Late Fine',
+                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10.5),
+                                        ),
+                                      ),
                                     Container(
                                       height: 24,
                                       alignment: Alignment.centerRight,
@@ -827,6 +910,9 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                                       _buildTableAmountRow(totalParking),
                                       // Row 3: Special Fund / Puja
                                       _buildTableAmountRow(widget.pujaSubscription),
+                                      // Optional Row: Late Fine
+                                      if (widget.fine > 0)
+                                        _buildTableAmountRow(widget.fine),
                                       // TOTAL Row
                                       Container(
                                         height: 24,
@@ -920,6 +1006,7 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                           carParkingCharges: widget.carParkingCharges,
                           bikeParkingCharges: widget.bikeParkingCharges,
                           pujaSubscription: widget.pujaSubscription,
+                          fine: widget.fine,
                           totalAmount: widget.totalAmount,
                           vehicleReg: _vehicleReg,
                           paymentMode: widget.paymentMode,
@@ -959,6 +1046,7 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                           carParkingCharges: widget.carParkingCharges,
                           bikeParkingCharges: widget.bikeParkingCharges,
                           pujaSubscription: widget.pujaSubscription,
+                          fine: widget.fine,
                           totalAmount: widget.totalAmount,
                           vehicleReg: _vehicleReg,
                           paymentMode: widget.paymentMode,
