@@ -1888,11 +1888,37 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
     required Map<String, dynamic> userData,
     required List<QueryDocumentSnapshot> allDocs,
     required List<QueryDocumentSnapshot> unpaidDocs,
+    bool isDefaulter = false,
   }) {
     if (unpaidDocs.isNotEmpty) {
-      final firstUnpaid = unpaidDocs.first;
-      final dueId = firstUnpaid.id;
-      final dueData = firstUnpaid.data() as Map<String, dynamic>;
+      final currentCalMonth = AppFormatters.monthYear(DateTime.now());
+      final curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
+
+      // Find first payable unpaid doc (current/future month OR past month with fine)
+      QueryDocumentSnapshot? payableDoc;
+      for (final doc in unpaidDocs) {
+        final d = doc.data() as Map<String, dynamic>;
+        final m = d['month']?.toString() ?? '';
+        final mIdx = AccountingConfig.getMonthIndex(m);
+        final bool isPast = (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx);
+        final fine = (d['fine'] as num?)?.toDouble() ?? (d['lateFee'] as num?)?.toDouble() ?? 0.0;
+        if (!isPast || fine > 0) {
+          payableDoc = doc;
+          break;
+        }
+      }
+
+      if (payableDoc == null) {
+        AppFeedback.showWarning(
+          context,
+          'Past month maintenance can only be paid when Admin issues it with a late fine. Please contact Society Admin.',
+          title: 'Late Fine Required',
+        );
+        return;
+      }
+
+      final dueId = payableDoc.id;
+      final dueData = payableDoc.data() as Map<String, dynamic>;
       final paidOrPendingMonths = allDocs
           .where((d) => d.id != dueId)
           .map((d) => (d.data() as Map<String, dynamic>)['month']?.toString() ?? '')
@@ -1905,6 +1931,16 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
         dueData,
         userData,
         disabledMonths: paidOrPendingMonths.toList(),
+        isDefaulter: isDefaulter,
+      );
+      return;
+    }
+
+    if (isDefaulter) {
+      AppFeedback.showWarning(
+        context,
+        'Advance payments are locked because you have uncleared past maintenance. Please settle your overdue bills first.',
+        title: 'Defaulter Account',
       );
       return;
     }
@@ -1915,10 +1951,27 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
         .where((m) => m.isNotEmpty)
         .toSet();
 
-    final nextMonth = AccountingConfig.financialYearMonths.firstWhere(
-      (m) => !paidOrPendingMonths.contains(m),
-      orElse: () => AccountingConfig.financialYearMonths.first,
-    );
+    final currentCalMonth = AppFormatters.monthYear(DateTime.now());
+    String nextMonth = currentCalMonth;
+    if (AccountingConfig.financialYearMonths.contains(currentCalMonth) && !paidOrPendingMonths.contains(currentCalMonth)) {
+      nextMonth = currentCalMonth;
+    } else {
+      final curIdx = AccountingConfig.getMonthIndex(currentCalMonth);
+      if (curIdx != -1) {
+        nextMonth = AccountingConfig.financialYearMonths.skip(curIdx).firstWhere(
+          (m) => !paidOrPendingMonths.contains(m),
+          orElse: () => AccountingConfig.financialYearMonths.firstWhere(
+            (m) => !paidOrPendingMonths.contains(m),
+            orElse: () => currentCalMonth,
+          ),
+        );
+      } else {
+        nextMonth = AccountingConfig.financialYearMonths.firstWhere(
+          (m) => !paidOrPendingMonths.contains(m),
+          orElse: () => AccountingConfig.financialYearMonths.first,
+        );
+      }
+    }
 
     final advanceDueData = <String, dynamic>{
       'flatNumber': userFlat,
@@ -1942,6 +1995,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
       advanceDueData,
       userData,
       disabledMonths: paidOrPendingMonths.toList(),
+      isDefaulter: false,
     );
   }
 
@@ -1951,11 +2005,27 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
     Map<String, dynamic> dueData,
     Map<String, dynamic> userData, {
     List<String> disabledMonths = const [],
+    bool isDefaulter = false,
   }) {
     final flat = (dueData['flatNumber'] ?? userData['flatNumber'] ?? 'Unknown').toString();
     final month = (dueData['month'] ?? 'Current Month').toString();
     final double amount = (dueData['amount'] as num?)?.toDouble() ?? 0.0;
-    
+
+    final String currentCalMonth = AppFormatters.monthYear(DateTime.now());
+    final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
+    final int mIdx = AccountingConfig.getMonthIndex(month);
+    final bool isPastMonth = (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx);
+    final double fineAmt = (dueData['fine'] as num?)?.toDouble() ?? (dueData['lateFee'] as num?)?.toDouble() ?? 0.0;
+
+    if (isPastMonth && fineAmt <= 0) {
+      AppFeedback.showWarning(
+        context,
+        'Past month maintenance for $month can only be paid when Admin issues it with a late fine. Please contact Society Admin.',
+        title: 'Late Fine Required',
+      );
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1971,6 +2041,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
         amount: amount,
         currencyFmt: _currencyFmt,
         disabledMonths: disabledMonths,
+        isDefaulter: isDefaulter,
         onPaymentComplete: (receiptNo) {
           Navigator.pop(ctx);
           final nowStr = DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.now());
@@ -2217,6 +2288,16 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                         });
                       }
 
+                      final String currentCalMonth = AppFormatters.monthYear(DateTime.now());
+                      final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
+
+                      // Defaulter check: user has uncleared dues for any past month (month < currentCalMonth)
+                      final bool isDefaulter = unpaidDocs.any((d) {
+                        final m = (d.data() as Map<String, dynamic>)['month']?.toString() ?? '';
+                        final mIdx = AccountingConfig.getMonthIndex(m);
+                        return curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx;
+                      });
+
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -2237,7 +2318,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                 ),
                                 icon: const Icon(Icons.add_card_rounded, size: 16),
                                 label: Text(
-                                  unpaidDocs.isNotEmpty ? 'Pay Bill' : 'Pay Advance',
+                                  unpaidDocs.isNotEmpty ? (isDefaulter ? 'Pay Due Bill' : 'Pay Bill') : 'Pay Advance',
                                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                                 ),
                                 onPressed: () => _openMaintenancePayment(
@@ -2248,11 +2329,46 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                   userData: userData,
                                   allDocs: allDocs,
                                   unpaidDocs: unpaidDocs,
+                                  isDefaulter: isDefaulter,
                                 ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 10),
+
+                          if (isDefaulter)
+                            Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.shade50,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.amber.shade300),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 22),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Defaulter Notice: Uncleared Past Dues',
+                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.amber.shade900),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Advance & multi-month payment is locked until all maintenance is settled and cleared up to last month.',
+                                          style: TextStyle(fontSize: 12, color: Colors.amber.shade900),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
 
                           if (unpaidDocs.isEmpty && pendingApprovalDocs.isEmpty)
                             Container(
@@ -2307,6 +2423,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                         userData: userData,
                                         allDocs: allDocs,
                                         unpaidDocs: unpaidDocs,
+                                        isDefaulter: isDefaulter,
                                       ),
                                     ),
                                   ),
@@ -2351,6 +2468,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                         userData: userData,
                                         allDocs: allDocs,
                                         unpaidDocs: unpaidDocs,
+                                        isDefaulter: isDefaulter,
                                       ),
                                     ),
                                   ],
@@ -2369,6 +2487,11 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                               final baseMaint = (rawPuja > 0 && rawBase < 350) ? (rawBase + rawPuja) : rawBase;
                               final carCharges = (data['carParkingCharges'] as num?)?.toDouble() ?? breakdown.carParkingCharges;
                               final bikeCharges = (data['bikeParkingCharges'] as num?)?.toDouble() ?? breakdown.bikeParkingCharges;
+
+                              final mIdx = AccountingConfig.getMonthIndex(month);
+                              final bool isPastMonth = (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx);
+                              final fineAmt = (data['fine'] as num?)?.toDouble() ?? (data['lateFee'] as num?)?.toDouble() ?? 0.0;
+                              final bool canPayPastMonth = !isPastMonth || fineAmt > 0;
 
                               return Card(
                                 margin: const EdgeInsets.only(bottom: 12),
@@ -2445,18 +2568,46 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                       const SizedBox(height: 10),
 
                                       // Itemized Breakdown Line
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey.shade50,
-                                          borderRadius: BorderRadius.circular(6),
-                                          border: Border.all(color: Colors.grey.shade200),
-                                        ),
-                                        child: Text(
-                                          'Breakdown: Maintenance: ${_currencyFmt.format(baseMaint)}${carCharges > 0 ? ' • Car Parking: ${_currencyFmt.format(carCharges)}' : ''}${bikeCharges > 0 ? ' • Bike Parking: ${_currencyFmt.format(bikeCharges)}' : ''}',
-                                          style: TextStyle(fontSize: 11, color: Colors.grey.shade800, fontWeight: FontWeight.w500),
-                                        ),
+                                      Builder(
+                                        builder: (context) {
+                                          return Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey.shade50,
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(color: Colors.grey.shade200),
+                                            ),
+                                            child: Text(
+                                              'Breakdown: Maintenance: ${_currencyFmt.format(baseMaint)}${carCharges > 0 ? ' • Car Parking: ${_currencyFmt.format(carCharges)}' : ''}${bikeCharges > 0 ? ' • Bike Parking: ${_currencyFmt.format(bikeCharges)}' : ''}${fineAmt > 0 ? ' • Late Fine: ${_currencyFmt.format(fineAmt)}' : ''}',
+                                              style: TextStyle(fontSize: 11, color: Colors.grey.shade800, fontWeight: FontWeight.w500),
+                                            ),
+                                          );
+                                        },
                                       ),
+
+                                      if (!canPayPastMonth) ...[
+                                        const SizedBox(height: 8),
+                                        Container(
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: Colors.amber.shade50,
+                                            borderRadius: BorderRadius.circular(6),
+                                            border: Border.all(color: Colors.amber.shade300),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.info_outline, size: 16, color: Colors.amber.shade800),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  'Past month dues can only be paid when Admin issues the bill with a late fine. Please contact Society Admin.',
+                                                  style: TextStyle(fontSize: 11, color: Colors.amber.shade900, fontWeight: FontWeight.w600),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
 
                                       if (data['rejectionReason'] != null && data['rejectionReason'].toString().isNotEmpty) ...[
                                         const SizedBox(height: 8),
@@ -2488,16 +2639,27 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                       Row(
                                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
-                                          AppBadge.error('PAYMENT DUE'),
+                                          canPayPastMonth
+                                              ? AppBadge.error('PAYMENT DUE')
+                                              : AppBadge.warning('PAST DUE • AWAITING FINE'),
                                           ElevatedButton.icon(
                                             style: ElevatedButton.styleFrom(
-                                              backgroundColor: AppColors.primary,
+                                              backgroundColor: canPayPastMonth ? AppColors.primary : Colors.grey.shade400,
                                               foregroundColor: Colors.white,
                                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                             ),
-                                            icon: const Icon(Icons.payment_rounded, size: 16),
-                                            label: const Text('Pay Maintenance Bill', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                            onPressed: () => _showPaymentModal(context, dueId, data, userData),
+                                            icon: Icon(canPayPastMonth ? Icons.payment_rounded : Icons.lock_clock_rounded, size: 16),
+                                            label: Text(
+                                              canPayPastMonth ? 'Pay Maintenance Bill' : 'Awaiting Admin Late Fine',
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                            ),
+                                            onPressed: canPayPastMonth
+                                                ? () => _showPaymentModal(context, dueId, data, userData, isDefaulter: isDefaulter)
+                                                : () => AppFeedback.showWarning(
+                                                    context,
+                                                    'Old month maintenance can only be paid when Admin issues it with a late fine. Please contact Society Admin.',
+                                                    title: 'Late Fine Required',
+                                                  ),
                                           ),
                                         ],
                                       ),
@@ -2694,6 +2856,7 @@ class _PaymentModalSheet extends StatefulWidget {
   final double amount;
   final NumberFormat currencyFmt;
   final List<String> disabledMonths;
+  final bool isDefaulter;
   final Function(String receiptNo) onPaymentComplete;
 
   const _PaymentModalSheet({
@@ -2705,6 +2868,7 @@ class _PaymentModalSheet extends StatefulWidget {
     required this.amount,
     required this.currencyFmt,
     this.disabledMonths = const [],
+    this.isDefaulter = false,
     required this.onPaymentComplete,
   });
 
@@ -2735,6 +2899,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
   late double _baseMaintenanceRate;
   late double _carRate;
   late double _bikeRate;
+  int _selectedDurationMonths = 1;
 
   @override
   void initState() {
@@ -2769,9 +2934,57 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
         'includeParking': defaultParking,
       }
     ];
+    _selectedDurationMonths = 1;
+  }
+
+  List<String> _buildConsecutiveSchedule() {
+    final String startMonth = widget.month;
+    final int startIdx = AccountingConfig.getMonthIndex(startMonth);
+    final String currentCalMonth = AppFormatters.monthYear(DateTime.now());
+    final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
+    final bool isPast = (curMonthIdx != -1 && startIdx != -1 && startIdx < curMonthIdx);
+
+    // If user is a defaulter, or if paying a past overdue month, only 1 single month is allowed
+    if (widget.isDefaulter || isPast || startIdx == -1) {
+      return [startMonth];
+    }
+
+    final schedule = <String>[startMonth];
+    for (int i = startIdx + 1; i < AccountingConfig.financialYearMonths.length; i++) {
+      final m = AccountingConfig.financialYearMonths[i];
+      if (widget.disabledMonths.contains(m)) {
+        break; // Consecutive chain stops if already paid/pending
+      }
+      schedule.add(m);
+    }
+    return schedule;
+  }
+
+  void _setDurationMonths(int count) {
+    final schedule = _buildConsecutiveSchedule();
+    final clampedCount = count.clamp(1, schedule.length);
+    setState(() {
+      _selectedDurationMonths = clampedCount;
+      final newConfigs = <Map<String, dynamic>>[];
+      for (int i = 0; i < clampedCount; i++) {
+        final m = schedule[i];
+        final existing = _monthConfigs.firstWhere(
+          (c) => c['month'] == m,
+          orElse: () => {'month': m, 'includeParking': _hasVehicles},
+        );
+        newConfigs.add({
+          'month': m,
+          'includeParking': existing['includeParking'] == true,
+        });
+      }
+      _monthConfigs = newConfigs;
+    });
   }
 
   bool get _hasVehicles => _carCount > 0 || _bikeCount > 0;
+
+  double get _dueFine => (widget.dueData['fine'] as num?)?.toDouble() ??
+      (widget.dueData['lateFee'] as num?)?.toDouble() ?? 0.0;
 
   Map<String, dynamic> get _multiMonthCalculation {
     return BillingService.calculateMultiMonthBreakdown(
@@ -2779,27 +2992,11 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
       carCount: _carCount,
       bikeCount: _bikeCount,
       monthConfigs: _monthConfigs,
+      fine: _dueFine,
     );
   }
 
   double get _currentPayableTotal => (_multiMonthCalculation['totalAmount'] as num).toDouble();
-
-  void _addMonth(String monthName) {
-    if (_monthConfigs.any((m) => m['month'] == monthName)) return;
-    setState(() {
-      _monthConfigs.add({
-        'month': monthName,
-        'includeParking': _hasVehicles, // Default to true if has vehicle, resident can uncheck
-      });
-    });
-  }
-
-  void _removeMonth(String monthName) {
-    if (_monthConfigs.length <= 1) return; // Keep at least 1 month
-    setState(() {
-      _monthConfigs.removeWhere((m) => m['month'] == monthName);
-    });
-  }
 
   void _toggleParking(int index, bool val) {
     setState(() {
@@ -2843,6 +3040,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
           'residentName': widget.userData['name'] ?? widget.dueData['residentName'],
           'carCount': _carCount,
           'bikeCount': _bikeCount,
+          'fine': _dueFine,
         },
       );
 
@@ -2893,6 +3091,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
           'residentName': widget.userData['name'] ?? widget.dueData['residentName'],
           'carCount': _carCount,
           'bikeCount': _bikeCount,
+          'fine': _dueFine,
         },
       );
 
@@ -2920,10 +3119,10 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
     final totalPark = (calc['totalParking'] as num).toDouble();
     final int mCount = _monthConfigs.length;
 
-    // Available future months in FY not yet selected or already paid/pending
-    final List<String> availableFutureMonths = AccountingConfig.financialYearMonths
-        .where((m) => !_monthConfigs.any((cfg) => cfg['month'] == m) && !widget.disabledMonths.contains(m))
-        .toList();
+    final schedule = _buildConsecutiveSchedule();
+
+    final String currentCalMonth = AppFormatters.monthYear(DateTime.now());
+    final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
 
     return DefaultTabController(
       length: 2,
@@ -2966,6 +3165,42 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
               ),
               const SizedBox(height: 8),
 
+              // If Defaulter: Show warning notice banner
+              if (widget.isDefaulter) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.amber.shade300),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Defaulter Notice: Multi-Month Advance Locked',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: Colors.amber.shade900),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Multi-month advance payment is locked until maintenance is settled and cleared up to last month.',
+                              style: TextStyle(fontSize: 11.5, color: Colors.amber.shade900),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+
               // Multi-Month Advance Payment Selector Section
               Container(
                 padding: const EdgeInsets.all(12),
@@ -2990,33 +3225,73 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                             ),
                           ],
                         ),
-                        if (availableFutureMonths.isNotEmpty)
-                          PopupMenuButton<String>(
-                            tooltip: 'Add future month in advance',
-                            icon: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: AppColors.primarySurface,
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.add_rounded, size: 14, color: AppColors.primary),
-                                  SizedBox(width: 4),
-                                  Text('Add Advance Month', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 11)),
-                                ],
-                              ),
+                        if (widget.isDefaulter)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.shade100,
+                              borderRadius: BorderRadius.circular(4),
                             ),
-                            onSelected: _addMonth,
-                            itemBuilder: (ctx) => availableFutureMonths.map((m) {
-                              return PopupMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13)));
-                            }).toList(),
+                            child: Text('LOCKED TO 1 MONTH', style: TextStyle(color: Colors.amber.shade900, fontWeight: FontWeight.bold, fontSize: 10)),
                           ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 10),
+
+                    // "How many months would you like to pay?" Dropdown Selector
+                    if (!widget.isDefaulter && schedule.length > 1) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        margin: const EdgeInsets.only(bottom: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.event_repeat_rounded, size: 16, color: AppColors.primary),
+                                SizedBox(width: 6),
+                                Text(
+                                  'How many months would you like to pay?',
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: AppColors.slate900),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            DropdownButtonFormField<int>(
+                              initialValue: _selectedDurationMonths,
+                              isExpanded: true,
+                              decoration: InputDecoration(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: AppColors.slate300)),
+                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: AppColors.slate300)),
+                                fillColor: AppColors.slate50,
+                                filled: true,
+                              ),
+                              items: List.generate(schedule.length, (i) {
+                                final count = i + 1;
+                                final startM = schedule.first;
+                                final endM = schedule[i];
+                                final label = count == 1
+                                    ? '1 Month ($startM)'
+                                    : '$count Months ($startM – $endM)';
+                                return DropdownMenuItem<int>(
+                                  value: count,
+                                  child: Text(label, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.slate800)),
+                                );
+                              }),
+                              onChanged: (val) {
+                                if (val != null) _setDurationMonths(val);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
 
                     // List of selected months with per-month parking toggles
                     ..._monthConfigs.asMap().entries.map((entry) {
@@ -3024,11 +3299,15 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                       final cfg = entry.value;
                       final mName = cfg['month'].toString();
                       final incParking = cfg['includeParking'] == true;
-                      final isPrimary = (idx == 0);
+
+                      final mIdx = AccountingConfig.getMonthIndex(mName);
+                      final bool isCurrentCalMonth = (mIdx != -1 && mIdx == curMonthIdx);
+                      final bool isPastDue = (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx);
+                      final bool isAdvance = (curMonthIdx != -1 && mIdx != -1 && mIdx > curMonthIdx);
 
                       final double mCarAmt = incParking ? _carCount * _carRate : 0.0;
                       final double mBikeAmt = incParking ? _bikeCount * _bikeRate : 0.0;
-                      final double monthTotal = _baseMaintenanceRate + mCarAmt + mBikeAmt;
+                      final double monthTotal = _baseMaintenanceRate + mCarAmt + mBikeAmt + (idx == 0 ? _dueFine : 0.0);
 
                       return Container(
                         margin: const EdgeInsets.only(bottom: 6),
@@ -3050,8 +3329,8 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                                       mName,
                                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate800),
                                     ),
-                                    if (isPrimary) ...[
-                                      const SizedBox(width: 6),
+                                    const SizedBox(width: 6),
+                                    if (isCurrentCalMonth)
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
                                         decoration: BoxDecoration(
@@ -3059,28 +3338,30 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                                           borderRadius: BorderRadius.circular(4),
                                         ),
                                         child: const Text('CURRENT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.primary)),
+                                      )
+                                    else if (isPastDue)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                        decoration: BoxDecoration(
+                                          color: Colors.amber.shade100,
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text('PAST DUE', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.amber.shade900)),
+                                      )
+                                    else if (isAdvance)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                        decoration: BoxDecoration(
+                                          color: Colors.indigo.shade50,
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text('ADVANCE', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.indigo.shade700)),
                                       ),
-                                    ],
                                   ],
                                 ),
-                                Row(
-                                  children: [
-                                    Text(
-                                      widget.currencyFmt.format(monthTotal),
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
-                                    ),
-                                    if (!isPrimary) ...[
-                                      const SizedBox(width: 6),
-                                      InkWell(
-                                        onTap: () => _removeMonth(mName),
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: const Padding(
-                                          padding: EdgeInsets.all(2.0),
-                                          child: Icon(Icons.remove_circle_outline_rounded, size: 16, color: AppColors.error),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
+                                Text(
+                                  widget.currencyFmt.format(monthTotal),
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
                                 ),
                               ],
                             ),
@@ -3091,7 +3372,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
-                                  'Base Maintenance: ${widget.currencyFmt.format(_baseMaintenanceRate)}',
+                                  'Base Maintenance: ${widget.currencyFmt.format(_baseMaintenanceRate)}${idx == 0 && _dueFine > 0 ? ' • Late Fine: ${widget.currencyFmt.format(_dueFine)}' : ''}',
                                   style: const TextStyle(fontSize: 11, color: AppColors.slate600),
                                 ),
                                 if (_hasVehicles)
@@ -3153,7 +3434,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
                         ),
                         Text(
-                          'Maint: ${widget.currencyFmt.format(totalMaint)}${totalPark > 0 ? ' • Park: ${widget.currencyFmt.format(totalPark)}' : ''}',
+                          'Maint: ${widget.currencyFmt.format(totalMaint)}${totalPark > 0 ? ' • Park: ${widget.currencyFmt.format(totalPark)}' : ''}${_dueFine > 0 ? ' • Late Fine: ${widget.currencyFmt.format(_dueFine)}' : ''}',
                           style: const TextStyle(fontSize: 11, color: AppColors.slate600),
                         ),
                       ],

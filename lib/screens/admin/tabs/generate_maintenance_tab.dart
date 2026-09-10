@@ -31,6 +31,8 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
   String _searchQuery = '';
   final Set<String> _processingDues = {};
 
+  final _lateFineController = TextEditingController(text: '100');
+
   final List<String> _monthsList = [
     'April 2026',
     'May 2026',
@@ -46,12 +48,24 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     'March 2027',
   ];
 
+  bool get _isPastMonth {
+    final curIdx = AccountingConfig.getMonthIndex(DateFormat('MMMM yyyy').format(DateTime.now()));
+    final selIdx = AccountingConfig.getMonthIndex(_selectedMonth);
+    return curIdx != -1 && selIdx != -1 && selIdx < curIdx;
+  }
+
   @override
   void initState() {
     super.initState();
     final now = DateTime.now();
     final currentMonthStr = DateFormat('MMMM yyyy').format(now);
     _selectedMonth = _monthsList.contains(currentMonthStr) ? currentMonthStr : 'September 2026';
+  }
+
+  @override
+  void dispose() {
+    _lateFineController.dispose();
+    super.dispose();
   }
 
   Future<void> _sendMaintenanceNotificationBills() async {
@@ -192,6 +206,19 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         _resultMsg = null;
       });
 
+      final double fineAmt = double.tryParse(_lateFineController.text.trim()) ?? 0.0;
+      if (_isPastMonth && fineAmt <= 0) {
+        setState(() => _isProcessing = false);
+        if (mounted) {
+          AppFeedback.showWarning(
+            context,
+            'Bills for past month ($_selectedMonth) must include a late fine so residents can settle them.',
+            title: 'Late Fine Required',
+          );
+        }
+        return;
+      }
+
       int generatedCount = 0;
       int notifiedCount = 0;
       int skippedPaidCount = 0;
@@ -257,11 +284,12 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
             if (bReg.isNotEmpty) 'bikeReg': bReg,
             if (b2Reg.isNotEmpty) 'bike2Reg': b2Reg,
             if (formattedVReg.isNotEmpty && formattedVReg != '—') 'vehicleReg': formattedVReg,
-            'amount': breakdown.totalMonthlyDue,
+            'amount': breakdown.totalMonthlyDue + fineAmt,
             'baseMaintenance': breakdown.baseMaintenance,
             'pujaSubscription': breakdown.pujaSubscription,
             'carParkingCharges': breakdown.carParkingCharges,
             'bikeParkingCharges': breakdown.bikeParkingCharges,
+            if (fineAmt > 0) 'fine': fineAmt,
             'carCount': breakdown.carCount,
             'bikeCount': breakdown.bikeCount,
             'month': _selectedMonth,
@@ -298,9 +326,10 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
         // Send instant tailored notification to resident
         final carText = breakdown.carCount > 0 ? ' + Car (${breakdown.carCount}): ${AppFormatters.currency(breakdown.carParkingCharges)}' : '';
         final bikeText = breakdown.bikeCount > 0 ? ' + Bike (${breakdown.bikeCount}): ${AppFormatters.currency(breakdown.bikeParkingCharges)}' : '';
+        final fineText = fineAmt > 0 ? ' + Late Fine: ${AppFormatters.currency(fineAmt)}' : '';
         final cateredMsg = isFlatPaid
-            ? 'Dear Resident ($flatKey), your maintenance bill for $_selectedMonth (${AppFormatters.currency(breakdown.totalMonthlyDue)}) is recorded as paid/under verification.'
-            : 'Dear Resident ($flatKey), your maintenance bill for $_selectedMonth is ${AppFormatters.currency(breakdown.totalMonthlyDue)} (Maintenance: ${AppFormatters.currency(breakdown.baseMaintenance)}$carText$bikeText). Tap to view breakdown and pay.';
+            ? 'Dear Resident ($flatKey), your maintenance bill for $_selectedMonth (${AppFormatters.currency(breakdown.totalMonthlyDue + fineAmt)}) is recorded as paid/under verification.'
+            : 'Dear Resident ($flatKey), your maintenance bill for $_selectedMonth is ${AppFormatters.currency(breakdown.totalMonthlyDue + fineAmt)} (Maintenance: ${AppFormatters.currency(breakdown.baseMaintenance)}$carText$bikeText$fineText). Tap to view breakdown and pay.';
 
         final newNotificationDoc = notificationsRef.doc();
         addBatchOp((b) => b.set(newNotificationDoc, {
@@ -311,11 +340,12 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
           'title': isFlatPaid ? 'Maintenance Status: $_selectedMonth' : 'Maintenance Bill Due: $_selectedMonth',
           'message': cateredMsg,
           'flatNumber': flatKey,
-          'amount': breakdown.totalMonthlyDue,
+          'amount': breakdown.totalMonthlyDue + fineAmt,
           'baseMaintenance': breakdown.baseMaintenance,
           'pujaSubscription': breakdown.pujaSubscription,
           'carParkingCharges': breakdown.carParkingCharges,
           'bikeParkingCharges': breakdown.bikeParkingCharges,
+          if (fineAmt > 0) 'fine': fineAmt,
           'carCount': breakdown.carCount,
           'bikeCount': breakdown.bikeCount,
           'month': _selectedMonth,
@@ -668,6 +698,139 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     }
   }
 
+  Future<void> _showEditFineDialog(String dueId, Map<String, dynamic> data) async {
+    final currentFine = (data['fine'] as num?)?.toDouble() ?? (data['lateFee'] as num?)?.toDouble() ?? 0.0;
+    final fineCtrl = TextEditingController(text: currentFine > 0 ? currentFine.toStringAsFixed(0) : '100');
+    final flat = (data['flatNumber'] ?? 'Unknown').toString();
+    final month = (data['month'] ?? '').toString();
+
+    final baseMaint = (data['baseMaintenance'] as num?)?.toDouble() ?? 0.0;
+    final carCharges = (data['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
+    final bikeCharges = (data['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0;
+    final puja = (data['pujaSubscription'] as num?)?.toDouble() ?? 0.0;
+    final subTotal = baseMaint + puja + carCharges + bikeCharges;
+
+    final confirm = await AppDialog.show<bool>(
+      context: context,
+      title: 'Assess Late Fine',
+      subtitle: 'Flat $flat • $month',
+      icon: Icons.gavel_rounded,
+      iconColor: AppColors.warning,
+      iconBgColor: AppColors.warningSurface,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.slate50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.slate200),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Base Maintenance + Parking:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
+                    Text(AppFormatters.currency(subTotal), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.slate800)),
+                  ],
+                ),
+                if (currentFine > 0) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Current Assessed Fine:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
+                      Text(AppFormatters.currency(currentFine), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warningDark)),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: fineCtrl,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: const InputDecoration(
+              labelText: 'Late Fine Amount (₹) *',
+              hintText: 'e.g. 100',
+              prefixText: '₹ ',
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Residents can only pay past-month bills once an Admin issues or updates the late fine.',
+            style: TextStyle(fontSize: 11, color: AppColors.slate500, fontStyle: FontStyle.italic),
+          ),
+        ],
+      ),
+      actions: [
+        OutlinedButton(
+          onPressed: () {
+            fineCtrl.dispose();
+            Navigator.pop(context, false);
+          },
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Update Fine & Total'),
+        ),
+      ],
+    );
+
+    if (confirm != true) {
+      fineCtrl.dispose();
+      return;
+    }
+
+    final newFine = double.tryParse(fineCtrl.text.trim()) ?? 0.0;
+    fineCtrl.dispose();
+
+    setState(() => _processingDues.add(dueId));
+    try {
+      final newTotal = subTotal + newFine;
+      await FirebaseFirestore.instance.collection('maintenance_dues').doc(dueId).update({
+        'fine': newFine,
+        'amount': newTotal,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // Also create a notification for resident
+      await FirebaseFirestore.instance.collection('notifications').add({
+        'targetRole': 'RESIDENT',
+        'flatNumber': flat,
+        'type': 'MAINTENANCE_DUE',
+        'title': 'Late Fine Assessed: $month',
+        'message': 'A late fine of ${AppFormatters.currency(newFine)} has been applied to your $month maintenance bill for Flat $flat. Total payable: ${AppFormatters.currency(newTotal)}. Tap to view and pay.',
+        'month': month,
+        'fine': newFine,
+        'amount': newTotal,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      if (mounted) {
+        AppFeedback.showSuccess(
+          context,
+          'Late fine of ${AppFormatters.currency(newFine)} applied to Flat $flat ($month). Total: ${AppFormatters.currency(newTotal)}.',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        AppFeedback.showError(context, 'Error updating late fine: $e');
+      }
+    } finally {
+      if (mounted) setState(() => _processingDues.remove(dueId));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -978,6 +1141,51 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                     if (val != null) setState(() => _selectedMonth = val);
                   },
                 ),
+                if (_isPastMonth) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.warningSurface,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppColors.warningBorder),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.warningDark),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Past Billing Month ($_selectedMonth)',
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.warningDark),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Overdue bills require a late fine so residents are permitted to settle them. Set the penalty per flat below:',
+                          style: TextStyle(fontSize: 11.5, color: AppColors.slate700),
+                        ),
+                        const SizedBox(height: 10),
+                        TextFormField(
+                          controller: _lateFineController,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                          decoration: const InputDecoration(
+                            labelText: 'Late Fine / Penalty per flat (₹) *',
+                            hintText: 'e.g. 100',
+                            prefixText: '₹ ',
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 14),
 
                 // Send Notification Bill Button
@@ -1370,6 +1578,11 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                       final flat = data['flatNumber'] ?? 'Unknown';
                       final amount = data['amount'] ?? 0;
                       final status = data['status'] ?? 'UNPAID';
+                      final fineAmt = (data['fine'] as num?)?.toDouble() ?? (data['lateFee'] as num?)?.toDouble() ?? 0.0;
+                      final dueMonth = (data['month'] ?? _selectedMonth).toString();
+                      final dueCurIdx = AccountingConfig.getMonthIndex(DateFormat('MMMM yyyy').format(DateTime.now()));
+                      final dueIdx = AccountingConfig.getMonthIndex(dueMonth);
+                      final isDuePast = dueCurIdx != -1 && dueIdx != -1 && dueIdx < dueCurIdx;
                       final isPending = status == 'PAYMENT_PENDING_APPROVAL' || status == 'PAID_OFFLINE_PENDING';
                       final isProcessing = _processingDues.contains(docId);
                       final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? '').toString();
@@ -1381,6 +1594,10 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                         badge = AppBadge.success('PAID (ONLINE)');
                       } else if (status == 'PAID_OFFLINE_VERIFIED' || status == 'PAID_VERIFIED') {
                         badge = AppBadge.success('PAID (VERIFIED)');
+                      } else if (isDuePast) {
+                        badge = fineAmt > 0
+                            ? AppBadge.warning('PAST DUE • FINE: ${_currencyFmt.format(fineAmt)}')
+                            : AppBadge.error('PAST DUE • NO FINE');
                       } else {
                         badge = AppBadge.error('UNPAID');
                       }
@@ -1451,7 +1668,9 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                   tooltip: 'Bill Actions',
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                   onSelected: (action) {
-                                    if (action == 'APPROVE') {
+                                    if (action == 'EDIT_FINE') {
+                                      _showEditFineDialog(docId, data);
+                                    } else if (action == 'APPROVE') {
                                       _verifyPayment(docId, data);
                                     } else if (action == 'REJECT') {
                                       _showRejectDialog(docId, data);
@@ -1499,7 +1718,20 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                           ],
                                         ),
                                       ),
-                                    if (status == 'UNPAID')
+                                    if (status == 'UNPAID') ...[
+                                      PopupMenuItem(
+                                        value: 'EDIT_FINE',
+                                        child: Row(
+                                          children: [
+                                            const Icon(Icons.gavel_rounded, color: AppColors.warningDark, size: 18),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              fineAmt > 0 ? 'Edit Late Fine' : 'Assess Late Fine',
+                                              style: const TextStyle(color: AppColors.warningDark, fontWeight: FontWeight.w600, fontSize: 13),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
                                       const PopupMenuItem(
                                         value: 'RECORD_CASH',
                                         child: Row(
@@ -1510,6 +1742,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                           ],
                                         ),
                                       ),
+                                    ],
                                     if (status != 'UNPAID')
                                       const PopupMenuItem(
                                         value: 'RESET',

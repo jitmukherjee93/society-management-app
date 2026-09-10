@@ -299,6 +299,7 @@ class BillingService {
     int carCount = 0,
     int bikeCount = 0,
     required List<Map<String, dynamic>> monthConfigs, // [{'month': 'September 2026', 'includeParking': true}]
+    double fine = 0.0,
   }) {
     final cleanBlock = block.trim().toUpperCase();
     final baseMaintenanceRate = (AccountingConfig.blockRateBreakup[cleanBlock]?['total'] ?? 450).toDouble();
@@ -329,7 +330,7 @@ class BillingService {
       }
     }
 
-    final double totalAmount = CurrencyMath.roundPaise(totalBaseMaintenance + totalCarParking + totalBikeParking);
+    final double totalAmount = CurrencyMath.roundPaise(totalBaseMaintenance + totalCarParking + totalBikeParking + fine);
 
     return {
       'baseMaintenanceRate': baseMaintenanceRate,
@@ -338,6 +339,7 @@ class BillingService {
       'totalCarParking': CurrencyMath.roundPaise(totalCarParking),
       'totalBikeParking': CurrencyMath.roundPaise(totalBikeParking),
       'totalParking': CurrencyMath.roundPaise(totalCarParking + totalBikeParking),
+      'fine': CurrencyMath.roundPaise(fine),
       'totalAmount': totalAmount,
       'maintenanceMonths': maintenanceMonths,
       'parkingMonths': parkingMonths,
@@ -367,11 +369,37 @@ class BillingService {
     final userCarCount = ((extraResidentData?['carCount'] ?? (extraResidentData?['isCarOwner'] == true ? 1 : 0)) as num).toInt();
     final userBikeCount = ((extraResidentData?['bikeCount'] ?? ((extraResidentData?['isBikeOwner'] == true ? 1 : 0) + (extraResidentData?['hasBike2'] == true ? 1 : 0))) as num).toInt();
 
+    final double dueFine = ((extraResidentData?['fine'] as num?)?.toDouble() ?? 0.0);
+
+    final currentCalMonth = AppFormatters.monthYear(DateTime.now());
+    final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
+
+    // Rule 1: User can only pay an old month's maintenance when Admin issues it with fine.
+    for (final cfg in monthConfigs) {
+      final m = cfg['month']?.toString() ?? '';
+      final mIdx = AccountingConfig.getMonthIndex(m);
+      if (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx) {
+        if (dueFine <= 0) {
+          throw Exception("Past month ($m) maintenance can only be paid when Admin issues it with a late fine.");
+        }
+      }
+    }
+
+    // Rule 2: If primary month is an overdue past month, do not allow multi-month advance payment.
+    if (monthConfigs.length > 1) {
+      final firstMonth = monthConfigs.first['month']?.toString() ?? '';
+      final firstIdx = AccountingConfig.getMonthIndex(firstMonth);
+      if (curMonthIdx != -1 && firstIdx != -1 && firstIdx < curMonthIdx) {
+        throw Exception("Multi-month advance payment is locked for overdue accounts. Please settle past dues first.");
+      }
+    }
+
     final breakdown = calculateMultiMonthBreakdown(
       block: block,
       carCount: userCarCount,
       bikeCount: userBikeCount,
       monthConfigs: monthConfigs,
+      fine: dueFine,
     );
 
     final maintenanceMonths = List<String>.from(breakdown['maintenanceMonths'] as List);
@@ -414,7 +442,8 @@ class BillingService {
       final bool incPark = cfg['includeParking'] == true;
       final double mCar = incPark ? userCarCount * carRate : 0.0;
       final double mBike = incPark ? userBikeCount * bikeRate : 0.0;
-      final double mTotal = CurrencyMath.roundPaise(baseRate + mCar + mBike);
+      final double mFine = (m == primaryMonth) ? dueFine : 0.0;
+      final double mTotal = CurrencyMath.roundPaise(baseRate + mCar + mBike + mFine);
 
       final existingDoc = existingMap[m];
       final docRef = (existingDoc != null)
@@ -431,6 +460,7 @@ class BillingService {
         'pujaSubscription': 0.0,
         'carParkingCharges': mCar,
         'bikeParkingCharges': mBike,
+        if (mFine > 0) 'fine': mFine,
         'carCount': userCarCount,
         'bikeCount': userBikeCount,
         'parkingIncluded': incPark,
