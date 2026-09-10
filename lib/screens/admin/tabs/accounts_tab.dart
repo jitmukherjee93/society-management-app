@@ -10,6 +10,7 @@ import '../../../models/accounting_heads.dart';
 import '../../../services/staff_remuneration_service.dart';
 import '../../../utils/storage_utils.dart';
 import '../../../utils/file_downloader.dart';
+import '../../../utils/app_formatters.dart';
 import '../../../widgets/document_preview_dialog.dart';
 
 class AccountsTab extends StatefulWidget {
@@ -21,7 +22,7 @@ class AccountsTab extends StatefulWidget {
 
 class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final currencyFmt = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+  final currencyFmt = AppFormatters.currencyFormat;
   final dateFmt = DateFormat('dd MMM yyyy');
 
   String _searchQuery = '';

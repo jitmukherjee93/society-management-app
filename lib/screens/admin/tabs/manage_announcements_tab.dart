@@ -1,8 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../../../constants/firestore_collections.dart';
 import '../../../models/notice_model.dart';
-import '../../../widgets/notices/notice_card_widget.dart';
 import '../../../widgets/notices/notice_editor_dialog.dart';
+import '../../../widgets/notices/two_column_notice_list.dart';
 
 class ManageAnnouncementsTab extends StatefulWidget {
   const ManageAnnouncementsTab({super.key});
@@ -40,7 +41,7 @@ class _ManageAnnouncementsTabState extends State<ManageAnnouncementsTab> {
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
-                      .collection('announcements')
+                      .collection(FirestoreCollections.announcements)
                       .orderBy('createdAt', descending: true)
                       .snapshots(),
                   builder: (context, snapshot) {
@@ -67,8 +68,7 @@ class _ManageAnnouncementsTabState extends State<ManageAnnouncementsTab> {
                     // Filter by category and search query
                     final filteredNotices = allNotices.where((notice) {
                       final matchesCategory = _selectedCategory == 'All' ||
-                          notice.category.name.toLowerCase() == _selectedCategory.toLowerCase() ||
-                          notice.category.label.toLowerCase() == _selectedCategory.toLowerCase();
+                          notice.category.name.toLowerCase() == _selectedCategory.toLowerCase();
 
                       final query = _searchQuery.toLowerCase().trim();
                       final matchesSearch = query.isEmpty ||
@@ -84,19 +84,6 @@ class _ManageAnnouncementsTabState extends State<ManageAnnouncementsTab> {
                       if (!a.isPinned && b.isPinned) return 1;
                       return b.createdAt.compareTo(a.createdAt);
                     });
-
-                    // Distribute into 2 columns if 2-column view is active
-                    final col1 = <NoticeModel>[];
-                    final col2 = <NoticeModel>[];
-                    if (isTwoColumn) {
-                      for (int i = 0; i < filteredNotices.length; i++) {
-                        if (i % 2 == 0) {
-                          col1.add(filteredNotices[i]);
-                        } else {
-                          col2.add(filteredNotices[i]);
-                        }
-                      }
-                    }
 
                     return Center(
                       child: ConstrainedBox(
@@ -155,54 +142,14 @@ class _ManageAnnouncementsTabState extends State<ManageAnnouncementsTab> {
                                   ),
                                 ),
                               )
-                            else if (isTwoColumn)
-                              // Two Column Side-by-Side View
+                            else
                               SliverPadding(
                                 padding: const EdgeInsets.fromLTRB(14, 4, 14, 16),
                                 sliver: SliverToBoxAdapter(
-                                  child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                                          children: col1.map((notice) => NoticeCardWidget(
-                                            key: ValueKey(notice.id),
-                                            notice: notice,
-                                            isAdmin: true,
-                                          )).toList(),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                                          children: col2.map((notice) => NoticeCardWidget(
-                                            key: ValueKey(notice.id),
-                                            notice: notice,
-                                            isAdmin: true,
-                                          )).toList(),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              )
-                            else
-                              // Single Column List View
-                              SliverPadding(
-                                padding: const EdgeInsets.fromLTRB(14, 4, 14, 16),
-                                sliver: SliverList(
-                                  delegate: SliverChildBuilderDelegate(
-                                    (context, index) {
-                                      final notice = filteredNotices[index];
-                                      return NoticeCardWidget(
-                                        key: ValueKey(notice.id),
-                                        notice: notice,
-                                        isAdmin: true,
-                                      );
-                                    },
-                                    childCount: filteredNotices.length,
+                                  child: TwoColumnNoticeList(
+                                    notices: filteredNotices,
+                                    isTwoColumn: isTwoColumn,
+                                    isAdmin: true,
                                   ),
                                 ),
                               ),
@@ -338,7 +285,8 @@ class _ManageAnnouncementsTabState extends State<ManageAnnouncementsTab> {
   }
 
   Widget _buildCategoryChip(String label, NoticeCategory? cat) {
-    final isSelected = _selectedCategory == label || (cat != null && _selectedCategory == cat.name);
+    final key = cat?.name ?? 'All';
+    final isSelected = _selectedCategory.toLowerCase() == key.toLowerCase();
     return Padding(
       padding: const EdgeInsets.only(right: 6.0),
       child: FilterChip(
@@ -368,7 +316,7 @@ class _ManageAnnouncementsTabState extends State<ManageAnnouncementsTab> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
         onSelected: (selected) {
           setState(() {
-            _selectedCategory = selected ? label : 'All';
+            _selectedCategory = selected ? key : 'All';
           });
         },
       ),
@@ -402,7 +350,9 @@ class _ManageAnnouncementsTabState extends State<ManageAnnouncementsTab> {
         ],
         const Spacer(),
         Text(
-          _selectedCategory == 'All' ? 'Showing all notices' : 'Filtered by $_selectedCategory',
+          _selectedCategory == 'All'
+              ? 'Showing all notices'
+              : 'Filtered by ${NoticeCategory.fromString(_selectedCategory).label}',
           style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8), fontStyle: FontStyle.italic),
         ),
       ],

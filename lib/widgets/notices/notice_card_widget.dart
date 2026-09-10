@@ -1,7 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../../constants/firestore_collections.dart';
 import '../../models/notice_model.dart';
+import '../../utils/notice_utils.dart';
 import 'notice_editor_dialog.dart';
 import 'notice_rich_formatter.dart';
 
@@ -17,99 +18,10 @@ class NoticeCardWidget extends StatelessWidget {
     this.onRefresh,
   });
 
-  void _openUrl(BuildContext context, String url) async {
-    try {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Could not open document link.')),
-          );
-        }
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error opening link: $e')),
-        );
-      }
-    }
-  }
-
-  void _showImageLightbox(BuildContext context, NoticeAttachment attachment) {
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(12),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              InteractiveViewer(
-                minScale: 0.5,
-                maxScale: 4.0,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.network(
-                    attachment.url,
-                    fit: BoxFit.contain,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return Container(
-                        width: 300,
-                        height: 300,
-                        color: Colors.black45,
-                        child: const Center(
-                          child: CircularProgressIndicator(color: Colors.white),
-                        ),
-                      );
-                    },
-                    errorBuilder: (context, error, stackTrace) => Container(
-                      width: 250,
-                      height: 200,
-                      color: Colors.black87,
-                      child: const Center(
-                        child: Text(
-                          'Failed to load image',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 12,
-                right: 12,
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.download_rounded, color: Colors.white, size: 28),
-                      tooltip: 'Open / Download Original',
-                      onPressed: () => _openUrl(context, attachment.url),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white, size: 28),
-                      tooltip: 'Close',
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   void _togglePin(BuildContext context) async {
     try {
       await FirebaseFirestore.instance
-          .collection('announcements')
+          .collection(FirestoreCollections.announcements)
           .doc(notice.id)
           .update({'isPinned': !notice.isPinned});
     } catch (e) {
@@ -147,7 +59,7 @@ class NoticeCardWidget extends StatelessWidget {
               Navigator.pop(ctx);
               try {
                 await FirebaseFirestore.instance
-                    .collection('announcements')
+                    .collection(FirestoreCollections.announcements)
                     .doc(notice.id)
                     .delete();
                 if (context.mounted) {
@@ -206,143 +118,173 @@ class NoticeCardWidget extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             // Top Meta Bar: Badges on Left, Author/Time/Actions on Right
-            Row(
-              children: [
-                // Category Chip
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
-                  decoration: BoxDecoration(
-                    color: cat.backgroundColor,
-                    borderRadius: BorderRadius.circular(5),
-                    border: Border.all(color: cat.color.withValues(alpha: 0.25), width: 0.8),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+            SizedBox(
+              width: double.infinity,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Icon(cat.icon, size: 12, color: cat.color),
-                      const SizedBox(width: 4),
-                      Text(
-                        cat.label,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: cat.color,
+                      // Category Chip
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+                        decoration: BoxDecoration(
+                          color: cat.backgroundColor,
+                          borderRadius: BorderRadius.circular(5),
+                          border: Border.all(color: cat.color.withValues(alpha: 0.25), width: 0.8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(cat.icon, size: 12, color: cat.color),
+                            const SizedBox(width: 4),
+                            Text(
+                              cat.label,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: cat.color,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
+
+                      // Priority Badge (if not normal)
+                      if (notice.priority != NoticePriority.low && notice.priority != NoticePriority.medium)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: notice.priority.color.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            notice.priority.label,
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.bold,
+                              color: notice.priority.color,
+                            ),
+                          ),
+                        ),
+
+                      // Pinned Indicator
+                      if (isPinned)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.shade100,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.amber.shade400, width: 0.8),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.push_pin, size: 11, color: Colors.deepOrange),
+                              SizedBox(width: 3),
+                              Text(
+                                'Pinned',
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.deepOrange,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                      // Expired Indicator
+                      if (notice.isExpired)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade200,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.grey.shade400, width: 0.8),
+                          ),
+                          child: Text(
+                            'Expired',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey.shade700,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
-                ),
 
-                // Priority Badge (if not normal)
-                if (notice.priority != NoticePriority.low && notice.priority != NoticePriority.medium) ...[
-                  const SizedBox(width: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: notice.priority.color.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      notice.priority.label,
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.bold,
-                        color: notice.priority.color,
+                  // Author & relative timestamp + Admin actions
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${notice.authorName} • ${notice.timeAgo}',
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.w500),
                       ),
-                    ),
-                  ),
-                ],
-
-                // Pinned Indicator
-                if (isPinned) ...[
-                  const SizedBox(width: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.amber.shade100,
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: Colors.amber.shade400, width: 0.8),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.push_pin, size: 11, color: Colors.deepOrange),
-                        SizedBox(width: 3),
-                        Text(
-                          'Pinned',
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.deepOrange,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-
-                const Spacer(),
-
-                // Author & relative timestamp
-                Text(
-                  '${notice.authorName} • ${notice.timeAgo}',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.w500),
-                ),
-
-                // Admin Dropdown / Action Menu
-                if (isAdmin) ...[
-                  const SizedBox(width: 2),
-                  SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: PopupMenuButton<String>(
-                      icon: const Icon(Icons.more_vert, size: 18, color: Color(0xFF64748B)),
-                      padding: EdgeInsets.zero,
-                      onSelected: (val) {
-                        if (val == 'pin') {
-                          _togglePin(context);
-                        } else if (val == 'edit') {
-                          NoticeEditorDialog.show(context, notice: notice);
-                        } else if (val == 'delete') {
-                          _confirmDelete(context);
-                        }
-                      },
-                      itemBuilder: (ctx) => [
-                        PopupMenuItem(
-                          value: 'pin',
-                          child: Row(
-                            children: [
-                              Icon(isPinned ? Icons.push_pin_outlined : Icons.push_pin, size: 16, color: Colors.amber.shade800),
-                              const SizedBox(width: 8),
-                              Text(isPinned ? 'Unpin from Top' : 'Pin to Top', style: const TextStyle(fontSize: 13)),
-                            ],
-                          ),
-                        ),
-                        const PopupMenuItem(
-                          value: 'edit',
-                          child: Row(
-                            children: [
-                              Icon(Icons.edit_outlined, size: 16, color: Colors.blue),
-                              SizedBox(width: 8),
-                              Text('Edit Notice', style: TextStyle(fontSize: 13)),
-                            ],
-                          ),
-                        ),
-                        const PopupMenuItem(
-                          value: 'delete',
-                          child: Row(
-                            children: [
-                              Icon(Icons.delete_outline, size: 16, color: Colors.red),
-                              SizedBox(width: 8),
-                              Text('Delete Notice', style: TextStyle(color: Colors.red, fontSize: 13)),
+                      if (isAdmin) ...[
+                        const SizedBox(width: 2),
+                        SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert, size: 18, color: Color(0xFF64748B)),
+                            padding: EdgeInsets.zero,
+                            onSelected: (val) {
+                              if (val == 'pin') {
+                                _togglePin(context);
+                              } else if (val == 'edit') {
+                                NoticeEditorDialog.show(context, notice: notice);
+                              } else if (val == 'delete') {
+                                _confirmDelete(context);
+                              }
+                            },
+                            itemBuilder: (ctx) => [
+                              PopupMenuItem(
+                                value: 'pin',
+                                child: Row(
+                                  children: [
+                                    Icon(isPinned ? Icons.push_pin_outlined : Icons.push_pin, size: 16, color: Colors.amber.shade800),
+                                    const SizedBox(width: 8),
+                                    Text(isPinned ? 'Unpin from Top' : 'Pin to Top', style: const TextStyle(fontSize: 13)),
+                                  ],
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'edit',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.edit_outlined, size: 16, color: Colors.blue),
+                                    const SizedBox(width: 8),
+                                    Text('Edit Notice', style: TextStyle(fontSize: 13)),
+                                  ],
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.delete_outline, size: 16, color: Colors.red),
+                                    const SizedBox(width: 8),
+                                    Text('Delete Notice', style: TextStyle(color: Colors.red, fontSize: 13)),
+                                  ],
+                                ),
+                              ),
                             ],
                           ),
                         ),
                       ],
-                    ),
+                    ],
                   ),
                 ],
-              ],
+              ),
             ),
 
             // Notice Title
@@ -377,7 +319,7 @@ class NoticeCardWidget extends StatelessWidget {
                     runSpacing: 8,
                     children: notice.attachments.where((a) => a.isImage).map((imgAtt) {
                       return InkWell(
-                        onTap: () => _showImageLightbox(context, imgAtt),
+                        onTap: () => NoticeImageLightbox.show(context, imgAtt.url, caption: imgAtt.name),
                         borderRadius: BorderRadius.circular(6),
                         child: Container(
                           width: 64,
@@ -439,7 +381,7 @@ class NoticeCardWidget extends StatelessWidget {
                         '${docAtt.name}${docAtt.formattedSize.isNotEmpty ? " (${docAtt.formattedSize})" : ""}',
                         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF1E293B)),
                       ),
-                      onPressed: () => _openUrl(context, docAtt.url),
+                      onPressed: () => UrlUtils.openUrl(context, docAtt.url),
                     );
                   }).toList(),
                 ),

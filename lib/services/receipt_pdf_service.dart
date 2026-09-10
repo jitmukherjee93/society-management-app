@@ -29,39 +29,40 @@ class ReceiptPdfService {
     required String paymentMode,
     required String referenceNumber,
     String? bankName,
+    List<String>? maintenancePaidMonths,
+    List<String>? parkingPaidMonths,
+    List<String>? parkingExcludedMonths,
   }) async {
     final pdf = pw.Document();
 
     final dateStr = DateFormat('dd/MM/yyyy').format(date);
     final amountInWords = NumberToWords.convert(totalAmount);
 
-    // Normalize month name to identify which pill to highlight in the 12-month grid
-    final upperMonth = billingMonth.toUpperCase();
-    String activeMonthCode = '';
-    if (upperMonth.contains('APR')) {
-      activeMonthCode = 'APRIL';
-    } else if (upperMonth.contains('MAY')) {
-      activeMonthCode = 'MAY';
-    } else if (upperMonth.contains('JUN')) {
-      activeMonthCode = 'JUNE';
-    } else if (upperMonth.contains('JUL')) {
-      activeMonthCode = 'JULY';
-    } else if (upperMonth.contains('AUG')) {
-      activeMonthCode = 'AUG.';
-    } else if (upperMonth.contains('SEP')) {
-      activeMonthCode = 'SEPT.';
-    } else if (upperMonth.contains('OCT')) {
-      activeMonthCode = 'OCT.';
-    } else if (upperMonth.contains('NOV')) {
-      activeMonthCode = 'NOV.';
-    } else if (upperMonth.contains('DEC')) {
-      activeMonthCode = 'DEC.';
-    } else if (upperMonth.contains('JAN')) {
-      activeMonthCode = 'JAN.';
-    } else if (upperMonth.contains('FEB')) {
-      activeMonthCode = 'FEB.';
-    } else if (upperMonth.contains('MAR')) {
-      activeMonthCode = 'MAR.';
+    // Build set of active month codes (support single or multi-month)
+    final Set<String> activeMonthCodes = {};
+
+    void addMatchingCodes(String text) {
+      final u = text.toUpperCase();
+      if (u.contains('APR')) activeMonthCodes.add('APRIL');
+      if (u.contains('MAY')) activeMonthCodes.add('MAY');
+      if (u.contains('JUN')) activeMonthCodes.add('JUNE');
+      if (u.contains('JUL')) activeMonthCodes.add('JULY');
+      if (u.contains('AUG')) activeMonthCodes.add('AUG.');
+      if (u.contains('SEP')) activeMonthCodes.add('SEPT.');
+      if (u.contains('OCT')) activeMonthCodes.add('OCT.');
+      if (u.contains('NOV')) activeMonthCodes.add('NOV.');
+      if (u.contains('DEC')) activeMonthCodes.add('DEC.');
+      if (u.contains('JAN')) activeMonthCodes.add('JAN.');
+      if (u.contains('FEB')) activeMonthCodes.add('FEB.');
+      if (u.contains('MAR')) activeMonthCodes.add('MAR.');
+    }
+
+    if (maintenancePaidMonths != null && maintenancePaidMonths.isNotEmpty) {
+      for (final m in maintenancePaidMonths) {
+        addMatchingCodes(m);
+      }
+    } else {
+      addMatchingCodes(billingMonth);
     }
 
     final totalParkingCharges = carParkingCharges + bikeParkingCharges;
@@ -268,7 +269,7 @@ class ReceiptPdfService {
                                     pw.Row(
                                       mainAxisAlignment: pw.MainAxisAlignment.center,
                                       children: _allMonths.sublist(0, 6).map((m) {
-                                        final isSelected = (m == activeMonthCode);
+                                        final isSelected = activeMonthCodes.contains(m);
                                         return _buildMonthPill(m, isSelected);
                                       }).toList(),
                                     ),
@@ -278,7 +279,7 @@ class ReceiptPdfService {
                                       mainAxisAlignment: pw.MainAxisAlignment.center,
                                       children: [
                                         ..._allMonths.sublist(6, 12).map((m) {
-                                          final isSelected = (m == activeMonthCode);
+                                          final isSelected = activeMonthCodes.contains(m);
                                           return _buildMonthPill(m, isSelected);
                                         }),
                                         pw.SizedBox(width: 4),
@@ -301,10 +302,10 @@ class ReceiptPdfService {
                               children: [
                                 pw.Text(
                                   (carParkingCharges > 0 && bikeParkingCharges > 0)
-                                      ? 'Car & Two-Wheeler Parking Charge for the month of '
+                                      ? 'Car & Two-Wheeler Parking Charge for: '
                                       : (bikeParkingCharges > 0 && carParkingCharges <= 0)
-                                          ? 'Two-Wheeler Parking Charge for the month of '
-                                          : 'Car Parking Charge for the month of ',
+                                          ? 'Two-Wheeler Parking Charge for: '
+                                          : 'Car Parking Charge for: ',
                                   style: const pw.TextStyle(fontSize: 8.5),
                                 ),
                                 pw.Expanded(
@@ -314,13 +315,22 @@ class ReceiptPdfService {
                                     ),
                                     padding: const pw.EdgeInsets.only(left: 4),
                                     child: pw.Text(
-                                      billingMonth,
+                                      (parkingPaidMonths != null && parkingPaidMonths.isNotEmpty)
+                                          ? parkingPaidMonths.join(', ')
+                                          : billingMonth,
                                       style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
                                     ),
                                   ),
                                 ),
                               ],
                             ),
+                            if (parkingExcludedMonths != null && parkingExcludedMonths.isNotEmpty) ...[
+                              pw.SizedBox(height: 2),
+                              pw.Text(
+                                'Note: Parking charges opted-out for: ${parkingExcludedMonths.join(', ')}',
+                                style: pw.TextStyle(fontSize: 7.5, fontStyle: pw.FontStyle.italic, color: PdfColors.grey700),
+                              ),
+                            ],
                             pw.SizedBox(height: 4),
 
                             // T.W / F.W No. & Rs.
@@ -651,6 +661,9 @@ class ReceiptPdfService {
     required String paymentMode,
     required String referenceNumber,
     String? bankName,
+    List<String>? maintenancePaidMonths,
+    List<String>? parkingPaidMonths,
+    List<String>? parkingExcludedMonths,
   }) async {
     final pdfBytes = await generateReceiptPdf(
       pageFormat: PdfPageFormat.a4,
@@ -670,6 +683,9 @@ class ReceiptPdfService {
       paymentMode: paymentMode,
       referenceNumber: referenceNumber,
       bankName: bankName,
+      maintenancePaidMonths: maintenancePaidMonths,
+      parkingPaidMonths: parkingPaidMonths,
+      parkingExcludedMonths: parkingExcludedMonths,
     );
 
     final cleanFlat = flatNumber.replaceAll(RegExp(r'[^\w\-]'), '_');
@@ -701,6 +717,9 @@ class ReceiptPdfService {
     required String paymentMode,
     required String referenceNumber,
     String? bankName,
+    List<String>? maintenancePaidMonths,
+    List<String>? parkingPaidMonths,
+    List<String>? parkingExcludedMonths,
   }) async {
     final cleanFlat = flatNumber.replaceAll(RegExp(r'[^\w\-]'), '_');
     final cleanMonth = billingMonth.replaceAll(RegExp(r'[^\w\-]'), '_');
@@ -726,6 +745,9 @@ class ReceiptPdfService {
         paymentMode: paymentMode,
         referenceNumber: referenceNumber,
         bankName: bankName,
+        maintenancePaidMonths: maintenancePaidMonths,
+        parkingPaidMonths: parkingPaidMonths,
+        parkingExcludedMonths: parkingExcludedMonths,
       ),
       name: docName,
     );

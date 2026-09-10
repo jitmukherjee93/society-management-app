@@ -20,7 +20,7 @@ class GenerateMaintenanceTab extends StatefulWidget {
 }
 
 class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
-  final _currencyFmt = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+  final _currencyFmt = AppFormatters.currencyFormat;
 
   String _selectedMonth = '';
   bool _isProcessing = false;
@@ -786,68 +786,102 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                 children: [
                                   Row(
                                     children: [
-                                      Text(
-                                        'Flat $flat • $month',
-                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      AppBadge.category(paymentCategory, isOnline: paymentCategory == 'ONLINE'),
-                                    ],
-                                  ),
-                                  Text(
-                                    AppFormatters.currency(amount),
-                                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: AppColors.primary),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Submitted: $submittedStr via $paymentMode',
-                                style: const TextStyle(fontSize: 11, color: AppColors.slate600),
-                              ),
-                              const SizedBox(height: 8),
-                              // UTR Chip
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(color: AppColors.slate300),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.tag_rounded, color: AppColors.info, size: 16),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      paymentCategory == 'ONLINE' ? 'UTR / Ref:' : 'Cheque / Ref:',
-                                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11, color: AppColors.slate700),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: SelectableText(
-                                        uniqueId,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 12,
-                                          color: AppColors.info,
-                                          letterSpacing: 0.5,
-                                        ),
-                                      ),
-                                    ),
-                                    InkWell(
-                                      borderRadius: BorderRadius.circular(4),
-                                      onTap: () {
-                                        Clipboard.setData(ClipboardData(text: uniqueId));
-                                        AppFeedback.showInfo(context, 'Copied Unique ID ($uniqueId)');
-                                      },
-                                      child: const Padding(
-                                        padding: EdgeInsets.all(2.0),
-                                        child: Icon(Icons.copy_rounded, size: 15, color: AppColors.info),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                                       Text(
+                                         'Flat $flat • ${(data['multiMonthSummary'] ?? month)}',
+                                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                                       ),
+                                       const SizedBox(width: 8),
+                                       AppBadge.category(paymentCategory, isOnline: paymentCategory == 'ONLINE'),
+                                       if (data['isMultiMonthPayment'] == true) ...[
+                                         const SizedBox(width: 6),
+                                         Container(
+                                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                           decoration: BoxDecoration(
+                                             color: AppColors.primarySurface,
+                                             borderRadius: BorderRadius.circular(4),
+                                             border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                                           ),
+                                           child: const Text('MULTI-MONTH', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 9)),
+                                         ),
+                                       ],
+                                     ],
+                                   ),
+                                   Text(
+                                     AppFormatters.currency(amount),
+                                     style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: AppColors.primary),
+                                   ),
+                                 ],
+                               ),
+                               const SizedBox(height: 4),
+                               Text(
+                                 'Submitted: $submittedStr via $paymentMode',
+                                 style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                               ),
+                               if (data['parkingExcludedMonths'] != null && (data['parkingExcludedMonths'] as List).isNotEmpty) ...[
+                                 const SizedBox(height: 4),
+                                 Container(
+                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                   decoration: BoxDecoration(
+                                     color: AppColors.warningSurface,
+                                     borderRadius: BorderRadius.circular(4),
+                                     border: Border.all(color: AppColors.warningBorder),
+                                   ),
+                                   child: Row(
+                                     mainAxisSize: MainAxisSize.min,
+                                     children: [
+                                       const Icon(Icons.warning_amber_rounded, size: 13, color: AppColors.warningDark),
+                                       const SizedBox(width: 4),
+                                       Text(
+                                         'Parking Excluded for: ${(data['parkingExcludedMonths'] as List).join(', ')}',
+                                         style: const TextStyle(fontSize: 10.5, color: AppColors.warningDark, fontWeight: FontWeight.w600),
+                                       ),
+                                     ],
+                                   ),
+                                 ),
+                               ],
+                               const SizedBox(height: 8),
+                               // UTR Chip
+                               Container(
+                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                 decoration: BoxDecoration(
+                                   color: Colors.white,
+                                   borderRadius: BorderRadius.circular(6),
+                                   border: Border.all(color: AppColors.slate300),
+                                 ),
+                                 child: Row(
+                                   children: [
+                                     const Icon(Icons.tag_rounded, color: AppColors.info, size: 16),
+                                     const SizedBox(width: 6),
+                                     Text(
+                                       paymentCategory == 'ONLINE' ? 'UTR / Ref:' : 'Cheque / Ref:',
+                                       style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11, color: AppColors.slate700),
+                                     ),
+                                     const SizedBox(width: 6),
+                                     Expanded(
+                                       child: SelectableText(
+                                         uniqueId,
+                                         style: const TextStyle(
+                                           fontWeight: FontWeight.bold,
+                                           fontSize: 12,
+                                           color: AppColors.info,
+                                           letterSpacing: 0.5,
+                                         ),
+                                       ),
+                                     ),
+                                     InkWell(
+                                       borderRadius: BorderRadius.circular(4),
+                                       onTap: () {
+                                         Clipboard.setData(ClipboardData(text: uniqueId));
+                                         AppFeedback.showInfo(context, 'Copied Unique ID ($uniqueId)');
+                                       },
+                                       child: const Padding(
+                                         padding: EdgeInsets.all(2.0),
+                                         child: Icon(Icons.copy_rounded, size: 15, color: AppColors.info),
+                                       ),
+                                     ),
+                                   ],
+                                 ),
+                               ),
                               const SizedBox(height: 10),
                               // Actions
                               Row(
@@ -982,7 +1016,219 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
 
           const SizedBox(height: 20),
 
-          // 3. Billing Records & Status for Selected Month
+          // 3. Parking Coverage Gaps & Alerts (Flats with maintenance paid in advance but parking lapsed)
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('maintenance_dues')
+                .where('status', whereIn: ['PAID_VERIFIED', 'PAID_ONLINE', 'PAID_OFFLINE_VERIFIED'])
+                .snapshots(),
+            builder: (context, snap) {
+              if (!snap.hasData) return const SizedBox.shrink();
+
+              // Map of Flat -> Set of paid maintenance months and Set of paid parking months
+              final Map<String, Set<String>> flatMaintMonths = {};
+              final Map<String, Set<String>> flatParkingMonths = {};
+              final Map<String, Map<String, dynamic>> flatDetails = {};
+
+              for (final doc in snap.data!.docs) {
+                final d = doc.data() as Map<String, dynamic>;
+                final flat = (d['flatNumber'] ?? '').toString().trim().toUpperCase();
+                if (flat.isEmpty) continue;
+
+                flatDetails.putIfAbsent(flat, () => d);
+
+                flatMaintMonths.putIfAbsent(flat, () => <String>{});
+                flatParkingMonths.putIfAbsent(flat, () => <String>{});
+
+                final m = (d['month'] ?? '').toString().trim();
+                if (m.isNotEmpty) flatMaintMonths[flat]!.add(m);
+
+                final bool incParking = d['parkingIncluded'] != false && ((d['carParkingCharges'] as num?)?.toDouble() ?? 0) > 0;
+                if (incParking && m.isNotEmpty) {
+                  flatParkingMonths[flat]!.add(m);
+                }
+
+                // If multi-month explicit arrays present
+                if (d['maintenancePaidMonths'] != null) {
+                  flatMaintMonths[flat]!.addAll(List<String>.from(d['maintenancePaidMonths'] as List));
+                }
+                if (d['parkingPaidMonths'] != null) {
+                  flatParkingMonths[flat]!.addAll(List<String>.from(d['parkingPaidMonths'] as List));
+                }
+              }
+
+              // Filter flats with gap: maintenance months paid where parking was excluded/unpaid, and flat has car
+              final gapFlats = <Map<String, dynamic>>[];
+
+              flatMaintMonths.forEach((flat, maintSet) {
+                final parkSet = flatParkingMonths[flat] ?? <String>{};
+                final info = flatDetails[flat] ?? {};
+                final int carCount = ((info['carCount'] as num?)?.toInt() ?? 0);
+                final int bikeCount = ((info['bikeCount'] as num?)?.toInt() ?? 0);
+
+                if (carCount > 0 || bikeCount > 0) {
+                  final missingParking = maintSet.where((m) => !parkSet.contains(m)).toList();
+                  if (missingParking.isNotEmpty) {
+                    // Sort missing months by FY order
+                    missingParking.sort((a, b) => AccountingConfig.getMonthIndex(a).compareTo(AccountingConfig.getMonthIndex(b)));
+                    gapFlats.add({
+                      'flat': flat,
+                      'residentName': info['residentName'] ?? 'Flat Occupant',
+                      'carReg': info['carReg'] ?? '',
+                      'bikeReg': info['bikeReg'] ?? '',
+                      'carCount': carCount,
+                      'bikeCount': bikeCount,
+                      'maintMonths': maintSet.toList()..sort((a, b) => AccountingConfig.getMonthIndex(a).compareTo(AccountingConfig.getMonthIndex(b))),
+                      'parkingMonths': parkSet.toList()..sort((a, b) => AccountingConfig.getMonthIndex(a).compareTo(AccountingConfig.getMonthIndex(b))),
+                      'missingMonths': missingParking,
+                    });
+                  }
+                }
+              });
+
+              if (gapFlats.isEmpty) return const SizedBox.shrink();
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(
+                  color: AppColors.errorSurface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.errorBorder, width: 1.2),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: AppColors.error.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(Icons.directions_car_filled_rounded, size: 20, color: AppColors.error),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Text(
+                                      'Parking Coverage Gaps & Alerts',
+                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.error,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Text(
+                                        '${gapFlats.length}',
+                                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const Text(
+                                  'Flats with active maintenance in advance but lapsed / opted-out vehicle parking charges',
+                                  style: TextStyle(fontSize: 11, color: AppColors.slate600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1, color: AppColors.errorBorder),
+                    ListView.separated(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: gapFlats.length,
+                      separatorBuilder: (context, index) => const Divider(height: 1, color: AppColors.errorBorder),
+                      itemBuilder: (context, index) {
+                        final g = gapFlats[index];
+                        final flat = g['flat'];
+                        final rName = g['residentName'];
+                        final missing = List<String>.from(g['missingMonths']);
+                        final maint = List<String>.from(g['maintMonths']);
+                        final park = List<String>.from(g['parkingMonths']);
+                        final carReg = (g['carReg'] ?? '').toString();
+
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(
+                                        'Flat $flat ($rName)',
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                                      ),
+                                      if (carReg.isNotEmpty) ...[
+                                        const SizedBox(width: 6),
+                                        Text('• $carReg', style: const TextStyle(fontSize: 11, color: AppColors.slate600, fontWeight: FontWeight.w500)),
+                                      ],
+                                    ],
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.error,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      '${missing.length} Mo. Parking Unpaid',
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Maintenance Paid Through: ${maint.isNotEmpty ? maint.last : 'N/A'} • Parking Paid Through: ${park.isNotEmpty ? park.last : 'None'}',
+                                style: const TextStyle(fontSize: 11.5, color: AppColors.slate700, fontWeight: FontWeight.w500),
+                              ),
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 4,
+                                runSpacing: 4,
+                                children: [
+                                  const Text('Unpaid Parking Months: ', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.error)),
+                                  ...missing.map((m) => Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(color: AppColors.errorBorder),
+                                    ),
+                                    child: Text(m, style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: AppColors.error)),
+                                  )),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+
+          const SizedBox(height: 10),
+
+          // 4. Billing Records & Status for Selected Month
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [

@@ -6,7 +6,7 @@ import 'package:intl/intl.dart';
 import '../../models/accounting_heads.dart';
 import '../../constants/society_config.dart';
 import '../../utils/app_formatters.dart';
-import '../../services/notification_service.dart';
+import '../../services/billing_service.dart';
 import 'tabs/community_feed_tab.dart';
 import '../../utils/storage_utils.dart';
 import '../../services/visitor_pass_service.dart';
@@ -17,7 +17,7 @@ import '../../widgets/app_dialog.dart';
 import '../../widgets/app_feedback.dart';
 import '../../widgets/receipt_preview_dialog.dart';
 import '../../models/notice_model.dart';
-import '../../widgets/notices/notice_card_widget.dart';
+import '../../widgets/notices/two_column_notice_list.dart';
 
 bool _isNotificationForResident(Map<String, dynamic> data, User? user, [String? userFlat, String? fullFlat]) {
   if (user == null) return false;
@@ -68,6 +68,20 @@ class ResidentDashboard extends StatefulWidget {
 class _ResidentDashboardState extends State<ResidentDashboard> {
   int _currentIndex = 0;
   String? _selectedMaintenanceMonth;
+  Future<DocumentReference?>? _userDocRefFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final userEmail = user.email?.toLowerCase();
+      final flatPrefix = userEmail?.contains('@') == true
+          ? userEmail!.split('@').first.toLowerCase()
+          : null;
+      _userDocRefFuture = _resolveUserDocRef(user.uid, userEmail, flatPrefix);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -76,13 +90,8 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
       return const Scaffold(body: Center(child: Text('Please log in.')));
     }
 
-    final userEmail = user.email?.toLowerCase();
-    final flatPrefix = userEmail?.contains('@') == true
-        ? userEmail!.split('@').first.toLowerCase()
-        : null;
-
     return FutureBuilder<DocumentReference?>(
-      future: _resolveUserDocRef(user.uid, userEmail, flatPrefix),
+      future: _userDocRefFuture,
       builder: (context, docRefSnap) {
         final docRef = docRefSnap.data;
         if (docRef == null) {
@@ -128,146 +137,135 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
       ),
     ];
 
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: AppColors.surface,
-        elevation: 0,
-        scrolledUnderElevation: 1,
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: AppColors.primarySurface,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.apartment_rounded, color: AppColors.primary, size: 20),
-            ),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('notifications')
+          .snapshots(),
+      builder: (context, notifSnap) {
+        final docs = (notifSnap.data?.docs ?? []).where((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          return _isNotificationForResident(data, user, userFlat, fullFlat);
+        }).toList();
+        final notifCount = docs.length;
+
+        return Scaffold(
+          appBar: AppBar(
+            backgroundColor: AppColors.surface,
+            elevation: 0,
+            scrolledUnderElevation: 1,
+            title: Row(
               children: [
-                const Text(
-                  'Resident Portal',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
-                ),
-                if (fullFlat != null && fullFlat.isNotEmpty)
-                  Text(
-                    'Flat $fullFlat',
-                    style: const TextStyle(fontSize: 11, color: AppColors.slate500, fontWeight: FontWeight.w500),
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: AppColors.primarySurface,
+                    borderRadius: BorderRadius.circular(8),
                   ),
+                  child: const Icon(Icons.apartment_rounded, color: AppColors.primary, size: 20),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Resident Portal',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
+                    ),
+                    if (fullFlat != null && fullFlat.isNotEmpty)
+                      Text(
+                        'Flat $fullFlat',
+                        style: const TextStyle(fontSize: 11, color: AppColors.slate500, fontWeight: FontWeight.w500),
+                      ),
+                  ],
+                ),
               ],
             ),
-          ],
-        ),
-        actions: [
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('notifications')
-                .snapshots(),
-            builder: (context, snap) {
-              final docs = (snap.data?.docs ?? []).where((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                return _isNotificationForResident(data, user, userFlat, fullFlat);
-              }).toList();
-              final count = docs.length;
-              return IconButton(
+            actions: [
+              IconButton(
                 icon: Badge(
-                  isLabelVisible: count > 0,
+                  isLabelVisible: notifCount > 0,
                   backgroundColor: AppColors.error,
-                  label: Text('$count', style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
+                  label: Text('$notifCount', style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
                   child: const Icon(Icons.notifications_outlined, color: AppColors.slate700),
                 ),
                 tooltip: 'Alerts',
                 onPressed: () => setState(() => _currentIndex = 2),
-              );
-            },
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 8.0),
-            child: TextButton.icon(
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.error,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               ),
-              icon: const Icon(Icons.logout_rounded, size: 18),
-              label: const Text('Log out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-              onPressed: () async {
-                final confirm = await AppDialog.show<bool>(
-                  context: context,
-                  title: 'Sign Out',
-                  subtitle: 'Are you sure you want to log out?',
-                  icon: Icons.logout_rounded,
-                  iconColor: AppColors.error,
-                  iconBgColor: AppColors.errorSurface,
-                  body: const Text('You will need to sign in again to access your resident portal.'),
-                  actions: [
-                    OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Sign Out'),
-                    ),
-                  ],
-                );
-                if (confirm == true) {
-                  await FirebaseAuth.instance.signOut();
-                }
-              },
-            ),
-          ),
-        ],
-      ),
-      body: pages[_currentIndex],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        indicatorColor: AppColors.primarySurface,
-        onDestinationSelected: (index) => setState(() => _currentIndex = index),
-        destinations: [
-          const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: AppColors.primary), label: 'Home'),
-          const NavigationDestination(icon: Icon(Icons.forum_outlined), selectedIcon: Icon(Icons.forum, color: AppColors.primary), label: 'Community'),
-          NavigationDestination(
-            icon: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('notifications')
-                  .snapshots(),
-              builder: (context, snap) {
-                final docs = (snap.data?.docs ?? []).where((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  return _isNotificationForResident(data, user, userFlat, fullFlat);
-                }).toList();
-                final count = docs.length;
-                return Badge(
-                  isLabelVisible: count > 0,
-                  backgroundColor: AppColors.error,
-                  label: Text('$count'),
-                  child: const Icon(Icons.notifications_outlined),
-                );
-              },
-            ),
-            selectedIcon: const Icon(Icons.notifications, color: AppColors.primary),
-            label: 'Alerts',
-          ),
-          const NavigationDestination(icon: Icon(Icons.support_agent_outlined), selectedIcon: Icon(Icons.support_agent, color: AppColors.primary), label: 'Helpdesk'),
-          const NavigationDestination(icon: Icon(Icons.payment_outlined), selectedIcon: Icon(Icons.payment, color: AppColors.primary), label: 'Maintenance'),
-        ],
-      ),
-      floatingActionButton: _currentIndex == 0
-          ? FloatingActionButton.extended(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const PreApproveVisitorScreen(),
+              Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.error,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   ),
-                );
-              },
-              icon: const Icon(Icons.person_add_rounded, size: 20),
-              label: const Text('Pre-approve Visitor', style: TextStyle(fontWeight: FontWeight.w600)),
-            )
-          : null,
+                  icon: const Icon(Icons.logout_rounded, size: 18),
+                  label: const Text('Log out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  onPressed: () async {
+                    final confirm = await AppDialog.show<bool>(
+                      context: context,
+                      title: 'Sign Out',
+                      subtitle: 'Are you sure you want to log out?',
+                      icon: Icons.logout_rounded,
+                      iconColor: AppColors.error,
+                      iconBgColor: AppColors.errorSurface,
+                      body: const Text('You will need to sign in again to access your resident portal.'),
+                      actions: [
+                        OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('Sign Out'),
+                        ),
+                      ],
+                    );
+                    if (confirm == true) {
+                      await FirebaseAuth.instance.signOut();
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+          body: pages[_currentIndex],
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _currentIndex,
+            indicatorColor: AppColors.primarySurface,
+            onDestinationSelected: (index) => setState(() => _currentIndex = index),
+            destinations: [
+              const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: AppColors.primary), label: 'Home'),
+              const NavigationDestination(icon: Icon(Icons.forum_outlined), selectedIcon: Icon(Icons.forum, color: AppColors.primary), label: 'Community'),
+              NavigationDestination(
+                icon: Badge(
+                  isLabelVisible: notifCount > 0,
+                  backgroundColor: AppColors.error,
+                  label: Text('$notifCount'),
+                  child: const Icon(Icons.notifications_outlined),
+                ),
+                selectedIcon: const Icon(Icons.notifications, color: AppColors.primary),
+                label: 'Alerts',
+              ),
+              const NavigationDestination(icon: Icon(Icons.support_agent_outlined), selectedIcon: Icon(Icons.support_agent, color: AppColors.primary), label: 'Helpdesk'),
+              const NavigationDestination(icon: Icon(Icons.payment_outlined), selectedIcon: Icon(Icons.payment, color: AppColors.primary), label: 'Maintenance'),
+            ],
+          ),
+          floatingActionButton: _currentIndex == 0
+              ? FloatingActionButton.extended(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const PreApproveVisitorScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.person_add_rounded, size: 20),
+                  label: const Text('Pre-approve Visitor', style: TextStyle(fontWeight: FontWeight.w600)),
+                )
+              : null,
+        );
+      },
     );
   }
 }
@@ -1828,49 +1826,10 @@ class NotificationsTab extends StatelessWidget {
             return LayoutBuilder(
               builder: (context, constraints) {
                 final isTwoColumn = constraints.maxWidth >= 600;
-
-                if (isTwoColumn) {
-                  final col1 = <NoticeModel>[];
-                  final col2 = <NoticeModel>[];
-                  for (int i = 0; i < notices.length; i++) {
-                    if (i % 2 == 0) {
-                      col1.add(notices[i]);
-                    } else {
-                      col2.add(notices[i]);
-                    }
-                  }
-
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: col1.map((n) => NoticeCardWidget(key: ValueKey(n.id), notice: n, isAdmin: false)).toList(),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: col2.map((n) => NoticeCardWidget(key: ValueKey(n.id), notice: n, isAdmin: false)).toList(),
-                        ),
-                      ),
-                    ],
-                  );
-                }
-
-                return ListView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: notices.length,
-                  itemBuilder: (context, index) {
-                    return NoticeCardWidget(
-                      key: ValueKey(notices[index].id),
-                      notice: notices[index],
-                      isAdmin: false,
-                    );
-                  },
+                return TwoColumnNoticeList(
+                  notices: notices,
+                  isTwoColumn: isTwoColumn,
+                  isAdmin: false,
                 );
               },
             );
@@ -1890,7 +1849,7 @@ class MaintenanceTab extends StatefulWidget {
 }
 
 class _MaintenanceTabState extends State<MaintenanceTab> {
-  final _currencyFmt = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+  final _currencyFmt = AppFormatters.currencyFormat;
 
   void _showReceiptDialog(BuildContext context, Map<String, dynamic> dueData, String receiptNumber, String? paidDateStr) {
     ReceiptPreviewDialog.show(
@@ -2578,6 +2537,86 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
 
   bool _isProcessing = false;
 
+  // Multi-Month & Parking configuration state
+  late List<Map<String, dynamic>> _monthConfigs;
+  late String _block;
+  late int _carCount;
+  late int _bikeCount;
+  late double _baseMaintenanceRate;
+  late double _carRate;
+  late double _bikeRate;
+
+  @override
+  void initState() {
+    super.initState();
+    // Resolve block
+    final userBlock = (widget.userData['block'] ?? widget.dueData['block'] ?? '').toString().trim().toUpperCase();
+    _block = userBlock.isNotEmpty
+        ? userBlock
+        : (widget.flat.isNotEmpty ? widget.flat.split('-').first.trim().toUpperCase() : 'A');
+    if (!AccountingConfig.blockRateBreakup.containsKey(_block)) _block = 'A';
+
+    _baseMaintenanceRate = (AccountingConfig.blockRateBreakup[_block]?['total'] ?? 450).toDouble();
+    _carRate = (AccountingConfig.parkingRates['Four-Wheeler'] ?? 430).toDouble();
+    _bikeRate = (AccountingConfig.parkingRates['Two-Wheeler'] ?? 100).toDouble();
+
+    // Vehicles
+    final bool isCar = widget.userData['isCarOwner'] == true || (widget.userData['carReg']?.toString().trim().isNotEmpty ?? false);
+    final bool isBike = widget.userData['isBikeOwner'] == true || (widget.userData['bikeReg']?.toString().trim().isNotEmpty ?? false);
+    final bool hasBike2 = widget.userData['hasBike2'] == true || (widget.userData['bike2Reg']?.toString().trim().isNotEmpty ?? false);
+
+    _carCount = isCar ? 1 : ((widget.dueData['carCount'] as num?)?.toInt() ?? 0);
+    _bikeCount = (isBike ? 1 : 0) + (hasBike2 ? 1 : 0);
+    if (_bikeCount == 0 && widget.dueData['bikeCount'] != null) {
+      _bikeCount = (widget.dueData['bikeCount'] as num).toInt();
+    }
+
+    // Default primary month configuration
+    final bool defaultParking = (_carCount > 0 || _bikeCount > 0) && (widget.dueData['parkingIncluded'] != false);
+    _monthConfigs = [
+      {
+        'month': widget.month,
+        'includeParking': defaultParking,
+      }
+    ];
+  }
+
+  bool get _hasVehicles => _carCount > 0 || _bikeCount > 0;
+
+  Map<String, dynamic> get _multiMonthCalculation {
+    return BillingService.calculateMultiMonthBreakdown(
+      block: _block,
+      carCount: _carCount,
+      bikeCount: _bikeCount,
+      monthConfigs: _monthConfigs,
+    );
+  }
+
+  double get _currentPayableTotal => (_multiMonthCalculation['totalAmount'] as num).toDouble();
+
+  void _addMonth(String monthName) {
+    if (_monthConfigs.any((m) => m['month'] == monthName)) return;
+    setState(() {
+      _monthConfigs.add({
+        'month': monthName,
+        'includeParking': _hasVehicles, // Default to true if has vehicle, resident can uncheck
+      });
+    });
+  }
+
+  void _removeMonth(String monthName) {
+    if (_monthConfigs.length <= 1) return; // Keep at least 1 month
+    setState(() {
+      _monthConfigs.removeWhere((m) => m['month'] == monthName);
+    });
+  }
+
+  void _toggleParking(int index, bool val) {
+    setState(() {
+      _monthConfigs[index]['includeParking'] = val;
+    });
+  }
+
   @override
   void dispose() {
     _onlineUtrController.dispose();
@@ -2597,37 +2636,23 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
       final userEmail = user?.email ?? '';
       final userUid = user?.uid ?? '';
       final paymentModeName = _onlineMode == 'UPI' ? 'UPI (GPay / PhonePe / Paytm / BHIM)' : 'Bank Transfer (NEFT / IMPS / RTGS)';
+      final payable = _currentPayableTotal;
 
-      // 1. Update maintenance due record
-      await FirebaseFirestore.instance.collection('maintenance_dues').doc(widget.dueId).update({
-        'status': 'PAYMENT_PENDING_APPROVAL',
-        'paymentCategory': 'ONLINE',
-        'paymentMode': paymentModeName,
-        'uniqueId': utr,
-        'utrNumber': utr,
-        'referenceNumber': utr,
-        'submittedAt': FieldValue.serverTimestamp(),
-        'submittedByUid': userUid,
-        'submittedByEmail': userEmail,
-        'amount': widget.amount,
-        'rejectionReason': FieldValue.delete(),
-      });
-
-      // 2. Dispatch notification to Admin
-      await NotificationService.notifyAdmin(
-        title: 'Online Payment Approval: Flat ${widget.flat}',
-        message: 'Flat ${widget.flat} submitted Online payment ($paymentModeName) of ${AppFormatters.currency(widget.amount)} for ${widget.month} with 16-Character Unique ID: $utr. Tap to verify and approve.',
-        type: 'MAINTENANCE_PAYMENT_APPROVAL_REQUEST',
+      await BillingService.submitMultiMonthPayment(
+        primaryDueId: widget.dueId,
         flatNumber: widget.flat,
-        extraData: {
-          'dueId': widget.dueId,
-          'amount': widget.amount,
-          'month': widget.month,
-          'uniqueId': utr,
-          'utrNumber': utr,
-          'referenceNumber': utr,
-          'paymentCategory': 'ONLINE',
-          'paymentMode': paymentModeName,
+        block: _block,
+        monthConfigs: _monthConfigs,
+        paymentMode: paymentModeName,
+        paymentCategory: 'ONLINE',
+        uniqueId: utr,
+        totalAmount: payable,
+        submittedByUid: userUid,
+        submittedByEmail: userEmail,
+        extraResidentData: {
+          'residentName': widget.userData['name'] ?? widget.dueData['residentName'],
+          'carCount': _carCount,
+          'bikeCount': _bikeCount,
         },
       );
 
@@ -2635,7 +2660,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
         Navigator.pop(context);
         AppFeedback.showSuccess(
           context,
-          'Online payment with 16-digit Unique ID ($utr) submitted for Admin approval!',
+          'Online payment with 16-digit Unique ID ($utr) for ${_monthConfigs.length} month(s) submitted for Admin approval!',
         );
       }
     } catch (e) {
@@ -2659,41 +2684,25 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
       final user = FirebaseAuth.instance.currentUser;
       final userEmail = user?.email ?? '';
       final userUid = user?.uid ?? '';
+      final payable = _currentPayableTotal;
 
-      // 1. Update maintenance due record
-      await FirebaseFirestore.instance.collection('maintenance_dues').doc(widget.dueId).update({
-        'status': 'PAYMENT_PENDING_APPROVAL',
-        'paymentCategory': 'OFFLINE',
-        'paymentMode': 'Cheque to Cashier',
-        'uniqueId': uniqueId,
-        'utrNumber': 'CHQ-$chqNo',
-        'referenceNumber': 'CHQ-$chqNo',
-        'chequeNumber': chqNo,
-        'chequeBank': chqBank,
-        'submittedAt': FieldValue.serverTimestamp(),
-        'submittedByUid': userUid,
-        'submittedByEmail': userEmail,
-        'amount': widget.amount,
-        'rejectionReason': FieldValue.delete(),
-      });
-
-      // 2. Dispatch notification to Admin
-      await NotificationService.notifyAdmin(
-        title: 'Cheque Payment Approval: Flat ${widget.flat}',
-        message: 'Flat ${widget.flat} submitted Cheque No: $chqNo ($chqBank) of ${AppFormatters.currency(widget.amount)} for ${widget.month}. Tap to verify and approve.',
-        type: 'MAINTENANCE_PAYMENT_APPROVAL_REQUEST',
+      await BillingService.submitMultiMonthPayment(
+        primaryDueId: widget.dueId,
         flatNumber: widget.flat,
-        extraData: {
-          'dueId': widget.dueId,
-          'amount': widget.amount,
-          'month': widget.month,
-          'uniqueId': uniqueId,
-          'utrNumber': 'CHQ-$chqNo',
-          'referenceNumber': 'CHQ-$chqNo',
-          'chequeNumber': chqNo,
-          'chequeBank': chqBank,
-          'paymentCategory': 'OFFLINE',
-          'paymentMode': 'Cheque to Cashier',
+        block: _block,
+        monthConfigs: _monthConfigs,
+        paymentMode: 'Cheque to Cashier',
+        paymentCategory: 'OFFLINE',
+        uniqueId: uniqueId,
+        totalAmount: payable,
+        chequeNumber: chqNo,
+        chequeBank: chqBank,
+        submittedByUid: userUid,
+        submittedByEmail: userEmail,
+        extraResidentData: {
+          'residentName': widget.userData['name'] ?? widget.dueData['residentName'],
+          'carCount': _carCount,
+          'bikeCount': _bikeCount,
         },
       );
 
@@ -2701,7 +2710,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
         Navigator.pop(context);
         AppFeedback.showSuccess(
           context,
-          'Cheque details ($uniqueId) submitted for Admin approval!',
+          'Cheque details ($uniqueId) for ${_monthConfigs.length} month(s) submitted for Admin approval!',
         );
       }
     } catch (e) {
@@ -2715,6 +2724,17 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final calc = _multiMonthCalculation;
+    final totalPayable = (calc['totalAmount'] as num).toDouble();
+    final totalMaint = (calc['totalBaseMaintenance'] as num).toDouble();
+    final totalPark = (calc['totalParking'] as num).toDouble();
+    final int mCount = _monthConfigs.length;
+
+    // Available future months in FY not yet selected
+    final List<String> availableFutureMonths = AccountingConfig.financialYearMonths
+        .where((m) => !_monthConfigs.any((cfg) => cfg['month'] == m))
+        .toList();
+
     return DefaultTabController(
       length: 2,
       child: Padding(
@@ -2751,9 +2771,177 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                   ),
                 ],
               ),
+              const SizedBox(height: 8),
+
+              // Multi-Month Advance Payment Selector Section
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.slate50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.slate200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.date_range_rounded, size: 16, color: AppColors.primary),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Billing Months ($mCount Selected)',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
+                            ),
+                          ],
+                        ),
+                        if (availableFutureMonths.isNotEmpty)
+                          PopupMenuButton<String>(
+                            tooltip: 'Add future month in advance',
+                            icon: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: AppColors.primarySurface,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.add_rounded, size: 14, color: AppColors.primary),
+                                  SizedBox(width: 4),
+                                  Text('Add Advance Month', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 11)),
+                                ],
+                              ),
+                            ),
+                            onSelected: _addMonth,
+                            itemBuilder: (ctx) => availableFutureMonths.map((m) {
+                              return PopupMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13)));
+                            }).toList(),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+
+                    // List of selected months with per-month parking toggles
+                    ..._monthConfigs.asMap().entries.map((entry) {
+                      final idx = entry.key;
+                      final cfg = entry.value;
+                      final mName = cfg['month'].toString();
+                      final incParking = cfg['includeParking'] == true;
+                      final isPrimary = (idx == 0);
+
+                      final double mCarAmt = incParking ? _carCount * _carRate : 0.0;
+                      final double mBikeAmt = incParking ? _bikeCount * _bikeRate : 0.0;
+                      final double monthTotal = _baseMaintenanceRate + mCarAmt + mBikeAmt;
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.slate200),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    Text(
+                                      mName,
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate800),
+                                    ),
+                                    if (isPrimary) ...[
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.primarySurface,
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: const Text('CURRENT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.primary)),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                Row(
+                                  children: [
+                                    Text(
+                                      widget.currencyFmt.format(monthTotal),
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
+                                    ),
+                                    if (!isPrimary) ...[
+                                      const SizedBox(width: 6),
+                                      InkWell(
+                                        onTap: () => _removeMonth(mName),
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: const Padding(
+                                          padding: EdgeInsets.all(2.0),
+                                          child: Icon(Icons.remove_circle_outline_rounded, size: 16, color: AppColors.error),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+
+                            // Maintenance & Vehicle Parking breakdown
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Base Maintenance: ${widget.currencyFmt.format(_baseMaintenanceRate)}',
+                                  style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                                ),
+                                if (_hasVehicles)
+                                  InkWell(
+                                    onTap: () => _toggleParking(idx, !incParking),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        SizedBox(
+                                          height: 20,
+                                          width: 20,
+                                          child: Checkbox(
+                                            value: incParking,
+                                            onChanged: (val) => _toggleParking(idx, val ?? false),
+                                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Include Parking (${widget.currencyFmt.format((_carCount * _carRate) + (_bikeCount * _bikeRate))})',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: incParking ? FontWeight.bold : FontWeight.normal,
+                                            color: incParking ? AppColors.primary : AppColors.slate500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                else
+                                  const Text('No Vehicle Registered', style: TextStyle(fontSize: 10.5, color: AppColors.slate400)),
+                              ],
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
               const SizedBox(height: 10),
 
-              // Bill Summary Card
+              // Total Summary Banner Card
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -2767,13 +2955,25 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Flat ${widget.flat} • ${widget.month}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900)),
-                        const Text('FY 2026-27 Approved Rates', style: TextStyle(fontSize: 11, color: AppColors.slate600)),
+                        Text(
+                          'Flat ${widget.flat} • $mCount Month${mCount > 1 ? 's' : ''}',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
+                        ),
+                        Text(
+                          'Maint: ${widget.currencyFmt.format(totalMaint)}${totalPark > 0 ? ' • Park: ${widget.currencyFmt.format(totalPark)}' : ''}',
+                          style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                        ),
                       ],
                     ),
-                    Text(
-                      widget.currencyFmt.format(widget.amount),
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        const Text('Total Payable', style: TextStyle(fontSize: 10, color: AppColors.slate600)),
+                        Text(
+                          widget.currencyFmt.format(totalPayable),
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
+                        ),
+                      ],
                     ),
                   ],
                 ),

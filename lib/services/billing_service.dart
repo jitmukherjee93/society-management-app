@@ -37,7 +37,17 @@ class BillingService {
 
     final batch = _fs.batch();
 
-    // 1. Update maintenance due document
+    final isMultiMonth = data['isMultiMonthPayment'] == true;
+    final List<String> maintMonths = data['maintenancePaidMonths'] != null
+        ? List<String>.from(data['maintenancePaidMonths'] as List)
+        : [month];
+    final List<String> parkMonths = data['parkingPaidMonths'] != null
+        ? List<String>.from(data['parkingPaidMonths'] as List)
+        : (data['parkingIncluded'] != false && ((data['carParkingCharges'] as num?)?.toDouble() ?? 0) > 0 ? [month] : []);
+    final int cCount = ((data['carCount'] as num?)?.toInt() ?? 0);
+    final int bCount = ((data['bikeCount'] as num?)?.toInt() ?? 0);
+
+    // 1. Update primary maintenance due document
     final dueRef = _fs.collection('maintenance_dues').doc(dueId);
     batch.update(dueRef, {
       'status': 'PAID_VERIFIED',
@@ -52,6 +62,29 @@ class BillingService {
       'referenceNumber': uniqueId,
     });
 
+    // If multi-month, update sibling dues matching this reference/parent
+    if (isMultiMonth) {
+      final siblingSnap = await _fs
+          .collection('maintenance_dues')
+          .where('flatNumber', isEqualTo: normFlat)
+          .where('uniqueId', isEqualTo: uniqueId)
+          .get();
+
+      for (final sDoc in siblingSnap.docs) {
+        if (sDoc.id != dueId) {
+          batch.update(sDoc.reference, {
+            'status': 'PAID_VERIFIED',
+            'receiptNumber': voucherCode,
+            'approvedAt': FieldValue.serverTimestamp(),
+            'verifiedAt': FieldValue.serverTimestamp(),
+            'verifiedBy': verifiedBy,
+            'paymentCategory': paymentCategory,
+            'paymentMode': paymentMode,
+          });
+        }
+      }
+    }
+
     // 2. Post income entry into society accounts ledger
     final txnRef = _fs.collection('society_transactions').doc();
     batch.set(txnRef, {
@@ -64,7 +97,7 @@ class BillingService {
       'paymentDate': FieldValue.serverTimestamp(),
       'paymentMode': paymentMode,
       'referenceNumber': uniqueId,
-      'description': 'Maintenance collection for $month from Flat $normFlat (Ref: $uniqueId)',
+      'description': 'Maintenance collection for ${data['multiMonthSummary'] ?? month} from Flat $normFlat (Ref: $uniqueId)',
       'linkedDueId': dueId,
       'uniqueId': uniqueId,
       'utrNumber': uniqueId,
@@ -77,12 +110,12 @@ class BillingService {
     await NotificationService.notifyResident(
       flatNumber: normFlat,
       title: 'Maintenance Payment Approved ($voucherCode)',
-      message: 'Your maintenance payment of ${AppFormatters.currency(amount)} for $month (Ref: $uniqueId) has been verified and posted to Society Accounts. Receipt No: $voucherCode. Tap to view and download your official receipt.',
+      message: 'Your maintenance payment of ${AppFormatters.currency(amount)} for ${data['multiMonthSummary'] ?? month} (Ref: $uniqueId) has been verified and posted to Society Accounts. Receipt No: $voucherCode. Tap to view and download your official receipt.',
       type: 'MAINTENANCE_PAYMENT_APPROVED',
       extraData: {
         'dueId': dueId,
         'amount': amount,
-        'month': month,
+        'month': data['multiMonthSummary'] ?? month,
         'receiptNumber': voucherCode,
         'uniqueId': uniqueId,
         'paymentCategory': paymentCategory,
@@ -94,6 +127,18 @@ class BillingService {
 
     // Commit all operations atomically
     await batch.commit();
+
+    // 4. Trigger asynchronous parking gap check if applicable
+    if (maintMonths.length > parkMonths.length && (cCount > 0 || bCount > 0)) {
+      await checkAndAlertParkingGaps(
+        flatNumber: normFlat,
+        maintenanceMonths: maintMonths,
+        parkingMonths: parkMonths,
+        carCount: cCount,
+        bikeCount: bCount,
+      );
+    }
+
     return voucherCode;
   }
 
@@ -248,26 +293,230 @@ class BillingService {
     await batch.commit();
   }
 
-  /// Calculates total breakdown for a given flat based on block and vehicle ownership
-  static Map<String, double> calculateFlatBreakdown({
+  /// Calculates itemized totals for multiple selected months with per-month parking toggles.
+  static Map<String, dynamic> calculateMultiMonthBreakdown({
     required String block,
     int carCount = 0,
     int bikeCount = 0,
+    required List<Map<String, dynamic>> monthConfigs, // [{'month': 'September 2026', 'includeParking': true}]
   }) {
     final cleanBlock = block.trim().toUpperCase();
-    final baseMaintenance = (AccountingConfig.blockRateBreakup[cleanBlock]?['total'] ?? 450).toDouble();
-    final carParkingRate = (AccountingConfig.parkingRates['Four-Wheeler'] ?? 430).toDouble();
-    final bikeParkingRate = (AccountingConfig.parkingRates['Two-Wheeler'] ?? 100).toDouble();
-    final carParking = carCount * carParkingRate;
-    final bikeParking = bikeCount * bikeParkingRate;
-    final total = CurrencyMath.roundPaise(baseMaintenance + carParking + bikeParking);
+    final baseMaintenanceRate = (AccountingConfig.blockRateBreakup[cleanBlock]?['total'] ?? 450).toDouble();
+    final carRate = (AccountingConfig.parkingRates['Four-Wheeler'] ?? 430).toDouble();
+    final bikeRate = (AccountingConfig.parkingRates['Two-Wheeler'] ?? 100).toDouble();
+    final monthlyParkingRate = (carCount * carRate) + (bikeCount * bikeRate);
+
+    double totalBaseMaintenance = 0.0;
+    double totalCarParking = 0.0;
+    double totalBikeParking = 0.0;
+    final List<String> maintenanceMonths = [];
+    final List<String> parkingMonths = [];
+    final List<String> parkingExcludedMonths = [];
+
+    for (final cfg in monthConfigs) {
+      final m = cfg['month']?.toString() ?? '';
+      if (m.isEmpty) continue;
+      maintenanceMonths.add(m);
+      totalBaseMaintenance += baseMaintenanceRate;
+
+      final bool incPark = cfg['includeParking'] == true;
+      if (incPark && (carCount > 0 || bikeCount > 0)) {
+        parkingMonths.add(m);
+        totalCarParking += carCount * carRate;
+        totalBikeParking += bikeCount * bikeRate;
+      } else if (carCount > 0 || bikeCount > 0) {
+        parkingExcludedMonths.add(m);
+      }
+    }
+
+    final double totalAmount = CurrencyMath.roundPaise(totalBaseMaintenance + totalCarParking + totalBikeParking);
 
     return {
-      'baseMaintenance': baseMaintenance,
-      'pujaSubscription': 0.0,
-      'carParkingCharges': carParking,
-      'bikeParkingCharges': bikeParking,
-      'totalAmount': total,
+      'baseMaintenanceRate': baseMaintenanceRate,
+      'monthlyParkingRate': monthlyParkingRate,
+      'totalBaseMaintenance': CurrencyMath.roundPaise(totalBaseMaintenance),
+      'totalCarParking': CurrencyMath.roundPaise(totalCarParking),
+      'totalBikeParking': CurrencyMath.roundPaise(totalBikeParking),
+      'totalParking': CurrencyMath.roundPaise(totalCarParking + totalBikeParking),
+      'totalAmount': totalAmount,
+      'maintenanceMonths': maintenanceMonths,
+      'parkingMonths': parkingMonths,
+      'parkingExcludedMonths': parkingExcludedMonths,
+      'monthCount': maintenanceMonths.length,
     };
+  }
+
+  /// Submits a multi-month payment for resident approval. Updates primary due and creates/updates
+  /// future monthly dues, atomically linking them to the payment reference.
+  static Future<void> submitMultiMonthPayment({
+    required String primaryDueId,
+    required String flatNumber,
+    required String block,
+    required List<Map<String, dynamic>> monthConfigs,
+    required String paymentMode,
+    required String paymentCategory, // 'ONLINE' or 'OFFLINE'
+    required String uniqueId,
+    required double totalAmount,
+    String? submittedByUid,
+    String? submittedByEmail,
+    String? chequeNumber,
+    String? chequeBank,
+    Map<String, dynamic>? extraResidentData,
+  }) async {
+    final normFlat = FlatUtils.normalize(flatNumber);
+    final userCarCount = ((extraResidentData?['carCount'] ?? (extraResidentData?['isCarOwner'] == true ? 1 : 0)) as num).toInt();
+    final userBikeCount = ((extraResidentData?['bikeCount'] ?? ((extraResidentData?['isBikeOwner'] == true ? 1 : 0) + (extraResidentData?['hasBike2'] == true ? 1 : 0))) as num).toInt();
+
+    final breakdown = calculateMultiMonthBreakdown(
+      block: block,
+      carCount: userCarCount,
+      bikeCount: userBikeCount,
+      monthConfigs: monthConfigs,
+    );
+
+    final maintenanceMonths = List<String>.from(breakdown['maintenanceMonths'] as List);
+    final parkingMonths = List<String>.from(breakdown['parkingMonths'] as List);
+    final parkingExcludedMonths = List<String>.from(breakdown['parkingExcludedMonths'] as List);
+
+    final cleanBlock = block.trim().toUpperCase();
+    final baseRate = (AccountingConfig.blockRateBreakup[cleanBlock]?['total'] ?? 450).toDouble();
+    final carRate = (AccountingConfig.parkingRates['Four-Wheeler'] ?? 430).toDouble();
+    final bikeRate = (AccountingConfig.parkingRates['Two-Wheeler'] ?? 100).toDouble();
+
+    final batch = _fs.batch();
+
+    // 1. Fetch any existing due records for these months to update them in batch
+    final existingDuesSnap = await _fs
+        .collection('maintenance_dues')
+        .where('flatNumber', isEqualTo: normFlat)
+        .where('month', whereIn: maintenanceMonths.take(10).toList())
+        .get();
+
+    final existingMap = <String, DocumentSnapshot>{};
+    for (final doc in existingDuesSnap.docs) {
+      final m = (doc.data()['month'] ?? '').toString();
+      if (m.isNotEmpty) existingMap[m] = doc;
+    }
+
+    final String primaryMonth = maintenanceMonths.isNotEmpty ? maintenanceMonths.first : 'Multiple Months';
+    final String monthSummary = maintenanceMonths.length > 1
+        ? '${maintenanceMonths.first} – ${maintenanceMonths.last} (${maintenanceMonths.length} Months)'
+        : primaryMonth;
+
+    for (final cfg in monthConfigs) {
+      final m = cfg['month']?.toString() ?? '';
+      if (m.isEmpty) continue;
+      final bool incPark = cfg['includeParking'] == true;
+      final double mCar = incPark ? userCarCount * carRate : 0.0;
+      final double mBike = incPark ? userBikeCount * bikeRate : 0.0;
+      final double mTotal = CurrencyMath.roundPaise(baseRate + mCar + mBike);
+
+      final existingDoc = existingMap[m];
+      final docRef = (existingDoc != null)
+          ? existingDoc.reference
+          : (m == primaryMonth ? _fs.collection('maintenance_dues').doc(primaryDueId) : _fs.collection('maintenance_dues').doc());
+
+      final payload = <String, dynamic>{
+        'flatNumber': normFlat,
+        'block': cleanBlock,
+        'month': m,
+        'financialYear': AccountingConfig.currentFinancialYear,
+        'amount': mTotal,
+        'baseMaintenance': baseRate,
+        'pujaSubscription': 0.0,
+        'carParkingCharges': mCar,
+        'bikeParkingCharges': mBike,
+        'carCount': userCarCount,
+        'bikeCount': userBikeCount,
+        'parkingIncluded': incPark,
+        'status': 'PAYMENT_PENDING_APPROVAL',
+        'paymentCategory': paymentCategory,
+        'paymentMode': paymentMode,
+        'uniqueId': uniqueId,
+        'utrNumber': uniqueId,
+        'referenceNumber': uniqueId,
+        'submittedAt': FieldValue.serverTimestamp(),
+        'submittedByUid': ?submittedByUid,
+        'submittedByEmail': ?submittedByEmail,
+        if (chequeNumber != null && chequeNumber.isNotEmpty) 'chequeNumber': chequeNumber,
+        if (chequeBank != null && chequeBank.isNotEmpty) 'chequeBank': chequeBank,
+        'isMultiMonthPayment': maintenanceMonths.length > 1,
+        'multiMonthParentDueId': primaryDueId,
+        'multiMonthSummary': monthSummary,
+        'multiMonthTotalAmount': totalAmount,
+        'maintenancePaidMonths': maintenanceMonths,
+        'parkingPaidMonths': parkingMonths,
+        'parkingExcludedMonths': parkingExcludedMonths,
+        'rejectionReason': FieldValue.delete(),
+      };
+
+      if (extraResidentData?['residentName'] != null) {
+        payload['residentName'] = extraResidentData!['residentName'];
+      }
+
+      batch.set(docRef, payload, SetOptions(merge: true));
+    }
+
+    // 2. Alert Admin with multi-month details
+    String notifMsg = 'Flat $normFlat submitted $paymentCategory payment ($paymentMode) of ${AppFormatters.currency(totalAmount)} for $monthSummary with Ref: $uniqueId.';
+    if (parkingExcludedMonths.isNotEmpty && (userCarCount > 0 || userBikeCount > 0)) {
+      notifMsg += ' (Note: Parking charges excluded for: ${parkingExcludedMonths.join(', ')})';
+    }
+
+    await NotificationService.notifyAdmin(
+      title: 'Multi-Month Payment Approval: Flat $normFlat',
+      message: notifMsg,
+      type: 'MAINTENANCE_PAYMENT_APPROVAL_REQUEST',
+      flatNumber: normFlat,
+      extraData: {
+        'dueId': primaryDueId,
+        'amount': totalAmount,
+        'month': monthSummary,
+        'months': maintenanceMonths,
+        'parkingMonths': parkingMonths,
+        'parkingExcludedMonths': parkingExcludedMonths,
+        'uniqueId': uniqueId,
+        'paymentCategory': paymentCategory,
+        'paymentMode': paymentMode,
+        'isMultiMonth': maintenanceMonths.length > 1,
+      },
+      batch: batch,
+    );
+
+    await batch.commit();
+  }
+
+  /// Dispatches an alert to Admins if a flat has maintenance paid through future months,
+  /// but car or bike parking charges are lapsed or unpaid.
+  static Future<void> checkAndAlertParkingGaps({
+    required String flatNumber,
+    required List<String> maintenanceMonths,
+    required List<String> parkingMonths,
+    required int carCount,
+    required int bikeCount,
+  }) async {
+    if (carCount == 0 && bikeCount == 0) return; // No vehicle owned
+
+    final missingParking = maintenanceMonths.where((m) => !parkingMonths.contains(m)).toList();
+    if (missingParking.isEmpty) return; // All covered
+
+    final normFlat = FlatUtils.normalize(flatNumber);
+    final lastMaint = maintenanceMonths.isNotEmpty ? maintenanceMonths.last : 'Unknown';
+    final lastPark = parkingMonths.isNotEmpty ? parkingMonths.last : 'None';
+
+    await NotificationService.notifyAdmin(
+      title: 'Parking Lapsed Alert: Flat $normFlat',
+      message: 'Flat $normFlat has maintenance covered through $lastMaint, but vehicle parking is only paid through $lastPark (Unpaid parking for: ${missingParking.join(', ')}). Committee check advised.',
+      type: 'PARKING_LAPSED_ALERT',
+      flatNumber: normFlat,
+      extraData: {
+        'flatNumber': normFlat,
+        'maintenanceCoveredUntil': lastMaint,
+        'parkingCoveredUntil': lastPark,
+        'unpaidParkingMonths': missingParking,
+        'carCount': carCount,
+        'bikeCount': bikeCount,
+      },
+    );
   }
 }

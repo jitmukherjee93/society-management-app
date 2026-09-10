@@ -1,6 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../../utils/notice_utils.dart';
 
 /// Available preset text colors for rich notices
 class NoticeColorPresets {
@@ -78,7 +78,7 @@ class NoticeColorPresets {
 }
 
 /// Rich Text rendering widget for formatted notice content with inline media & docs
-class NoticeRichText extends StatelessWidget {
+class NoticeRichText extends StatefulWidget {
   final String content;
   final TextStyle? baseStyle;
   final int? maxLines;
@@ -92,92 +92,58 @@ class NoticeRichText extends StatelessWidget {
     this.overflow = TextOverflow.clip,
   });
 
-  void _openUrl(BuildContext context, String url) async {
-    try {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      debugPrint('Error launching URL: $e');
+  @override
+  State<NoticeRichText> createState() => _NoticeRichTextState();
+}
+
+class _NoticeRichTextState extends State<NoticeRichText> {
+  final List<TapGestureRecognizer> _recognizers = [];
+
+  static final RegExp _imageRegex = RegExp(r'^!\[(.*?)\]\((.*?)\)$');
+  static final RegExp _docRegex = RegExp(r'^\[(doc|pdf|file):\s*(.*?)\|(.*?)\]$');
+  static final RegExp _numListRegex = RegExp(r'^(\d+)\.\s+(.*)$');
+  static final RegExp _numListCheckRegex = RegExp(r'^\d+\.\s+');
+  static final RegExp _alertTagRegex = RegExp(r'^\[\!(ALERT|URGENT|CRITICAL)\]\s*');
+  static final RegExp _warningTagRegex = RegExp(r'^\[\!WARNING\]\s*');
+  static final RegExp _successTagRegex = RegExp(r'^\[\!SUCCESS\]\s*');
+  static final RegExp _infoTagRegex = RegExp(r'^\[\!(INFO|NOTE)\]\s*');
+
+  static final RegExp _inlineRegex = RegExp(
+    r'(\*\*([\s\S]*?)\*\*)|' // 1: **bold** (2)
+    r'(\*([\s\S]*?)\*)|' // 3: *italic* (4)
+    r'(<u>([\s\S]*?)<\/u>)|' // 5: <u>underline</u> (6)
+    r'(__([^_]+)__)|' // 7: __underline__ (8)
+    r'(~~([\s\S]*?)~~)|' // 9: ~~strikethrough~~ (10)
+    r'(\[color=\s*([^\]]+)\s*\]([\s\S]*?)\[\/color\])|' // 11: [color=val] (12) (13)
+    r'(\[bg=\s*([^\]]+)\s*\]([\s\S]*?)\[\/bg\])|' // 14: [bg=val] (15) (16)
+    r'(\[size=\s*([^\]]+)\s*\]([\s\S]*?)\[\/size\])|' // 17: [size=val] (18) (19)
+    r'(\[([^\]]+)\]\(([^)]+)\))', // 20: [link](url) (21) (22)
+    caseSensitive: false,
+    dotAll: true,
+  );
+
+  void _clearRecognizers() {
+    for (final r in _recognizers) {
+      r.dispose();
     }
+    _recognizers.clear();
   }
 
-  void _showImageLightbox(BuildContext context, String imageUrl, String caption) {
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(12),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              InteractiveViewer(
-                minScale: 0.5,
-                maxScale: 4.0,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.network(
-                    imageUrl,
-                    fit: BoxFit.contain,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return Container(
-                        width: 300,
-                        height: 300,
-                        color: Colors.black45,
-                        child: const Center(
-                          child: CircularProgressIndicator(color: Colors.white),
-                        ),
-                      );
-                    },
-                    errorBuilder: (context, error, stackTrace) => Container(
-                      width: 250,
-                      height: 200,
-                      color: Colors.black87,
-                      child: const Center(
-                        child: Text(
-                          'Failed to load image',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 12,
-                right: 12,
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.download_rounded, color: Colors.white, size: 28),
-                      tooltip: 'Open / Download Original',
-                      onPressed: () => _openUrl(context, imageUrl),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white, size: 28),
-                      tooltip: 'Close',
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
+  @override
+  void dispose() {
+    _clearRecognizers();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (content.trim().isEmpty) {
+    _clearRecognizers();
+
+    if (widget.content.trim().isEmpty) {
       return const SizedBox.shrink();
     }
 
-    final defaultStyle = baseStyle ??
+    final defaultStyle = widget.baseStyle ??
         Theme.of(context).textTheme.bodyMedium?.copyWith(
               fontSize: 13.5,
               height: 1.4,
@@ -185,7 +151,7 @@ class NoticeRichText extends StatelessWidget {
             ) ??
         const TextStyle(fontSize: 13.5, height: 1.4, color: Color(0xFF2C3E50));
 
-    final lines = content.split('\n');
+    final lines = widget.content.split('\n');
     final List<Widget> blockWidgets = [];
 
     int i = 0;
@@ -206,7 +172,7 @@ class NoticeRichText extends StatelessWidget {
       }
 
       // Inline Image block: ![caption](url)
-      final imageMatch = RegExp(r'^!\[(.*?)\]\((.*?)\)$').firstMatch(trimmed);
+      final imageMatch = _imageRegex.firstMatch(trimmed);
       if (imageMatch != null) {
         final caption = imageMatch.group(1) ?? '';
         final imageUrl = imageMatch.group(2) ?? '';
@@ -216,7 +182,7 @@ class NoticeRichText extends StatelessWidget {
       }
 
       // Inline Document block: [doc:url|name] or [pdf:url|name]
-      final docMatch = RegExp(r'^\[(doc|pdf|file):\s*(.*?)\|(.*?)\]$').firstMatch(trimmed);
+      final docMatch = _docRegex.firstMatch(trimmed);
       if (docMatch != null) {
         final docUrl = docMatch.group(2) ?? '';
         final docName = docMatch.group(3) ?? 'Attached Document';
@@ -336,7 +302,7 @@ class NoticeRichText extends StatelessWidget {
       }
 
       // Numbered List (e.g. "1. ")
-      final numMatch = RegExp(r'^(\d+)\.\s+(.*)$').firstMatch(trimmed);
+      final numMatch = _numListRegex.firstMatch(trimmed);
       if (numMatch != null) {
         final numStr = numMatch.group(1)!;
         final restText = numMatch.group(2)!;
@@ -393,7 +359,7 @@ class NoticeRichText extends StatelessWidget {
             curTrimmed.startsWith('• ') ||
             (curTrimmed.startsWith('- ') && !curTrimmed.startsWith('---')) ||
             (curTrimmed.startsWith('* ') && !curTrimmed.endsWith('*')) ||
-            RegExp(r'^\d+\.\s+').hasMatch(curTrimmed) ||
+            _numListCheckRegex.hasMatch(curTrimmed) ||
             curTrimmed.startsWith('>') ||
             curTrimmed == '---' ||
             curTrimmed == '***' ||
@@ -451,7 +417,7 @@ class NoticeRichText extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
-            onTap: () => _showImageLightbox(context, imageUrl, caption),
+            onTap: () => NoticeImageLightbox.show(context, imageUrl, caption: caption),
             borderRadius: BorderRadius.circular(8),
             child: Container(
               constraints: const BoxConstraints(maxHeight: 220, minHeight: 80),
@@ -540,7 +506,7 @@ class NoticeRichText extends StatelessWidget {
             const Icon(Icons.download_rounded, size: 14, color: Color(0xFF64748B)),
           ],
         ),
-        onPressed: () => _openUrl(context, docUrl),
+        onPressed: () => UrlUtils.openUrl(context, docUrl),
       ),
     );
   }
@@ -557,7 +523,7 @@ class NoticeRichText extends StatelessWidget {
       bgColor = const Color(0xFFFFEBEE);
       icon = Icons.warning_amber_rounded;
       title = 'Important Alert';
-      final tagMatch = RegExp(r'^\[\!(ALERT|URGENT|CRITICAL)\]\s*').firstMatch(rawText);
+      final tagMatch = _alertTagRegex.firstMatch(rawText);
       if (tagMatch != null) {
         bodyText = rawText.substring(tagMatch.end).trim();
       }
@@ -566,7 +532,7 @@ class NoticeRichText extends StatelessWidget {
       bgColor = const Color(0xFFFFF3E0);
       icon = Icons.error_outline_rounded;
       title = 'Attention Required';
-      final tagMatch = RegExp(r'^\[\!WARNING\]\s*').firstMatch(rawText);
+      final tagMatch = _warningTagRegex.firstMatch(rawText);
       if (tagMatch != null) {
         bodyText = rawText.substring(tagMatch.end).trim();
       }
@@ -575,7 +541,7 @@ class NoticeRichText extends StatelessWidget {
       bgColor = const Color(0xFFE8F5E9);
       icon = Icons.check_circle_outline_rounded;
       title = 'Update / Resolved';
-      final tagMatch = RegExp(r'^\[\!SUCCESS\]\s*').firstMatch(rawText);
+      final tagMatch = _successTagRegex.firstMatch(rawText);
       if (tagMatch != null) {
         bodyText = rawText.substring(tagMatch.end).trim();
       }
@@ -584,7 +550,7 @@ class NoticeRichText extends StatelessWidget {
       bgColor = const Color(0xFFE1F5FE);
       icon = Icons.info_outline_rounded;
       title = 'Information';
-      final tagMatch = RegExp(r'^\[\!(INFO|NOTE)\]\s*').firstMatch(rawText);
+      final tagMatch = _infoTagRegex.firstMatch(rawText);
       if (tagMatch != null) {
         bodyText = rawText.substring(tagMatch.end).trim();
       }
@@ -636,7 +602,7 @@ class NoticeRichText extends StatelessWidget {
   /// - `[bg=#HEX]...[/bg]`
   /// - `[size=18]...[/size]`
   /// - `[Label](url)`
-  static List<InlineSpan> _parseInlineSpans(
+  List<InlineSpan> _parseInlineSpans(
     BuildContext context,
     String text,
     TextStyle baseStyle,
@@ -645,23 +611,8 @@ class NoticeRichText extends StatelessWidget {
 
     final List<InlineSpan> spans = [];
 
-    // Master Regex with dotAll: true so multi-line tags inside paragraphs match correctly
-    final RegExp inlineRegex = RegExp(
-      r'(\*\*([\s\S]*?)\*\*)|' // 1: **bold** (2)
-      r'(\*([\s\S]*?)\*)|' // 3: *italic* (4)
-      r'(<u>([\s\S]*?)<\/u>)|' // 5: <u>underline</u> (6)
-      r'(__([^_]+)__)|' // 7: __underline__ (8)
-      r'(~~([\s\S]*?)~~)|' // 9: ~~strikethrough~~ (10)
-      r'(\[color=\s*([^\]]+)\s*\]([\s\S]*?)\[\/color\])|' // 11: [color=val] (12) (13)
-      r'(\[bg=\s*([^\]]+)\s*\]([\s\S]*?)\[\/bg\])|' // 14: [bg=val] (15) (16)
-      r'(\[size=\s*([^\]]+)\s*\]([\s\S]*?)\[\/size\])|' // 17: [size=val] (18) (19)
-      r'(\[([^\]]+)\]\(([^)]+)\))', // 20: [link](url) (21) (22)
-      caseSensitive: false,
-      dotAll: true,
-    );
-
     int lastMatchEnd = 0;
-    for (final match in inlineRegex.allMatches(text)) {
+    for (final match in _inlineRegex.allMatches(text)) {
       if (match.start > lastMatchEnd) {
         spans.add(TextSpan(
           text: text.substring(lastMatchEnd, match.start),
@@ -753,6 +704,9 @@ class NoticeRichText extends StatelessWidget {
       else if (match.group(20) != null) {
         final linkText = match.group(21) ?? '';
         final url = match.group(22) ?? '';
+        final recognizer = TapGestureRecognizer()
+          ..onTap = () => UrlUtils.openUrl(context, url);
+        _recognizers.add(recognizer);
         spans.add(TextSpan(
           text: linkText,
           style: baseStyle.copyWith(
@@ -760,17 +714,7 @@ class NoticeRichText extends StatelessWidget {
             decoration: TextDecoration.underline,
             fontWeight: FontWeight.w600,
           ),
-          recognizer: TapGestureRecognizer()
-            ..onTap = () async {
-              try {
-                final uri = Uri.parse(url);
-                if (await canLaunchUrl(uri)) {
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-                }
-              } catch (e) {
-                debugPrint('Link launch error: $e');
-              }
-            },
+          recognizer: recognizer,
         ));
       }
 

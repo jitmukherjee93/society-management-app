@@ -23,6 +23,9 @@ class ReceiptPreviewDialog extends StatefulWidget {
   final String paymentMode;
   final String referenceNumber;
   final String? bankName;
+  final List<String>? maintenancePaidMonths;
+  final List<String>? parkingPaidMonths;
+  final List<String>? parkingExcludedMonths;
 
   const ReceiptPreviewDialog({
     super.key,
@@ -43,6 +46,9 @@ class ReceiptPreviewDialog extends StatefulWidget {
     required this.paymentMode,
     required this.referenceNumber,
     this.bankName,
+    this.maintenancePaidMonths,
+    this.parkingPaidMonths,
+    this.parkingExcludedMonths,
   });
 
   /// Helper to format 2-Wheeler (T.W.) and 4-Wheeler (F.W.) vehicle registration numbers cleanly
@@ -221,6 +227,19 @@ class ReceiptPreviewDialog extends StatefulWidget {
          dueData['submittedBy'] ??
          '').toString().trim();
 
+    List<String>? maintenancePaidMonths;
+    if (dueData['maintenancePaidMonths'] is List) {
+      maintenancePaidMonths = (dueData['maintenancePaidMonths'] as List).map((e) => e.toString()).toList();
+    }
+    List<String>? parkingPaidMonths;
+    if (dueData['parkingPaidMonths'] is List) {
+      parkingPaidMonths = (dueData['parkingPaidMonths'] as List).map((e) => e.toString()).toList();
+    }
+    List<String>? parkingExcludedMonths;
+    if (dueData['parkingExcludedMonths'] is List) {
+      parkingExcludedMonths = (dueData['parkingExcludedMonths'] as List).map((e) => e.toString()).toList();
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => ReceiptPreviewDialog(
@@ -240,6 +259,9 @@ class ReceiptPreviewDialog extends StatefulWidget {
         vehicleReg: initialVReg,
         paymentMode: mode,
         referenceNumber: ref,
+        maintenancePaidMonths: maintenancePaidMonths,
+        parkingPaidMonths: parkingPaidMonths,
+        parkingExcludedMonths: parkingExcludedMonths,
       ),
     );
   }
@@ -325,32 +347,31 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
       'OCT.', 'NOV.', 'DEC.', 'JAN.', 'FEB.', 'MAR.'
     ];
 
-    final upperMonth = widget.month.toUpperCase();
-    String activeMonthCode = '';
-    if (upperMonth.contains('APR')) {
-      activeMonthCode = 'APRIL';
-    } else if (upperMonth.contains('MAY')) {
-      activeMonthCode = 'MAY';
-    } else if (upperMonth.contains('JUN')) {
-      activeMonthCode = 'JUNE';
-    } else if (upperMonth.contains('JUL')) {
-      activeMonthCode = 'JULY';
-    } else if (upperMonth.contains('AUG')) {
-      activeMonthCode = 'AUG.';
-    } else if (upperMonth.contains('SEP')) {
-      activeMonthCode = 'SEPT.';
-    } else if (upperMonth.contains('OCT')) {
-      activeMonthCode = 'OCT.';
-    } else if (upperMonth.contains('NOV')) {
-      activeMonthCode = 'NOV.';
-    } else if (upperMonth.contains('DEC')) {
-      activeMonthCode = 'DEC.';
-    } else if (upperMonth.contains('JAN')) {
-      activeMonthCode = 'JAN.';
-    } else if (upperMonth.contains('FEB')) {
-      activeMonthCode = 'FEB.';
-    } else if (upperMonth.contains('MAR')) {
-      activeMonthCode = 'MAR.';
+    // Build set of active month codes (support single or multi-month)
+    final Set<String> activeMonthCodes = {};
+
+    void addMatchingCodes(String text) {
+      final u = text.toUpperCase();
+      if (u.contains('APR')) activeMonthCodes.add('APRIL');
+      if (u.contains('MAY')) activeMonthCodes.add('MAY');
+      if (u.contains('JUN')) activeMonthCodes.add('JUNE');
+      if (u.contains('JUL')) activeMonthCodes.add('JULY');
+      if (u.contains('AUG')) activeMonthCodes.add('AUG.');
+      if (u.contains('SEP')) activeMonthCodes.add('SEPT.');
+      if (u.contains('OCT')) activeMonthCodes.add('OCT.');
+      if (u.contains('NOV')) activeMonthCodes.add('NOV.');
+      if (u.contains('DEC')) activeMonthCodes.add('DEC.');
+      if (u.contains('JAN')) activeMonthCodes.add('JAN.');
+      if (u.contains('FEB')) activeMonthCodes.add('FEB.');
+      if (u.contains('MAR')) activeMonthCodes.add('MAR.');
+    }
+
+    if (widget.maintenancePaidMonths != null && widget.maintenancePaidMonths!.isNotEmpty) {
+      for (final m in widget.maintenancePaidMonths!) {
+        addMatchingCodes(m);
+      }
+    } else {
+      addMatchingCodes(widget.month);
     }
 
     return Dialog(
@@ -576,7 +597,7 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                                               spacing: 3,
                                               runSpacing: 3,
                                               children: months.map((m) {
-                                                final isSelected = (m == activeMonthCode);
+                                                final isSelected = activeMonthCodes.contains(m);
                                                 return Container(
                                                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                                                   decoration: BoxDecoration(
@@ -610,10 +631,10 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                                       children: [
                                         Text(
                                           (widget.carParkingCharges > 0 && widget.bikeParkingCharges > 0)
-                                              ? 'Car & Two-Wheeler Parking Charge for the month of '
+                                              ? 'Car & Two-Wheeler Parking Charge for: '
                                               : (widget.bikeParkingCharges > 0 && widget.carParkingCharges <= 0)
-                                                  ? 'Two-Wheeler Parking Charge for the month of '
-                                                  : 'Car Parking Charge for the month of ',
+                                                  ? 'Two-Wheeler Parking Charge for: '
+                                                  : 'Car Parking Charge for: ',
                                           style: const TextStyle(fontSize: 11),
                                         ),
                                         Expanded(
@@ -623,13 +644,22 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                                             ),
                                             padding: const EdgeInsets.only(left: 4),
                                             child: Text(
-                                              widget.month,
+                                              (widget.parkingPaidMonths != null && widget.parkingPaidMonths!.isNotEmpty)
+                                                  ? widget.parkingPaidMonths!.join(', ')
+                                                  : widget.month,
                                               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
                                             ),
                                           ),
                                         ),
                                       ],
                                     ),
+                                    if (widget.parkingExcludedMonths != null && widget.parkingExcludedMonths!.isNotEmpty) ...[
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        'Note: Parking charges opted-out for: ${widget.parkingExcludedMonths!.join(', ')}',
+                                        style: const TextStyle(fontSize: 9.5, fontStyle: FontStyle.italic, color: Colors.black54),
+                                      ),
+                                    ],
                                     const SizedBox(height: 6),
 
                                     // T.W / F.W line
@@ -895,6 +925,9 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                           paymentMode: widget.paymentMode,
                           referenceNumber: widget.referenceNumber,
                           bankName: widget.bankName,
+                          maintenancePaidMonths: widget.maintenancePaidMonths,
+                          parkingPaidMonths: widget.parkingPaidMonths,
+                          parkingExcludedMonths: widget.parkingExcludedMonths,
                         );
                       },
                     ),
@@ -931,6 +964,9 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                           paymentMode: widget.paymentMode,
                           referenceNumber: widget.referenceNumber,
                           bankName: widget.bankName,
+                          maintenancePaidMonths: widget.maintenancePaidMonths,
+                          parkingPaidMonths: widget.parkingPaidMonths,
+                          parkingExcludedMonths: widget.parkingExcludedMonths,
                         );
                       },
                     ),

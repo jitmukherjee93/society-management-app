@@ -60,14 +60,21 @@ class NoticeAttachment {
     this.uploadedAt,
   });
 
-  bool get isImage =>
-      fileType == 'image' ||
-      name.toLowerCase().endsWith('.png') ||
-      name.toLowerCase().endsWith('.jpg') ||
-      name.toLowerCase().endsWith('.jpeg') ||
-      name.toLowerCase().endsWith('.webp');
+  bool get isImage {
+    if (fileType == 'image') return true;
+    if (fileType == 'pdf' || fileType == 'document') return false;
+    final lower = name.toLowerCase();
+    return lower.endsWith('.png') ||
+        lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.webp');
+  }
 
-  bool get isPdf => fileType == 'pdf' || name.toLowerCase().endsWith('.pdf');
+  bool get isPdf {
+    if (fileType == 'pdf') return true;
+    if (fileType == 'image') return false;
+    return name.toLowerCase().endsWith('.pdf');
+  }
 
   String get formattedSize {
     if (sizeBytes == null || sizeBytes == 0) return '';
@@ -196,5 +203,35 @@ class NoticeModel {
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     if (diff.inDays < 7) return '${diff.inDays}d ago';
     return '${createdAt.day.toString().padLeft(2, '0')}/${createdAt.month.toString().padLeft(2, '0')}/${createdAt.year}';
+  }
+
+  NoticeModel copyWith({
+    String? id,
+    String? title,
+    String? content,
+    NoticeCategory? category,
+    NoticePriority? priority,
+    bool? isPinned,
+    String? authorName,
+    String? authorRole,
+    DateTime? createdAt,
+    DateTime? validUntil,
+    List<NoticeAttachment>? attachments,
+    String? targetAudience,
+  }) {
+    return NoticeModel(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      content: content ?? this.content,
+      category: category ?? this.category,
+      priority: priority ?? this.priority,
+      isPinned: isPinned ?? this.isPinned,
+      authorName: authorName ?? this.authorName,
+      authorRole: authorRole ?? this.authorRole,
+      createdAt: createdAt ?? this.createdAt,
+      validUntil: validUntil ?? this.validUntil,
+      attachments: attachments ?? this.attachments,
+      targetAudience: targetAudience ?? this.targetAudience,
+    );
   }
 }

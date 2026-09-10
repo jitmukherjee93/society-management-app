@@ -65,6 +65,7 @@ class AppUser {
       if (carRegistration != null) 'carRegistration': carRegistration,
       if (bike1Registration != null) 'bike1Registration': bike1Registration,
       if (bike2Registration != null) 'bike2Registration': bike2Registration,
+      if (createdAt != null) 'createdAt': Timestamp.fromDate(createdAt!),
     };
   }
 }

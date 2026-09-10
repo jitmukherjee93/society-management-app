@@ -73,6 +73,32 @@ class BudgetHead {
 class AccountingConfig {
   static const String currentFinancialYear = '2026-27';
 
+  static const List<String> financialYearMonths = [
+    'April 2026',
+    'May 2026',
+    'June 2026',
+    'July 2026',
+    'August 2026',
+    'September 2026',
+    'October 2026',
+    'November 2026',
+    'December 2026',
+    'January 2027',
+    'February 2027',
+    'March 2027',
+  ];
+
+  /// Returns the 0-based index of a month within the FY, or -1 if unknown
+  static int getMonthIndex(String monthName) {
+    final clean = monthName.trim();
+    for (int i = 0; i < financialYearMonths.length; i++) {
+      if (financialYearMonths[i].toLowerCase() == clean.toLowerCase()) return i;
+      // Partial check like "September" matching "September 2026"
+      if (financialYearMonths[i].toLowerCase().startsWith(clean.toLowerCase())) return i;
+    }
+    return -1;
+  }
+
   static const List<String> meetingTypes = [
     'Annual General Meeting (AGM)',
     'Extraordinary General Meeting (EGM)',
