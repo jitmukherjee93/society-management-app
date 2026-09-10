@@ -116,7 +116,16 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
 
   Widget _buildDashboardScaffold(BuildContext context, User user, String? userFlat, String? fullFlat) {
     final pages = [
-      const HomeTab(),
+      HomeTab(
+        onNavigateTab: (idx, [payload]) {
+          setState(() {
+            _currentIndex = idx;
+            if (payload != null && idx == 4) {
+              _selectedMaintenanceMonth = payload;
+            }
+          });
+        },
+      ),
       const CommunityFeedTab(),
       NotificationsTab(
         userFlat: userFlat,
@@ -296,7 +305,8 @@ Future<DocumentReference?> _resolveUserDocRef(String uid, String? userEmail, Str
 }
 
 class HomeTab extends StatefulWidget {
-  const HomeTab({super.key});
+  final Function(int, [String?])? onNavigateTab;
+  const HomeTab({super.key, this.onNavigateTab});
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -1551,6 +1561,16 @@ class _HomeTabState extends State<HomeTab> {
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 12),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.payment_rounded, size: 36, color: AppColors.primary),
+            title: const Text('Pay Maintenance Bill', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            subtitle: const Text('Pay monthly maintenance, vehicle parking or advance bills.'),
+            trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+            onTap: () => widget.onNavigateTab?.call(4),
+          ),
+        ),
+        const SizedBox(height: 8),
         const Card(
           child: ListTile(
             leading: Icon(Icons.security, size: 40, color: Colors.teal),
@@ -1860,7 +1880,78 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
     );
   }
 
-  void _showPaymentModal(BuildContext context, String dueId, Map<String, dynamic> dueData, Map<String, dynamic> userData) {
+  void _openMaintenancePayment({
+    required BuildContext context,
+    required String userFlat,
+    required String blockStr,
+    required FlatMaintenanceBreakdown breakdown,
+    required Map<String, dynamic> userData,
+    required List<QueryDocumentSnapshot> allDocs,
+    required List<QueryDocumentSnapshot> unpaidDocs,
+  }) {
+    if (unpaidDocs.isNotEmpty) {
+      final firstUnpaid = unpaidDocs.first;
+      final dueId = firstUnpaid.id;
+      final dueData = firstUnpaid.data() as Map<String, dynamic>;
+      final paidOrPendingMonths = allDocs
+          .where((d) => d.id != dueId)
+          .map((d) => (d.data() as Map<String, dynamic>)['month']?.toString() ?? '')
+          .where((m) => m.isNotEmpty)
+          .toSet();
+
+      _showPaymentModal(
+        context,
+        dueId,
+        dueData,
+        userData,
+        disabledMonths: paidOrPendingMonths.toList(),
+      );
+      return;
+    }
+
+    // When no unpaid bills exist, find the next un-billed month of FY 2026-27
+    final paidOrPendingMonths = allDocs
+        .map((d) => (d.data() as Map<String, dynamic>)['month']?.toString() ?? '')
+        .where((m) => m.isNotEmpty)
+        .toSet();
+
+    final nextMonth = AccountingConfig.financialYearMonths.firstWhere(
+      (m) => !paidOrPendingMonths.contains(m),
+      orElse: () => AccountingConfig.financialYearMonths.first,
+    );
+
+    final advanceDueData = <String, dynamic>{
+      'flatNumber': userFlat,
+      'block': blockStr.isNotEmpty ? blockStr : breakdown.block,
+      'month': nextMonth,
+      'amount': breakdown.totalMonthlyDue,
+      'baseMaintenance': breakdown.baseMaintenance,
+      'pujaSubscription': 0.0,
+      'carParkingCharges': breakdown.carParkingCharges,
+      'bikeParkingCharges': breakdown.bikeParkingCharges,
+      'carCount': breakdown.carCount,
+      'bikeCount': breakdown.bikeCount,
+      'financialYear': AccountingConfig.currentFinancialYear,
+      'status': 'UNPAID',
+      'residentName': userData['name'],
+    };
+
+    _showPaymentModal(
+      context,
+      '',
+      advanceDueData,
+      userData,
+      disabledMonths: paidOrPendingMonths.toList(),
+    );
+  }
+
+  void _showPaymentModal(
+    BuildContext context,
+    String dueId,
+    Map<String, dynamic> dueData,
+    Map<String, dynamic> userData, {
+    List<String> disabledMonths = const [],
+  }) {
     final flat = (dueData['flatNumber'] ?? userData['flatNumber'] ?? 'Unknown').toString();
     final month = (dueData['month'] ?? 'Current Month').toString();
     final double amount = (dueData['amount'] as num?)?.toDouble() ?? 0.0;
@@ -1879,6 +1970,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
         month: month,
         amount: amount,
         currencyFmt: _currencyFmt,
+        disabledMonths: disabledMonths,
         onPaymentComplete: (receiptNo) {
           Navigator.pop(ctx);
           final nowStr = DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.now());
@@ -2129,9 +2221,36 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           // Outstanding Dues Section
-                          const Text(
-                            'Outstanding Maintenance Dues',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Outstanding Maintenance Dues',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                              ),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primary,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                icon: const Icon(Icons.add_card_rounded, size: 16),
+                                label: Text(
+                                  unpaidDocs.isNotEmpty ? 'Pay Bill' : 'Pay Advance',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                ),
+                                onPressed: () => _openMaintenancePayment(
+                                  context: context,
+                                  userFlat: userFlat,
+                                  blockStr: blockStr,
+                                  breakdown: breakdown,
+                                  userData: userData,
+                                  allDocs: allDocs,
+                                  unpaidDocs: unpaidDocs,
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 10),
 
@@ -2144,30 +2263,99 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                 borderRadius: BorderRadius.circular(12),
                                 border: Border.all(color: Colors.green.shade200),
                               ),
-                              child: Row(
+                              child: Column(
                                 children: [
-                                  Icon(Icons.check_circle, color: Colors.green.shade700, size: 36),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'All Dues Cleared!',
-                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green.shade900),
+                                  Row(
+                                    children: [
+                                      Icon(Icons.check_circle, color: Colors.green.shade700, size: 36),
+                                      const SizedBox(width: 14),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'All Dues Cleared!',
+                                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green.shade900),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'You have no pending maintenance bills for Flat $flatDisplay.',
+                                              style: TextStyle(color: Colors.green.shade800, fontSize: 13),
+                                            ),
+                                          ],
                                         ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          'You have no pending maintenance bills for Flat $flatDisplay.',
-                                          style: TextStyle(color: Colors.green.shade800, fontSize: 13),
-                                        ),
-                                      ],
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.green.shade700,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                        padding: const EdgeInsets.symmetric(vertical: 10),
+                                      ),
+                                      icon: const Icon(Icons.calendar_month_rounded, size: 18),
+                                      label: const Text('Pay Advance Maintenance (Multi-Month)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                      onPressed: () => _openMaintenancePayment(
+                                        context: context,
+                                        userFlat: userFlat,
+                                        blockStr: blockStr,
+                                        breakdown: breakdown,
+                                        userData: userData,
+                                        allDocs: allDocs,
+                                        unpaidDocs: unpaidDocs,
+                                      ),
                                     ),
                                   ),
                                 ],
                               ),
                             )
                           else ...[
+                            if (unpaidDocs.isEmpty && pendingApprovalDocs.isNotEmpty)
+                              Container(
+                                width: double.infinity,
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.teal.shade50,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: Colors.teal.shade200),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        'Bills pending approval. Want to pay advance for upcoming months?',
+                                        style: TextStyle(fontSize: 12, color: Colors.teal.shade900, fontWeight: FontWeight.w500),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.teal.shade700,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                      icon: const Icon(Icons.add_rounded, size: 16),
+                                      label: const Text('Pay Advance', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                      onPressed: () => _openMaintenancePayment(
+                                        context: context,
+                                        userFlat: userFlat,
+                                        blockStr: blockStr,
+                                        breakdown: breakdown,
+                                        userData: userData,
+                                        allDocs: allDocs,
+                                        unpaidDocs: unpaidDocs,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             // Unpaid Bills
                             ...unpaidDocs.map((doc) {
                               final data = doc.data() as Map<String, dynamic>;
@@ -2505,6 +2693,7 @@ class _PaymentModalSheet extends StatefulWidget {
   final String month;
   final double amount;
   final NumberFormat currencyFmt;
+  final List<String> disabledMonths;
   final Function(String receiptNo) onPaymentComplete;
 
   const _PaymentModalSheet({
@@ -2515,6 +2704,7 @@ class _PaymentModalSheet extends StatefulWidget {
     required this.month,
     required this.amount,
     required this.currencyFmt,
+    this.disabledMonths = const [],
     required this.onPaymentComplete,
   });
 
@@ -2730,9 +2920,9 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
     final totalPark = (calc['totalParking'] as num).toDouble();
     final int mCount = _monthConfigs.length;
 
-    // Available future months in FY not yet selected
+    // Available future months in FY not yet selected or already paid/pending
     final List<String> availableFutureMonths = AccountingConfig.financialYearMonths
-        .where((m) => !_monthConfigs.any((cfg) => cfg['month'] == m))
+        .where((m) => !_monthConfigs.any((cfg) => cfg['month'] == m) && !widget.disabledMonths.contains(m))
         .toList();
 
     return DefaultTabController(
@@ -2762,7 +2952,10 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                         size: 22,
                       ),
                       const SizedBox(width: 10),
-                      const Text('Pay Maintenance Bill', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900)),
+                      Text(
+                        widget.dueId.isNotEmpty ? 'Pay Maintenance Bill' : 'Pay Advance Maintenance',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
+                      ),
                     ],
                   ),
                   IconButton(

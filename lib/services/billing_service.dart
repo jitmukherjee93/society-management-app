@@ -399,6 +399,11 @@ class BillingService {
     }
 
     final String primaryMonth = maintenanceMonths.isNotEmpty ? maintenanceMonths.first : 'Multiple Months';
+    final existingPrimaryDoc = existingMap[primaryMonth];
+    final String effectivePrimaryDueId = (existingPrimaryDoc != null)
+        ? existingPrimaryDoc.id
+        : (primaryDueId.trim().isNotEmpty ? primaryDueId.trim() : _fs.collection('maintenance_dues').doc().id);
+
     final String monthSummary = maintenanceMonths.length > 1
         ? '${maintenanceMonths.first} – ${maintenanceMonths.last} (${maintenanceMonths.length} Months)'
         : primaryMonth;
@@ -414,7 +419,7 @@ class BillingService {
       final existingDoc = existingMap[m];
       final docRef = (existingDoc != null)
           ? existingDoc.reference
-          : (m == primaryMonth ? _fs.collection('maintenance_dues').doc(primaryDueId) : _fs.collection('maintenance_dues').doc());
+          : (m == primaryMonth ? _fs.collection('maintenance_dues').doc(effectivePrimaryDueId) : _fs.collection('maintenance_dues').doc());
 
       final payload = <String, dynamic>{
         'flatNumber': normFlat,
@@ -441,7 +446,7 @@ class BillingService {
         if (chequeNumber != null && chequeNumber.isNotEmpty) 'chequeNumber': chequeNumber,
         if (chequeBank != null && chequeBank.isNotEmpty) 'chequeBank': chequeBank,
         'isMultiMonthPayment': maintenanceMonths.length > 1,
-        'multiMonthParentDueId': primaryDueId,
+        'multiMonthParentDueId': effectivePrimaryDueId,
         'multiMonthSummary': monthSummary,
         'multiMonthTotalAmount': totalAmount,
         'maintenancePaidMonths': maintenanceMonths,
@@ -469,7 +474,7 @@ class BillingService {
       type: 'MAINTENANCE_PAYMENT_APPROVAL_REQUEST',
       flatNumber: normFlat,
       extraData: {
-        'dueId': primaryDueId,
+        'dueId': effectivePrimaryDueId,
         'amount': totalAmount,
         'month': monthSummary,
         'months': maintenanceMonths,
