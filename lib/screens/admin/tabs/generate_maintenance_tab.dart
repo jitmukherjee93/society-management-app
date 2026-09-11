@@ -32,7 +32,7 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
   String _searchQuery = '';
   final Set<String> _processingDues = {};
 
-  final _lateFineController = TextEditingController(text: '100');
+  final _lateFineController = TextEditingController();
 
   List<String> get _monthsList => AccountingConfig.financialYearMonths;
 
@@ -47,6 +47,8 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
     _selectedMonth = months.contains(currentMonthStr)
         ? currentMonthStr
         : (months.isNotEmpty ? months.first : 'December 2026');
+    final defaultFine = AccountingConfig.calculateProgressiveLateFine(_selectedMonth);
+    _lateFineController.text = defaultFine > 0 ? defaultFine.toStringAsFixed(0) : '10';
   }
 
   @override
@@ -732,10 +734,24 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
   }
 
   Future<void> _showEditFineDialog(String dueId, Map<String, dynamic> data) async {
+    final bool isParkingOnly = data['isParkingOnlyBill'] == true ||
+        ((data['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0;
+    if (isParkingOnly) {
+      AppFeedback.showInfo(
+        context,
+        'Late fines cannot be assessed on parking-only dues. Late fines apply exclusively to flat maintenance.',
+        title: 'Parking Dues Exempt',
+      );
+      return;
+    }
+
     final currentFine = (data['fine'] as num?)?.toDouble() ?? (data['lateFee'] as num?)?.toDouble() ?? 0.0;
-    final fineCtrl = TextEditingController(text: currentFine > 0 ? currentFine.toStringAsFixed(0) : '100');
     final flat = (data['flatNumber'] ?? 'Unknown').toString();
     final month = (data['month'] ?? '').toString();
+    final progressiveFine = AccountingConfig.calculateProgressiveLateFine(month);
+    final overdueMonths = AccountingConfig.getOverdueMonths(month);
+    final defaultFine = currentFine > 0 ? currentFine : (progressiveFine > 0 ? progressiveFine : 10.0);
+    final fineCtrl = TextEditingController(text: defaultFine.toStringAsFixed(0));
 
     final baseMaint = (data['baseMaintenance'] as num?)?.toDouble() ?? 0.0;
     final carCharges = (data['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
@@ -782,6 +798,17 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                       ],
                     ),
                   ],
+                  if (overdueMonths > 0) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Overdue Duration:', style: TextStyle(fontSize: 12, color: AppColors.slate600)),
+                        Text('$overdueMonths mo. (₹10/mo = ₹${(overdueMonths * 10).toStringAsFixed(0)})',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warningDark)),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -792,13 +819,13 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               decoration: const InputDecoration(
                 labelText: 'Late Fine Amount (₹) *',
-                hintText: 'e.g. 100',
+                hintText: 'e.g. 10',
                 prefixText: '₹ ',
               ),
             ),
             const SizedBox(height: 8),
             const Text(
-              'Residents can only pay past-month bills once an Admin issues or updates the late fine.',
+              'Standard late fine is ₹10 per month of delay. You can adjust or override this amount if needed.',
               style: TextStyle(fontSize: 11, color: AppColors.slate500, fontStyle: FontStyle.italic),
             ),
           ],
@@ -1337,52 +1364,63 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                   ),
                   items: _monthsList.map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13)))).toList(),
                   onChanged: (val) {
-                    if (val != null) setState(() => _selectedMonth = val);
+                    if (val != null) {
+                      setState(() {
+                        _selectedMonth = val;
+                        final progressive = AccountingConfig.calculateProgressiveLateFine(val);
+                        _lateFineController.text = progressive > 0 ? progressive.toStringAsFixed(0) : '10';
+                      });
+                    }
                   },
                 ),
                 if (_isPastMonth) ...[
                   const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.warningSurface,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppColors.warningBorder),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                  Builder(
+                    builder: (context) {
+                      final overdueMonths = AccountingConfig.getOverdueMonths(_selectedMonth);
+                      return Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.warningSurface,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.warningBorder),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.warningDark),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Past Billing Month ($_selectedMonth)',
-                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.warningDark),
+                            Row(
+                              children: [
+                                const Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.warningDark),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Past Billing Month ($_selectedMonth)${overdueMonths > 0 ? ' • $overdueMonths Month(s) Overdue' : ''}',
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.warningDark),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Overdue bills incur a late fine (₹10/month of delay${overdueMonths > 0 ? ' • $overdueMonths mo. = ₹${(overdueMonths * 10).toStringAsFixed(0)}' : ''}). Set or confirm the penalty per flat below:',
+                              style: const TextStyle(fontSize: 11.5, color: AppColors.slate700),
+                            ),
+                            const SizedBox(height: 10),
+                            TextFormField(
+                              controller: _lateFineController,
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                              decoration: const InputDecoration(
+                                labelText: 'Late Fine / Penalty per flat (₹) *',
+                                hintText: 'e.g. 10',
+                                prefixText: '₹ ',
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'Overdue bills require a late fine so residents are permitted to settle them. Set the penalty per flat below:',
-                          style: TextStyle(fontSize: 11.5, color: AppColors.slate700),
-                        ),
-                        const SizedBox(height: 10),
-                        TextFormField(
-                          controller: _lateFineController,
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                          decoration: const InputDecoration(
-                            labelText: 'Late Fine / Penalty per flat (₹) *',
-                            hintText: 'e.g. 100',
-                            prefixText: '₹ ',
-                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          ),
-                        ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
                 ],
                 const SizedBox(height: 14),
@@ -1668,8 +1706,11 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
           const SizedBox(height: 10),
 
           // 4. Billing Records & Status for Selected Month
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 6,
             children: [
               Text(
                 'Billed Records ($_selectedMonth)',
@@ -1809,11 +1850,9 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                       final flat = data['flatNumber'] ?? 'Unknown';
                       final amount = data['amount'] ?? 0;
                       final status = data['status'] ?? 'UNPAID';
-                      final fineAmt = (data['fine'] as num?)?.toDouble() ?? (data['lateFee'] as num?)?.toDouble() ?? 0.0;
+                      final fineAmt = AccountingConfig.getEffectiveFine(data);
                       final dueMonth = (data['month'] ?? _selectedMonth).toString();
-                      final dueCurIdx = AccountingConfig.getMonthIndex(DateFormat('MMMM yyyy').format(AccountingConfig.currentDate));
-                      final dueIdx = AccountingConfig.getMonthIndex(dueMonth);
-                      final isDuePast = dueCurIdx != -1 && dueIdx != -1 && dueIdx < dueCurIdx;
+                      final isDuePast = AccountingConfig.isMonthPast(dueMonth);
                       final isPending = status == 'PAYMENT_PENDING_APPROVAL' || status == 'PAID_OFFLINE_PENDING';
                       final isProcessing = _processingDues.contains(docId);
                       final uniqueId = (data['uniqueId'] ?? data['utrNumber'] ?? data['referenceNumber'] ?? data['offlineRef'] ?? '').toString();
@@ -1826,9 +1865,13 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                       } else if (status == 'PAID_OFFLINE_VERIFIED' || status == 'PAID_VERIFIED') {
                         badge = AppBadge.success('PAID (VERIFIED)');
                       } else if (isDuePast) {
-                        badge = fineAmt > 0
-                            ? AppBadge.warning('PAST DUE • FINE: ${_currencyFmt.format(fineAmt)}')
-                            : AppBadge.error('PAST DUE • NO FINE');
+                        final bool isParking = data['isParkingOnlyBill'] == true ||
+                            ((data['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0;
+                        badge = isParking
+                            ? AppBadge.warning('PARKING DUE (OVERDUE)')
+                            : (fineAmt > 0
+                                ? AppBadge.warning('PAST DUE • FINE: ${_currencyFmt.format(fineAmt)}')
+                                : AppBadge.error('PAST DUE • NO FINE'));
                       } else {
                         badge = AppBadge.error('UNPAID');
                       }
@@ -1950,19 +1993,20 @@ class _GenerateMaintenanceTabState extends State<GenerateMaintenanceTab> {
                                         ),
                                       ),
                                     if (status == 'UNPAID') ...[
-                                      PopupMenuItem(
-                                        value: 'EDIT_FINE',
-                                        child: Row(
-                                          children: [
-                                            const Icon(Icons.gavel_rounded, color: AppColors.warningDark, size: 18),
-                                            const SizedBox(width: 8),
-                                            Text(
-                                              fineAmt > 0 ? 'Edit Late Fine' : 'Assess Late Fine',
-                                              style: const TextStyle(color: AppColors.warningDark, fontWeight: FontWeight.w600, fontSize: 13),
-                                            ),
-                                          ],
+                                      if (data['isParkingOnlyBill'] != true && ((data['baseMaintenance'] as num?)?.toDouble() ?? 0.0) > 0)
+                                        PopupMenuItem(
+                                          value: 'EDIT_FINE',
+                                          child: Row(
+                                            children: [
+                                              const Icon(Icons.gavel_rounded, color: AppColors.warningDark, size: 18),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                fineAmt > 0 ? 'Edit Late Fine' : 'Assess Late Fine',
+                                                style: const TextStyle(color: AppColors.warningDark, fontWeight: FontWeight.w600, fontSize: 13),
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                      ),
                                       const PopupMenuItem(
                                         value: 'RECORD_CASH',
                                         child: Row(

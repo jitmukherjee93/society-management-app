@@ -460,17 +460,24 @@ class BillingService {
     final userCarCount = ((extraResidentData?['carCount'] ?? (extraResidentData?['isCarOwner'] == true ? 1 : 0)) as num).toInt();
     final userBikeCount = ((extraResidentData?['bikeCount'] ?? ((extraResidentData?['isBikeOwner'] == true ? 1 : 0) + (extraResidentData?['hasBike2'] == true ? 1 : 0))) as num).toInt();
 
-    final double dueFine = ((extraResidentData?['fine'] as num?)?.toDouble() ?? 0.0);
+    final String firstConfigMonth = monthConfigs.isNotEmpty ? (monthConfigs.first['month']?.toString() ?? '') : '';
+    final bool isParkingOnlyPrimary = extraResidentData?['isParkingOnlyBill'] == true ||
+        ((extraResidentData?['baseMaintenance'] as num?)?.toDouble() == 0.0);
+    final double explicitFine = isParkingOnlyPrimary ? 0.0 : ((extraResidentData?['fine'] as num?)?.toDouble() ?? 0.0);
+    final double progressiveFine = (isParkingOnlyPrimary || firstConfigMonth.isEmpty)
+        ? 0.0
+        : AccountingConfig.calculateProgressiveLateFine(firstConfigMonth);
+    final double dueFine = explicitFine > 0 ? explicitFine : progressiveFine;
 
     final currentCalMonth = AppFormatters.monthYear(AccountingConfig.currentDate);
     final int curMonthIdx = AccountingConfig.getMonthIndex(currentCalMonth);
 
-    // Rule 1: User can only pay an old month's maintenance when Admin issues it with fine.
+    // Rule 1: User can only pay an old month's maintenance when Admin issues it with fine (parking dues exempt).
     for (final cfg in monthConfigs) {
       final m = cfg['month']?.toString() ?? '';
       final mIdx = AccountingConfig.getMonthIndex(m);
       if (curMonthIdx != -1 && mIdx != -1 && mIdx < curMonthIdx) {
-        if (dueFine <= 0 && extraResidentData?['isParkingOnlyBill'] != true) {
+        if (dueFine <= 0 && !isParkingOnlyPrimary) {
           throw Exception("Past month ($m) maintenance can only be paid when Admin issues it with a late fine.");
         }
       }
@@ -546,9 +553,6 @@ class BillingService {
       final bool incPark = cfg['includeParking'] == true;
       final double mCar = incPark ? userCarCount * carRate : 0.0;
       final double mBike = incPark ? userBikeCount * bikeRate : 0.0;
-      final double mFine = (m == primaryMonth) ? dueFine : 0.0;
-      final double mTotal = CurrencyMath.roundPaise(baseRate + mCar + mBike + mFine);
-
       final existingDoc = (primaryDueDoc != null && m == primaryMonth) ? primaryDueDoc : existingMap[m];
       final docRef = (existingDoc != null)
           ? existingDoc.reference
@@ -558,6 +562,9 @@ class BillingService {
       final bool docIsParkingOnly = isParkingOnly ||
           existingDocData?['isParkingOnlyBill'] == true ||
           ((existingDocData?['baseMaintenance'] as num?)?.toDouble() == 0.0);
+
+      final double mFine = (m == primaryMonth && !docIsParkingOnly) ? dueFine : 0.0;
+      final double mTotal = CurrencyMath.roundPaise(baseRate + mCar + mBike + mFine);
 
       final double effectiveBase = docIsParkingOnly
           ? 0.0
@@ -570,7 +577,7 @@ class BillingService {
           : mBike;
       final double effectiveTotal = (monthConfigs.length == 1 && existingDocData != null)
           ? ((existingDocData['amount'] as num?)?.toDouble() ?? totalAmount)
-          : (docIsParkingOnly ? (effectiveCar + effectiveBike + mFine) : mTotal);
+          : (docIsParkingOnly ? (effectiveCar + effectiveBike) : mTotal);
 
       final payload = <String, dynamic>{
         'flatNumber': normFlat,

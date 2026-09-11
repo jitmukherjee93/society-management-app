@@ -448,23 +448,28 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.receipt_long_rounded, color: Colors.white, size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Official Receipt Voucher (${widget.receiptNumber})',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                        ),
-                        if (_isFetchingDetails) ...[
-                          const SizedBox(width: 10),
-                          const SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          const Icon(Icons.receipt_long_rounded, color: Colors.white, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Official Receipt Voucher (${widget.receiptNumber})',
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
+                          if (_isFetchingDetails) ...[
+                            const SizedBox(width: 10),
+                            const SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
                     IconButton(
                       icon: const Icon(Icons.close_rounded, color: Colors.white70, size: 20),
@@ -478,14 +483,21 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
               // Printable Voucher View
               Flexible(
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(20),
-                  child: Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFDFAF4), // Subtle paper texture tint
-                      border: Border.all(color: Colors.black, width: 2),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
+                  padding: const EdgeInsets.all(16),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minWidth: 540,
+                        maxWidth: (MediaQuery.sizeOf(context).width - 32).clamp(540.0, 740.0),
+                      ),
+                      child: Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFDFAF4), // Subtle paper texture tint
+                          border: Border.all(color: Colors.black, width: 2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -967,100 +979,104 @@ class _ReceiptPreviewDialogState extends State<ReceiptPreviewDialog> {
                   ),
                 ),
               ),
+            ),
+          ),
 
-              // Bottom Action Bar
-              Padding(
-                padding: const EdgeInsets.all(14.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    OutlinedButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Close'),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.primary,
-                        side: const BorderSide(color: AppColors.primary),
-                      ),
-                      icon: const Icon(Icons.download_rounded, size: 18),
-                      label: const Text('Download PDF'),
-                      onPressed: () async {
-                        DateTime parsedDate = DateTime.now();
-                        if (widget.dueData['verifiedAt'] != null && widget.dueData['verifiedAt'].toDate != null) {
-                          parsedDate = widget.dueData['verifiedAt'].toDate();
-                        } else if (widget.dueData['paidAt'] != null && widget.dueData['paidAt'].toDate != null) {
-                          parsedDate = widget.dueData['paidAt'].toDate();
-                        }
-
-                        await ReceiptPdfService.downloadReceiptPdf(
-                          receiptNumber: widget.receiptNumber,
-                          date: parsedDate,
-                          residentName: _residentName,
-                          block: widget.block,
-                          flatNumber: widget.flatNumber,
-                          billingMonth: widget.month,
-                          financialYear: widget.financialYear,
-                          baseMaintenance: widget.baseMaintenance,
-                          carParkingCharges: widget.carParkingCharges,
-                          bikeParkingCharges: widget.bikeParkingCharges,
-                          pujaSubscription: widget.pujaSubscription,
-                          fine: widget.fine,
-                          totalAmount: widget.totalAmount,
-                          vehicleReg: _vehicleReg,
-                          paymentMode: widget.paymentMode,
-                          referenceNumber: widget.referenceNumber,
-                          bankName: widget.bankName,
-                          maintenancePaidMonths: widget.maintenancePaidMonths,
-                          parkingPaidMonths: widget.parkingPaidMonths,
-                          parkingExcludedMonths: widget.parkingExcludedMonths,
-                        );
-                      },
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
-                      ),
-                      icon: const Icon(Icons.print_rounded, size: 18),
-                      label: const Text('Print'),
-                      onPressed: () async {
-                        DateTime parsedDate = DateTime.now();
-                        if (widget.dueData['verifiedAt'] != null && widget.dueData['verifiedAt'].toDate != null) {
-                          parsedDate = widget.dueData['verifiedAt'].toDate();
-                        } else if (widget.dueData['paidAt'] != null && widget.dueData['paidAt'].toDate != null) {
-                          parsedDate = widget.dueData['paidAt'].toDate();
-                        }
-
-                        await ReceiptPdfService.printReceipt(
-                          receiptNumber: widget.receiptNumber,
-                          date: parsedDate,
-                          residentName: _residentName,
-                          block: widget.block,
-                          flatNumber: widget.flatNumber,
-                          billingMonth: widget.month,
-                          financialYear: widget.financialYear,
-                          baseMaintenance: widget.baseMaintenance,
-                          carParkingCharges: widget.carParkingCharges,
-                          bikeParkingCharges: widget.bikeParkingCharges,
-                          pujaSubscription: widget.pujaSubscription,
-                          fine: widget.fine,
-                          totalAmount: widget.totalAmount,
-                          vehicleReg: _vehicleReg,
-                          paymentMode: widget.paymentMode,
-                          referenceNumber: widget.referenceNumber,
-                          bankName: widget.bankName,
-                          maintenancePaidMonths: widget.maintenancePaidMonths,
-                          parkingPaidMonths: widget.parkingPaidMonths,
-                          parkingExcludedMonths: widget.parkingExcludedMonths,
-                        );
-                      },
-                    ),
-                  ],
+          // Bottom Action Bar
+          Padding(
+            padding: const EdgeInsets.all(14.0),
+            child: Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
                 ),
-              ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    side: const BorderSide(color: AppColors.primary),
+                  ),
+                  icon: const Icon(Icons.download_rounded, size: 18),
+                  label: const Text('Download PDF'),
+                  onPressed: () async {
+                    DateTime parsedDate = DateTime.now();
+                    if (widget.dueData['verifiedAt'] != null && widget.dueData['verifiedAt'].toDate != null) {
+                      parsedDate = widget.dueData['verifiedAt'].toDate();
+                    } else if (widget.dueData['paidAt'] != null && widget.dueData['paidAt'].toDate != null) {
+                      parsedDate = widget.dueData['paidAt'].toDate();
+                    }
+
+                    await ReceiptPdfService.downloadReceiptPdf(
+                      receiptNumber: widget.receiptNumber,
+                      date: parsedDate,
+                      residentName: _residentName,
+                      block: widget.block,
+                      flatNumber: widget.flatNumber,
+                      billingMonth: widget.month,
+                      financialYear: widget.financialYear,
+                      baseMaintenance: widget.baseMaintenance,
+                      carParkingCharges: widget.carParkingCharges,
+                      bikeParkingCharges: widget.bikeParkingCharges,
+                      pujaSubscription: widget.pujaSubscription,
+                      fine: widget.fine,
+                      totalAmount: widget.totalAmount,
+                      vehicleReg: _vehicleReg,
+                      paymentMode: widget.paymentMode,
+                      referenceNumber: widget.referenceNumber,
+                      bankName: widget.bankName,
+                      maintenancePaidMonths: widget.maintenancePaidMonths,
+                      parkingPaidMonths: widget.parkingPaidMonths,
+                      parkingExcludedMonths: widget.parkingExcludedMonths,
+                    );
+                  },
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: const Icon(Icons.print_rounded, size: 18),
+                  label: const Text('Print'),
+                  onPressed: () async {
+                    DateTime parsedDate = DateTime.now();
+                    if (widget.dueData['verifiedAt'] != null && widget.dueData['verifiedAt'].toDate != null) {
+                      parsedDate = widget.dueData['verifiedAt'].toDate();
+                    } else if (widget.dueData['paidAt'] != null && widget.dueData['paidAt'].toDate != null) {
+                      parsedDate = widget.dueData['paidAt'].toDate();
+                    }
+
+                    await ReceiptPdfService.printReceipt(
+                      receiptNumber: widget.receiptNumber,
+                      date: parsedDate,
+                      residentName: _residentName,
+                      block: widget.block,
+                      flatNumber: widget.flatNumber,
+                      billingMonth: widget.month,
+                      financialYear: widget.financialYear,
+                      baseMaintenance: widget.baseMaintenance,
+                      carParkingCharges: widget.carParkingCharges,
+                      bikeParkingCharges: widget.bikeParkingCharges,
+                      pujaSubscription: widget.pujaSubscription,
+                      fine: widget.fine,
+                      totalAmount: widget.totalAmount,
+                      vehicleReg: _vehicleReg,
+                      paymentMode: widget.paymentMode,
+                      referenceNumber: widget.referenceNumber,
+                      bankName: widget.bankName,
+                      maintenancePaidMonths: widget.maintenancePaidMonths,
+                      parkingPaidMonths: widget.parkingPaidMonths,
+                      parkingExcludedMonths: widget.parkingExcludedMonths,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
             ],
           ),
         ),

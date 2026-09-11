@@ -33,10 +33,8 @@ void showDocumentPreviewDialog(BuildContext context, String url, String fileName
         ],
       ),
       content: SizedBox(
-        width: MediaQuery.of(context).size.width * 0.8 > 700
-            ? 700
-            : MediaQuery.of(context).size.width * 0.8,
-        height: 520,
+        width: MediaQuery.sizeOf(ctx).width.clamp(0.0, 700.0),
+        height: (MediaQuery.sizeOf(ctx).height * 0.65).clamp(280.0, 520.0),
         child: isPdf
             ? buildPdfIframe(url)
             : isImage
@@ -66,14 +64,15 @@ void showDocumentPreviewDialog(BuildContext context, String url, String fileName
                     ],
                   ),
       ),
+      actionsOverflowButtonSpacing: 8,
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx),
           child: const Text('Close'),
         ),
         ElevatedButton.icon(
-          icon: const Icon(Icons.download),
-          label: const Text('Download / Open in New Tab'),
+          icon: const Icon(Icons.download, size: 18),
+          label: Text(MediaQuery.sizeOf(ctx).width < 500 ? 'Download' : 'Download / Open in New Tab'),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.deepPurple,
             foregroundColor: Colors.white,

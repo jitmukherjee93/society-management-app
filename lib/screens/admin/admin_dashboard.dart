@@ -293,7 +293,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ],
         ),
         content: SizedBox(
-          width: 480,
+          width: MediaQuery.sizeOf(ctx).width.clamp(0.0, 480.0),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -731,8 +731,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ],
         ),
         content: SizedBox(
-          width: 600,
-          height: 480,
+          width: MediaQuery.sizeOf(ctx).width.clamp(0.0, 600.0),
+          height: (MediaQuery.sizeOf(ctx).height * 0.65).clamp(280.0, 480.0),
           child: isPdf
               ? buildPdfIframe(url)
               : isImage
@@ -806,9 +806,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
       const GenerateMaintenanceTab(),
     ];
 
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
+
     return Scaffold(
       appBar: AppBar(
         title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
               padding: const EdgeInsets.all(6),
@@ -818,19 +821,25 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ),
               child: const Icon(Icons.admin_panel_settings_rounded, size: 20, color: AppColors.primary),
             ),
-            const SizedBox(width: 10),
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Admin Management Portal',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-                ),
-                Text(
-                  'Ramkrishnapuram RWA',
-                  style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                ),
-              ],
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    isMobile ? 'Admin Portal' : 'Admin Management Portal',
+                    style: TextStyle(fontSize: isMobile ? 15 : 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (!isMobile)
+                    const Text(
+                      'Ramkrishnapuram RWA',
+                      style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
             ),
           ],
         ),
@@ -840,26 +849,50 @@ class _AdminDashboardState extends State<AdminDashboard> {
         ),
         actions: [
           if (AccountingConfig.simulatedDate != null)
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppColors.warningSurface,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: AppColors.warningBorder),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.calendar_today_rounded, size: 14, color: AppColors.warningDark),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Simulated Date: ${DateFormat('dd MMMM yyyy').format(AccountingConfig.currentDate)}',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warningDark),
+            isMobile
+                ? Tooltip(
+                    message: 'Simulated Date: ${DateFormat('dd MMMM yyyy').format(AccountingConfig.currentDate)}',
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppColors.warningSurface,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: AppColors.warningBorder),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.calendar_today_rounded, size: 12, color: AppColors.warningDark),
+                          const SizedBox(width: 4),
+                          Text(
+                            DateFormat('dd MMM').format(AccountingConfig.currentDate),
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.warningDark),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : Container(
+                    margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.warningSurface,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: AppColors.warningBorder),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.calendar_today_rounded, size: 14, color: AppColors.warningDark),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Simulated Date: ${DateFormat('dd MMMM yyyy').format(AccountingConfig.currentDate)}',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warningDark),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
-            ),
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('notifications')
@@ -901,20 +934,27 @@ class _AdminDashboardState extends State<AdminDashboard> {
               );
             },
           ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12.0, left: 4.0),
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                minimumSize: const Size(0, 32),
-                side: const BorderSide(color: AppColors.borderDark),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              ),
-              icon: const Icon(Icons.logout_rounded, size: 14, color: AppColors.error),
-              label: const Text('Logout', style: TextStyle(color: AppColors.textPrimary, fontSize: 12)),
+          if (isMobile)
+            IconButton(
+              icon: const Icon(Icons.logout_rounded, size: 20, color: AppColors.error),
+              tooltip: 'Logout',
               onPressed: () => FirebaseAuth.instance.signOut(),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.only(right: 12.0, left: 4.0),
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  minimumSize: const Size(0, 32),
+                  side: const BorderSide(color: AppColors.borderDark),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                ),
+                icon: const Icon(Icons.logout_rounded, size: 14, color: AppColors.error),
+                label: const Text('Logout', style: TextStyle(color: AppColors.textPrimary, fontSize: 12)),
+                onPressed: () => FirebaseAuth.instance.signOut(),
+              ),
             ),
-          ),
         ],
       ),
       body: IndexedStack(index: _currentIndex, children: pages),

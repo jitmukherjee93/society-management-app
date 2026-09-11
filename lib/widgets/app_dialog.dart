@@ -140,8 +140,10 @@ class AppDialog extends StatelessWidget {
                   color: AppColors.cardSurfaceSecondary,
                   borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  runSpacing: 8,
                   children: actions!,
                 ),
               ),

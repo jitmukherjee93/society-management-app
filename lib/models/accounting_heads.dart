@@ -162,6 +162,82 @@ class AccountingConfig {
     return false;
   }
 
+  /// Base monthly late fine per overdue month (₹10)
+  static const double lateFineRatePerMonth = 10.0;
+
+  /// Calculates the number of calendar months [monthStr] is overdue relative to [referenceDate] (defaults to [currentDate]).
+  /// If [monthStr] is current month or future, returns 0.
+  /// If 1 month in the past (e.g. Sep evaluated in Oct), returns 1.
+  /// If 2 months in the past (e.g. Sep evaluated in Nov), returns 2, etc.
+  static int getOverdueMonths(String monthStr, [DateTime? referenceDate]) {
+    final now = referenceDate ?? currentDate;
+    final clean = monthStr.trim();
+    if (clean.isEmpty) return 0;
+
+    int billYear = -1;
+    int billMonth = -1;
+
+    try {
+      final parsed = DateFormat('MMMM yyyy').parse(clean);
+      billYear = parsed.year;
+      billMonth = parsed.month;
+    } catch (_) {
+      final idx = getMonthIndex(clean);
+      if (idx != -1) {
+        final fullMonthName = financialYearMonths[idx];
+        try {
+          final parsed = DateFormat('MMMM yyyy').parse(fullMonthName);
+          billYear = parsed.year;
+          billMonth = parsed.month;
+        } catch (_) {}
+      }
+    }
+
+    if (billYear == -1 || billMonth == -1) return 0;
+
+    final diff = (now.year - billYear) * 12 + (now.month - billMonth);
+    return diff > 0 ? diff : 0;
+  }
+
+  /// Calculates the progressive late fine for [monthStr] relative to [referenceDate] (defaults to [currentDate]).
+  /// Logic: ₹10 per month of delay.
+  /// e.g. Sep evaluated in Oct -> 1 month late = ₹10
+  ///      Sep evaluated in Nov -> 2 months late = ₹20
+  ///      Oct evaluated in Nov -> 1 month late = ₹10
+  static double calculateProgressiveLateFine(String monthStr, [DateTime? referenceDate]) {
+    final overdueMonths = getOverdueMonths(monthStr, referenceDate);
+    return overdueMonths * lateFineRatePerMonth;
+  }
+
+  /// Resolves the effective late fine for a bill.
+  /// Late fine is strictly imposed on flat maintenance and NEVER on vehicle parking.
+  /// If the bill is parking-only (or has zero base maintenance), late fine is strictly 0.0.
+  /// If the bill is already PAID, returns the historically recorded fine.
+  /// If UNPAID, returns the progressive fine (₹10/mo of delay), or the explicitly assessed fine if higher.
+  static double getEffectiveFine(Map<String, dynamic> dueData, [DateTime? referenceDate]) {
+    final bool isParkingOnly = dueData['isParkingOnlyBill'] == true ||
+        (dueData.containsKey('baseMaintenance') &&
+            ((dueData['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0 &&
+            (((dueData['carParkingCharges'] as num?)?.toDouble() ?? 0.0) > 0 ||
+                ((dueData['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0) > 0));
+    if (isParkingOnly) {
+      return 0.0;
+    }
+
+    final explicitFine = (dueData['fine'] as num?)?.toDouble() ?? (dueData['lateFee'] as num?)?.toDouble();
+    final status = (dueData['status'] ?? '').toString().toUpperCase();
+    final isPaid = status.startsWith('PAID') || dueData['paidAt'] != null;
+    if (isPaid && explicitFine != null) {
+      return explicitFine;
+    }
+    final month = (dueData['month'] ?? '').toString();
+    final progressive = calculateProgressiveLateFine(month, referenceDate);
+    if (explicitFine != null && explicitFine > progressive) {
+      return explicitFine;
+    }
+    return progressive;
+  }
+
   static int _voucherSeq = 0;
 
   /// Generates a collision-resistant monotonic voucher code for accounting entries (e.g. 'INC-2627-12345' or 'EXP-2627-12345')
@@ -250,7 +326,7 @@ class AccountingConfig {
   };
 
   // ─────────────────────────── EXPENDITURE HEADS ────────────────────────────
-  // Exactly mapped to Ramkrishnapuram Welfare Association Budget 2026-27 Final
+  // Exactly mapped to Ramkrishnapuram Residents' Welfare Association Budget 2026-27 Final
   static const List<BudgetHead> expenditureHeads = [
     BudgetHead(
       name: "Auditor's Remuneration",

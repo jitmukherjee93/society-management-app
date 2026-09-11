@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 
 import '../../../models/accounting_heads.dart';
+import '../../../constants/society_config.dart';
 import '../../../services/staff_remuneration_service.dart';
 import '../../../utils/storage_utils.dart';
 import '../../../utils/file_downloader.dart';
@@ -94,7 +95,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         contentPadding: EdgeInsets.zero,
         content: SizedBox(
-          width: 620,
+          width: MediaQuery.sizeOf(ctx).width.clamp(0.0, 620.0),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -418,7 +419,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
               ],
             ),
             content: SizedBox(
-              width: 580,
+              width: MediaQuery.sizeOf(ctx).width.clamp(0.0, 580.0),
               child: SingleChildScrollView(
                 child: Form(
                   key: formKey,
@@ -779,7 +780,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
               ],
             ),
             content: SizedBox(
-              width: 600,
+              width: MediaQuery.sizeOf(ctx).width.clamp(0.0, 600.0),
               child: SingleChildScrollView(
                 child: Form(
                   key: formKey,
@@ -1215,7 +1216,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
               ],
             ),
             content: SizedBox(
-              width: 580,
+              width: MediaQuery.sizeOf(ctx).width.clamp(0.0, 580.0),
               child: SingleChildScrollView(
                 child: Form(
                   key: formKey,
@@ -1689,7 +1690,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
               ],
             ),
             content: SizedBox(
-              width: 580,
+              width: MediaQuery.sizeOf(ctx).width.clamp(0.0, 580.0),
               child: SingleChildScrollView(
                 child: Form(
                   key: formKey,
@@ -2363,7 +2364,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
             ],
           ),
           content: SizedBox(
-            width: 580,
+            width: MediaQuery.sizeOf(ctx).width.clamp(0.0, 580.0),
             child: SingleChildScrollView(
               child: Form(
                 key: formKey,
@@ -2875,44 +2876,84 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
 
   // ─── UI Component: Top Financial Summary ───────────────────────────────────
   Widget _buildTopSummaryBar(double totalIncome, double totalExpense, double netSurplus) {
+    final isMobile = MediaQuery.sizeOf(context).width < 760;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 14 : 20, vertical: isMobile ? 12 : 14),
       decoration: BoxDecoration(
         color: Colors.deepPurple.shade900,
         boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.account_balance, color: Colors.white, size: 28),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Society Accounts & Treasury',
-                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                  Text('Ramkrishnapuram Welfare Association (FY ${AccountingConfig.currentFinancialYear})',
-                      style: TextStyle(color: Colors.deepPurple.shade100, fontSize: 11)),
-                ],
-              ),
-            ],
-          ),
-          Wrap(
-            spacing: 16,
-            children: [
-              _buildSummaryPill('Total Collections', currencyFmt.format(totalIncome), Colors.greenAccent),
-              _buildSummaryPill('Total Expenditures', currencyFmt.format(totalExpense), Colors.redAccent),
-              _buildSummaryPill(
-                'Net Balance / Surplus',
-                currencyFmt.format(netSurplus),
-                netSurplus >= 0 ? Colors.cyanAccent : Colors.orangeAccent,
-              ),
-            ],
-          ),
-        ],
-      ),
+      child: isMobile
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.account_balance, color: Colors.white, size: 24),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Society Accounts & Treasury',
+                              style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                          Text('${SocietyConfig.associationName} (FY ${AccountingConfig.currentFinancialYear})',
+                              style: TextStyle(color: Colors.deepPurple.shade100, fontSize: 10),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _buildSummaryPill('Collections', currencyFmt.format(totalIncome), Colors.greenAccent),
+                    _buildSummaryPill('Expenditures', currencyFmt.format(totalExpense), Colors.redAccent),
+                    _buildSummaryPill(
+                      'Net Surplus',
+                      currencyFmt.format(netSurplus),
+                      netSurplus >= 0 ? Colors.cyanAccent : Colors.orangeAccent,
+                    ),
+                  ],
+                ),
+              ],
+            )
+          : Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.account_balance, color: Colors.white, size: 28),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Society Accounts & Treasury',
+                            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        Text('${SocietyConfig.associationName} (FY ${AccountingConfig.currentFinancialYear})',
+                            style: TextStyle(color: Colors.deepPurple.shade100, fontSize: 11)),
+                      ],
+                    ),
+                  ],
+                ),
+                Wrap(
+                  spacing: 16,
+                  children: [
+                    _buildSummaryPill('Total Collections', currencyFmt.format(totalIncome), Colors.greenAccent),
+                    _buildSummaryPill('Total Expenditures', currencyFmt.format(totalExpense), Colors.redAccent),
+                    _buildSummaryPill(
+                      'Net Balance / Surplus',
+                      currencyFmt.format(netSurplus),
+                      netSurplus >= 0 ? Colors.cyanAccent : Colors.orangeAccent,
+                    ),
+                  ],
+                ),
+              ],
+            ),
     );
   }
 
@@ -3012,39 +3053,68 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
           const SizedBox(height: 20),
 
           // Quick Stat Cards
-          Row(
-            children: [
-              Expanded(
-                child: _buildMetricCard(
+          if (MediaQuery.sizeOf(context).width < 680)
+            Column(
+              children: [
+                _buildMetricCard(
                   'Projected Budget (2026-27)',
                   currencyFmt.format(approvedAnnualBudget),
                   'Annual expenditure outlay approved',
                   Icons.account_balance_wallet,
                   Colors.blue,
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _buildMetricCard(
+                const SizedBox(height: 12),
+                _buildMetricCard(
                   'Actual Spent Outlay',
                   currencyFmt.format(totalExpense),
                   '${(approvedAnnualBudget > 0 ? ((totalExpense / approvedAnnualBudget) * 100) : 0.0).toStringAsFixed(1)}% of annual budget utilized',
                   Icons.trending_up,
                   Colors.red,
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _buildMetricCard(
+                const SizedBox(height: 12),
+                _buildMetricCard(
                   'Total Collections',
                   currencyFmt.format(totalIncome),
                   'Maintenance & commercial inflows',
                   Icons.payments,
                   Colors.green,
                 ),
-              ),
-            ],
-          ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: _buildMetricCard(
+                    'Projected Budget (2026-27)',
+                    currencyFmt.format(approvedAnnualBudget),
+                    'Annual expenditure outlay approved',
+                    Icons.account_balance_wallet,
+                    Colors.blue,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildMetricCard(
+                    'Actual Spent Outlay',
+                    currencyFmt.format(totalExpense),
+                    '${(approvedAnnualBudget > 0 ? ((totalExpense / approvedAnnualBudget) * 100) : 0.0).toStringAsFixed(1)}% of annual budget utilized',
+                    Icons.trending_up,
+                    Colors.red,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildMetricCard(
+                    'Total Collections',
+                    currencyFmt.format(totalIncome),
+                    'Maintenance & commercial inflows',
+                    Icons.payments,
+                    Colors.green,
+                  ),
+                ),
+              ],
+            ),
           const SizedBox(height: 28),
 
           // Recent Activity Table
@@ -3710,42 +3780,84 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: TextField(
-                      decoration: const InputDecoration(
-                        hintText: 'Search by voucher, payee, head, ref...',
-                        prefixIcon: Icon(Icons.search),
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      onChanged: (val) => setState(() => _searchQuery = val.trim()),
+              child: MediaQuery.sizeOf(context).width < 720
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          decoration: const InputDecoration(
+                            hintText: 'Search by voucher, payee, head, ref...',
+                            prefixIcon: Icon(Icons.search),
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onChanged: (val) => setState(() => _searchQuery = val.trim()),
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            DropdownButton<String>(
+                              value: _filterType ?? 'ALL',
+                              items: const [
+                                DropdownMenuItem(value: 'ALL', child: Text('All Transactions')),
+                                DropdownMenuItem(value: 'EXPENDITURE', child: Text('Expenditures Only')),
+                                DropdownMenuItem(value: 'INCOME', child: Text('Incomes Only')),
+                              ],
+                              onChanged: (val) => setState(() => _filterType = val),
+                            ),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.deepPurple,
+                                foregroundColor: Colors.white,
+                              ),
+                              icon: const Icon(Icons.download, size: 16),
+                              label: const Text('Export Daybook CSV'),
+                              onPressed: () => _exportTransactionsCsv(filtered),
+                            ),
+                          ],
+                        ),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            decoration: const InputDecoration(
+                              hintText: 'Search by voucher, payee, head, ref...',
+                              prefixIcon: Icon(Icons.search),
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            onChanged: (val) => setState(() => _searchQuery = val.trim()),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        DropdownButton<String>(
+                          value: _filterType ?? 'ALL',
+                          items: const [
+                            DropdownMenuItem(value: 'ALL', child: Text('All Transactions')),
+                            DropdownMenuItem(value: 'EXPENDITURE', child: Text('Expenditures Only')),
+                            DropdownMenuItem(value: 'INCOME', child: Text('Incomes Only')),
+                          ],
+                          onChanged: (val) => setState(() => _filterType = val),
+                        ),
+                        const SizedBox(width: 16),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.deepPurple,
+                            foregroundColor: Colors.white,
+                          ),
+                          icon: const Icon(Icons.download),
+                          label: const Text('Export Daybook CSV'),
+                          onPressed: () => _exportTransactionsCsv(filtered),
+                        ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  DropdownButton<String>(
-                    value: _filterType ?? 'ALL',
-                    items: const [
-                      DropdownMenuItem(value: 'ALL', child: Text('All Transactions')),
-                      DropdownMenuItem(value: 'EXPENDITURE', child: Text('Expenditures Only')),
-                      DropdownMenuItem(value: 'INCOME', child: Text('Incomes Only')),
-                    ],
-                    onChanged: (val) => setState(() => _filterType = val),
-                  ),
-                  const SizedBox(width: 16),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepPurple,
-                      foregroundColor: Colors.white,
-                    ),
-                    icon: const Icon(Icons.download),
-                    label: const Text('Export Daybook CSV'),
-                    onPressed: () => _exportTransactionsCsv(filtered),
-                  ),
-                ],
-              ),
             ),
           ),
           const SizedBox(height: 12),

@@ -352,6 +352,136 @@ void main() {
       expect(advanceSchedule, contains('January 2027'));
     });
   });
+
+  group('AccountingConfig Progressive Late Fine (₹10/month) Tests', () {
+    final sep2026Date = DateTime(2026, 9, 15);
+    final oct2026Date = DateTime(2026, 10, 15);
+    final nov2026Date = DateTime(2026, 11, 15);
+    final dec2026Date = DateTime(2026, 12, 15);
+    final jan2027Date = DateTime(2027, 1, 15);
+
+    test('getOverdueMonths calculates correct month differences', () {
+      expect(AccountingConfig.getOverdueMonths('September 2026', sep2026Date), 0);
+      expect(AccountingConfig.getOverdueMonths('September 2026', oct2026Date), 1);
+      expect(AccountingConfig.getOverdueMonths('September 2026', nov2026Date), 2);
+      expect(AccountingConfig.getOverdueMonths('October 2026', nov2026Date), 1);
+      expect(AccountingConfig.getOverdueMonths('September 2026', dec2026Date), 3);
+      expect(AccountingConfig.getOverdueMonths('December 2026', jan2027Date), 1);
+      expect(AccountingConfig.getOverdueMonths('September 2026', jan2027Date), 4);
+    });
+
+    test('calculateProgressiveLateFine strictly follows ₹10/month rate', () {
+      // User scenario: If I dont pay Sep maintenance, in Oct I get charged ₹10.
+      expect(AccountingConfig.calculateProgressiveLateFine('September 2026', sep2026Date), 0.0);
+      expect(AccountingConfig.calculateProgressiveLateFine('September 2026', oct2026Date), 10.0);
+
+      // If I dont pay Oct maintenance too, in Nov I get charged ₹20 for Sep and ₹10 for Oct
+      expect(AccountingConfig.calculateProgressiveLateFine('September 2026', nov2026Date), 20.0);
+      expect(AccountingConfig.calculateProgressiveLateFine('October 2026', nov2026Date), 10.0);
+
+      // In Dec, Sep is ₹30, Oct is ₹20, Nov is ₹10
+      expect(AccountingConfig.calculateProgressiveLateFine('September 2026', dec2026Date), 30.0);
+      expect(AccountingConfig.calculateProgressiveLateFine('October 2026', dec2026Date), 20.0);
+      expect(AccountingConfig.calculateProgressiveLateFine('November 2026', dec2026Date), 10.0);
+    });
+
+    test('getEffectiveFine dynamically calculates fine for unpaid dues', () {
+      final sepUnpaidDoc = {
+        'month': 'September 2026',
+        'status': 'UNPAID',
+        'fine': 0.0,
+      };
+
+      // In October: ₹10
+      expect(AccountingConfig.getEffectiveFine(sepUnpaidDoc, oct2026Date), 10.0);
+      // In November: ₹20
+      expect(AccountingConfig.getEffectiveFine(sepUnpaidDoc, nov2026Date), 20.0);
+      // In December: ₹30
+      expect(AccountingConfig.getEffectiveFine(sepUnpaidDoc, dec2026Date), 30.0);
+    });
+
+    test('getEffectiveFine preserves admin explicit fine if higher than progressive fine', () {
+      final sepDocWithCustomFine = {
+        'month': 'September 2026',
+        'status': 'UNPAID',
+        'fine': 50.0,
+      };
+
+      // In Oct, progressive is ₹10, but custom is ₹50 -> returns ₹50
+      expect(AccountingConfig.getEffectiveFine(sepDocWithCustomFine, oct2026Date), 50.0);
+    });
+
+    test('getEffectiveFine preserves historical recorded fine for PAID bills', () {
+      final sepPaidDoc = {
+        'month': 'September 2026',
+        'status': 'PAID',
+        'fine': 10.0,
+      };
+
+      // Evaluated in December 2026, progressive would be ₹30, but since status is PAID, historical ₹10 is preserved
+      expect(AccountingConfig.getEffectiveFine(sepPaidDoc, dec2026Date), 10.0);
+
+      final sepPaidNoFineDoc = {
+        'month': 'September 2026',
+        'status': 'PAID_VERIFIED',
+        'fine': 0.0,
+      };
+      expect(AccountingConfig.getEffectiveFine(sepPaidNoFineDoc, dec2026Date), 0.0);
+    });
+
+    test('BillingService.calculateMultiMonthBreakdown correctly includes progressive fine in total', () {
+      final sepFineInNov = AccountingConfig.calculateProgressiveLateFine('September 2026', nov2026Date);
+      expect(sepFineInNov, 20.0);
+
+      final breakdown = BillingService.calculateMultiMonthBreakdown(
+        block: 'A',
+        carCount: 0,
+        bikeCount: 0,
+        monthConfigs: [
+          {'month': 'September 2026', 'includeParking': false}
+        ],
+        fine: sepFineInNov,
+      );
+
+      // Base maintenance ₹450 + Fine ₹20 = ₹470
+      expect(breakdown['totalBaseMaintenance'], 450.0);
+      expect(breakdown['fine'], 20.0);
+      expect(breakdown['totalAmount'], 470.0);
+    });
+
+    test('getEffectiveFine strictly returns 0.0 for parking-only bills even when overdue (user scenario)', () {
+      // User scenario: A person pays maintenance in advance and doesnt pay the car,
+      // and it gets overdue (e.g., September parking evaluated in December = 3 months overdue).
+      final overdueParkingOnlyDoc = {
+        'month': 'September 2026',
+        'status': 'UNPAID',
+        'baseMaintenance': 0.0,
+        'carParkingCharges': 430.0,
+        'bikeParkingCharges': 0.0,
+        'amount': 430.0,
+        'isParkingOnlyBill': true,
+      };
+
+      // In October: 0 fine
+      expect(AccountingConfig.getEffectiveFine(overdueParkingOnlyDoc, oct2026Date), 0.0);
+      // In November: 0 fine
+      expect(AccountingConfig.getEffectiveFine(overdueParkingOnlyDoc, nov2026Date), 0.0);
+      // In December: 0 fine (3 months overdue, maintenance would have been ₹30, but parking is ₹0)
+      expect(AccountingConfig.getEffectiveFine(overdueParkingOnlyDoc, dec2026Date), 0.0);
+    });
+
+    test('getEffectiveFine strictly returns 0.0 for bills with zero baseMaintenance', () {
+      final zeroBaseDoc = {
+        'month': 'October 2026',
+        'status': 'UNPAID',
+        'baseMaintenance': 0.0,
+        'carParkingCharges': 430.0,
+      };
+
+      // Evaluated in December: 0 fine
+      expect(AccountingConfig.getEffectiveFine(zeroBaseDoc, dec2026Date), 0.0);
+    });
+  });
 }
 
 

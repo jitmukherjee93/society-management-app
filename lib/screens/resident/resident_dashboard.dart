@@ -200,15 +200,10 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                 tooltip: 'Alerts',
                 onPressed: () => setState(() => _currentIndex = 2),
               ),
-              Padding(
-                padding: const EdgeInsets.only(right: 8.0),
-                child: TextButton.icon(
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.error,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  ),
-                  icon: const Icon(Icons.logout_rounded, size: 18),
-                  label: const Text('Log out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              if (MediaQuery.sizeOf(context).width < 600)
+                IconButton(
+                  icon: const Icon(Icons.logout_rounded, color: AppColors.error, size: 20),
+                  tooltip: 'Log out',
                   onPressed: () async {
                     final confirm = await AppDialog.show<bool>(
                       context: context,
@@ -231,8 +226,41 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                       await FirebaseAuth.instance.signOut();
                     }
                   },
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(right: 8.0),
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.error,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    ),
+                    icon: const Icon(Icons.logout_rounded, size: 18),
+                    label: const Text('Log out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    onPressed: () async {
+                      final confirm = await AppDialog.show<bool>(
+                        context: context,
+                        title: 'Sign Out',
+                        subtitle: 'Are you sure you want to log out?',
+                        icon: Icons.logout_rounded,
+                        iconColor: AppColors.error,
+                        iconBgColor: AppColors.errorSurface,
+                        body: const Text('You will need to sign in again to access your resident portal.'),
+                        actions: [
+                          OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
+                            onPressed: () => Navigator.pop(context, true),
+                            child: const Text('Sign Out'),
+                          ),
+                        ],
+                      );
+                      if (confirm == true) {
+                        await FirebaseAuth.instance.signOut();
+                      }
+                    },
+                  ),
                 ),
-              ),
             ],
           ),
           body: IndexedStack(index: _currentIndex, children: pages),
@@ -425,7 +453,7 @@ class _HomeTabState extends State<HomeTab> {
             ],
           ),
           content: SizedBox(
-            width: 500,
+            width: MediaQuery.sizeOf(context).width.clamp(0.0, 500.0),
             child: SingleChildScrollView(
               child: Form(
                 key: formKey,
@@ -1217,33 +1245,39 @@ class _HomeTabState extends State<HomeTab> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        CircleAvatar(
-                          backgroundColor: Colors.teal,
-                          child: Icon(
-                            role == 'Rentee' ? Icons.key : Icons.home,
-                            color: Colors.white,
+                    Expanded(
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            backgroundColor: Colors.teal,
+                            child: Icon(
+                              role == 'Rentee' ? Icons.key : Icons.home,
+                              color: Colors.white,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              name,
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  'Flat: $flatLabel • $role',
+                                  style: TextStyle(color: Colors.teal.shade900),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
                             ),
-                            Text(
-                              'Flat: $flatLabel • $role',
-                              style: TextStyle(color: Colors.teal.shade900),
-                            ),
-                          ],
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
                     if (docId != null && data != null)
                       IconButton(
@@ -1288,8 +1322,11 @@ class _HomeTabState extends State<HomeTab> {
                   ],
                 ),
                 const Divider(height: 24),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 6,
                   children: [
                     const Text(
                       'Registered Vehicles',
@@ -1906,8 +1943,10 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
         final d = doc.data() as Map<String, dynamic>;
         final m = d['month']?.toString() ?? '';
         final bool isPast = AccountingConfig.isMonthPast(m);
-        final fine = (d['fine'] as num?)?.toDouble() ?? (d['lateFee'] as num?)?.toDouble() ?? 0.0;
-        if (!isPast || fine > 0) {
+        final bool isParkingOnly = d['isParkingOnlyBill'] == true ||
+            ((d['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0;
+        final fine = AccountingConfig.getEffectiveFine(d);
+        if (!isPast || isParkingOnly || fine > 0) {
           payableDoc = doc;
           break;
         }
@@ -2018,12 +2057,23 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
   }) {
     final flat = (dueData['flatNumber'] ?? userData['flatNumber'] ?? 'Unknown').toString();
     final month = (dueData['month'] ?? 'Current Month').toString();
-    final double amount = (dueData['amount'] as num?)?.toDouble() ?? 0.0;
+    final double fineAmt = AccountingConfig.getEffectiveFine(dueData);
+    final double baseAmt = (dueData['baseMaintenance'] as num?)?.toDouble() ?? 0.0;
+    final double carAmt = (dueData['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
+    final double bikeAmt = (dueData['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0;
+    final double computedTotal = baseAmt + carAmt + bikeAmt + fineAmt;
+    final double amount = computedTotal > 0 ? computedTotal : ((dueData['amount'] as num?)?.toDouble() ?? 0.0);
 
+    final effectiveDueData = {
+      ...dueData,
+      'fine': fineAmt,
+      if (computedTotal > 0) 'amount': computedTotal,
+    };
+
+    final bool isParkingOnly = dueData['isParkingOnlyBill'] == true ||
+        ((dueData['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0;
     final bool isPastMonth = AccountingConfig.isMonthPast(month);
-    final double fineAmt = (dueData['fine'] as num?)?.toDouble() ?? (dueData['lateFee'] as num?)?.toDouble() ?? 0.0;
-
-    if (isPastMonth && fineAmt <= 0) {
+    if (isPastMonth && fineAmt <= 0 && !isParkingOnly) {
       AppFeedback.showWarning(
         context,
         'Past month maintenance for $month can only be paid when Admin issues it with a late fine. Please contact Society Admin.',
@@ -2040,7 +2090,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
       ),
       builder: (ctx) => _PaymentModalSheet(
         dueId: dueId,
-        dueData: dueData,
+        dueData: effectiveDueData,
         userData: userData,
         flat: flat,
         month: month,
@@ -2156,19 +2206,22 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'MY MONTHLY MAINTENANCE',
-                                  style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.2),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Flat $flatDisplay (Block ${breakdown.block})',
-                                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                                ),
-                              ],
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'MY MONTHLY MAINTENANCE',
+                                    style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Flat $flatDisplay (Block ${breakdown.block})',
+                                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
                             ),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -2218,8 +2271,11 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                         const SizedBox(height: 12),
                         const Divider(color: Colors.white24),
                         const SizedBox(height: 4),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 8,
+                          runSpacing: 4,
                           children: [
                             const Text('Total Fixed Monthly Bill', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
                             Text(
@@ -2299,10 +2355,13 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                           (userData['arrears'] as num?)?.toDouble() ?? 0.0;
                       final bool hasHistoricalArrears = openingArrears > 0 || userData['hasArrears'] == true;
 
-                      // Defaulter check: user has uncleared dues for any past month or opening arrears
+                      // Defaulter check: user has uncleared dues for any past month (excluding parking-only bills) or opening arrears
                       final bool isDefaulter = hasHistoricalArrears || unpaidDocs.any((d) {
-                        final m = (d.data() as Map<String, dynamic>)['month']?.toString() ?? '';
-                        return AccountingConfig.isMonthPast(m);
+                        final data = d.data() as Map<String, dynamic>;
+                        final m = data['month']?.toString() ?? '';
+                        final bool isParking = data['isParkingOnlyBill'] == true ||
+                            ((data['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0;
+                        return !isParking && AccountingConfig.isMonthPast(m);
                       });
 
                       return Column(
@@ -2486,7 +2545,6 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                               final data = doc.data() as Map<String, dynamic>;
                               final dueId = doc.id;
                               final month = data['month'] ?? 'Current Month';
-                              final amt = (data['amount'] as num?)?.toDouble() ?? breakdown.totalMonthlyDue;
                               final isFocusMonth = widget.initialSelectedMonth != null && month == widget.initialSelectedMonth;
 
                               final rawBase = (data['baseMaintenance'] as num?)?.toDouble() ?? breakdown.baseMaintenance;
@@ -2499,7 +2557,10 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                   ((data['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0;
 
                               final bool isPastMonth = AccountingConfig.isMonthPast(month);
-                              final fineAmt = (data['fine'] as num?)?.toDouble() ?? (data['lateFee'] as num?)?.toDouble() ?? 0.0;
+                              final fineAmt = AccountingConfig.getEffectiveFine(data);
+                              final amt = isParkingOnly
+                                  ? (carCharges + bikeCharges)
+                                  : (baseMaint + carCharges + bikeCharges + fineAmt);
                               final bool canPayPastMonth = isParkingOnly || !isPastMonth || fineAmt > 0;
 
                               return Card(
@@ -2676,7 +2737,11 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
                                           canPayPastMonth
-                                              ? (isParkingOnly ? AppBadge.warning('PARKING DUE') : AppBadge.error('PAYMENT DUE'))
+                                              ? (isParkingOnly
+                                                  ? (isPastMonth ? AppBadge.warning('PARKING DUE (OVERDUE)') : AppBadge.warning('PARKING DUE'))
+                                                  : (fineAmt > 0
+                                                      ? AppBadge.warning('PAST DUE • FINE: ${_currencyFmt.format(fineAmt)}')
+                                                      : AppBadge.error('PAYMENT DUE')))
                                               : AppBadge.warning('PAST DUE • AWAITING FINE'),
                                           ElevatedButton.icon(
                                             style: ElevatedButton.styleFrom(
@@ -2979,17 +3044,25 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
       (widget.dueData['isParkingOnlyBill'] == true ||
           ((widget.dueData['baseMaintenance'] as num?)?.toDouble() ?? 0.0) == 0.0);
 
-  double get _existingDueAmount =>
-      (widget.dueData['amount'] as num?)?.toDouble() ?? widget.amount;
+  double get _existingDueFine => isParkingOnlyDue ? 0.0 : AccountingConfig.getEffectiveFine(widget.dueData);
+
+  double get _existingDueAmount {
+    if (widget.dueData['status'] == 'PAID' && widget.dueData['amount'] != null) {
+      return (widget.dueData['amount'] as num).toDouble();
+    }
+    final base = (widget.dueData['baseMaintenance'] as num?)?.toDouble() ?? 0.0;
+    final car = (widget.dueData['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
+    final bike = (widget.dueData['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0;
+    final computed = isParkingOnlyDue ? (car + bike) : (base + car + bike + _existingDueFine);
+    return computed > 0 ? computed : widget.amount;
+  }
+
   double get _existingDueBaseMaint =>
       (widget.dueData['baseMaintenance'] as num?)?.toDouble() ?? 0.0;
   double get _existingDueCarParking =>
       (widget.dueData['carParkingCharges'] as num?)?.toDouble() ?? 0.0;
   double get _existingDueBikeParking =>
       (widget.dueData['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0;
-  double get _existingDueFine =>
-      (widget.dueData['fine'] as num?)?.toDouble() ??
-      (widget.dueData['lateFee'] as num?)?.toDouble() ?? 0.0;
 
   @override
   void initState() {
@@ -3074,8 +3147,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
 
   bool get _hasVehicles => _carCount > 0 || _bikeCount > 0;
 
-  double get _dueFine => (widget.dueData['fine'] as num?)?.toDouble() ??
-      (widget.dueData['lateFee'] as num?)?.toDouble() ?? 0.0;
+  double get _dueFine => isParkingOnlyDue ? 0.0 : AccountingConfig.getEffectiveFine(widget.dueData);
 
   Map<String, dynamic> get _multiMonthCalculation {
     return BillingService.calculateMultiMonthBreakdown(
@@ -3269,22 +3341,27 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    children: [
-                      AppDecorations.iconContainer(
-                        icon: Icons.account_balance_wallet_rounded,
-                        color: AppColors.primary,
-                        surfaceColor: AppColors.primarySurface,
-                        size: 22,
-                      ),
-                      const SizedBox(width: 10),
-                      Text(
-                        isExistingDue
-                            ? (isParkingOnlyDue ? 'Pay Parking Dues' : 'Pay Maintenance Bill')
-                            : 'Pay Advance Maintenance',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
-                      ),
-                    ],
+                  Expanded(
+                    child: Row(
+                      children: [
+                        AppDecorations.iconContainer(
+                          icon: Icons.account_balance_wallet_rounded,
+                          color: AppColors.primary,
+                          surfaceColor: AppColors.primarySurface,
+                          size: 22,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            isExistingDue
+                                ? (isParkingOnlyDue ? 'Pay Parking Dues' : 'Pay Maintenance Bill')
+                                : 'Pay Advance Maintenance',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   IconButton(
                     icon: const Icon(Icons.close_rounded, color: AppColors.slate500, size: 20),
@@ -3586,8 +3663,11 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                               const SizedBox(height: 4),
 
                               // Maintenance & Vehicle Parking breakdown
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              Wrap(
+                                alignment: WrapAlignment.spaceBetween,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 8,
+                                runSpacing: 4,
                                 children: [
                                   Text(
                                     'Base Maintenance: ${widget.currencyFmt.format(_baseMaintenanceRate)}${idx == 0 && _dueFine > 0 ? ' • Late Fine: ${widget.currencyFmt.format(_dueFine)}' : ''}',
@@ -3644,19 +3724,22 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Flat ${widget.flat} • $mCount Month${mCount > 1 ? 's' : ''}',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
-                          ),
-                          Text(
-                            'Maint: ${widget.currencyFmt.format(totalMaint)}${totalPark > 0 ? ' • Park: ${widget.currencyFmt.format(totalPark)}' : ''}${_dueFine > 0 ? ' • Late Fine: ${widget.currencyFmt.format(_dueFine)}' : ''}',
-                            style: const TextStyle(fontSize: 11, color: AppColors.slate600),
-                          ),
-                        ],
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Flat ${widget.flat} • $mCount Month${mCount > 1 ? 's' : ''}',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate900),
+                            ),
+                            Text(
+                              'Maint: ${widget.currencyFmt.format(totalMaint)}${totalPark > 0 ? ' • Park: ${widget.currencyFmt.format(totalPark)}' : ''}${_dueFine > 0 ? ' • Late Fine: ${widget.currencyFmt.format(_dueFine)}' : ''}',
+                              style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(width: 8),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
