@@ -28,7 +28,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
   String _searchQuery = '';
   String? _filterHead;
   String? _filterType; // 'ALL', 'INCOME', 'EXPENDITURE'
-  late String _selectedRemunerationMonth;
+  late String _selectedRemunerationMonth = _getCurrentMonth();
 
   String _getCurrentMonth() {
     final now = AccountingConfig.currentDate;
@@ -1711,9 +1711,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     final transactionDocs = allDocs ??
         (await FirebaseFirestore.instance.collection('society_transactions').get()).docs;
 
-    final defaultMonth = months.contains(_selectedRemunerationMonth)
-        ? _selectedRemunerationMonth
-        : _getCurrentMonth();
+    final defaultMonth = _getCurrentMonth();
 
     String selectedMonth = (preselectedMonth != null && months.contains(preselectedMonth))
         ? preselectedMonth
@@ -3433,7 +3431,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                 label: const Text('Pay Staff Remuneration',
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 onPressed: () => _openPayStaffRemunerationDialog(
-                  preselectedMonth: _selectedRemunerationMonth,
+                  preselectedMonth: _getCurrentMonth(),
                   currentSpentMap: headExpenditures,
                   allDocs: allDocs,
                 ),
@@ -3686,7 +3684,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                 label: const Text('Pay Staff Remuneration',
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 onPressed: () => _openPayStaffRemunerationDialog(
-                  preselectedMonth: _selectedRemunerationMonth,
+                  preselectedMonth: _getCurrentMonth(),
                   currentSpentMap: headExpenditures,
                   allDocs: allDocs,
                 ),
@@ -4073,7 +4071,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                                   padding: const EdgeInsets.symmetric(horizontal: 4),
                                   constraints: const BoxConstraints(),
                                   onPressed: () => _openPayStaffRemunerationDialog(
-                                    preselectedMonth: _selectedRemunerationMonth,
+                                    preselectedMonth: _getCurrentMonth(),
                                     currentSpentMap: headExpenditures,
                                   ),
                                 ),

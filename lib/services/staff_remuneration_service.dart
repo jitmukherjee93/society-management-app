@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:intl/intl.dart';
 import '../models/accounting_heads.dart';
 import '../utils/storage_utils.dart';
 
@@ -52,8 +53,70 @@ class StaffRemunerationService {
 
   FirebaseFirestore get firestore => _customFirestore ?? FirebaseFirestore.instance;
 
-  /// Generate standardized expenditure voucher number
-  String generateVoucherNumber() => AccountingConfig.generateVoucherCode('EXP');
+  /// Helper to extract staff role with fallbacks to paidTo and description
+  static String extractStaffRole(Map<String, dynamic> data) {
+    final direct = (data['staffRole'] ?? '').toString().trim();
+    if (direct.isNotEmpty) return direct;
+
+    final paidTo = (data['paidToOrReceivedFrom'] ?? '').toString().trim().toLowerCase();
+    for (final r in AccountingConfig.staffRemunerationMonthly.keys) {
+      final rl = r.toLowerCase();
+      if (paidTo == rl || paidTo.startsWith(rl) || paidTo.contains(rl)) {
+        return r;
+      }
+    }
+
+    final desc = (data['description'] ?? '').toString().toLowerCase();
+    for (final r in AccountingConfig.staffRemunerationMonthly.keys) {
+      final rl = r.toLowerCase();
+      if (desc.contains(rl)) {
+        return r;
+      }
+    }
+    return '';
+  }
+
+  /// Helper to extract remuneration month with fallbacks to description and paymentDate
+  static String extractRemunerationMonth(Map<String, dynamic> data) {
+    final direct = (data['remunerationMonth'] ?? '').toString().trim();
+    if (direct.isNotEmpty) return direct;
+
+    final desc = (data['description'] ?? '').toString();
+    for (final m in AccountingConfig.financialYearMonths) {
+      if (desc.toLowerCase().contains(m.toLowerCase())) {
+        return m;
+      }
+    }
+
+    const monthNames = [
+      'April', 'May', 'June', 'July', 'August', 'September',
+      'October', 'November', 'December', 'January', 'February', 'March'
+    ];
+    for (final mName in monthNames) {
+      if (desc.toLowerCase().contains(mName.toLowerCase())) {
+        for (final m in AccountingConfig.financialYearMonths) {
+          if (m.toLowerCase().startsWith(mName.toLowerCase())) {
+            return m;
+          }
+        }
+      }
+    }
+
+    if (data['paymentDate'] is Timestamp) {
+      final dt = (data['paymentDate'] as Timestamp).toDate();
+      return DateFormat('MMMM yyyy').format(dt);
+    } else if (data['paymentDate'] is String) {
+      final dt = DateTime.tryParse(data['paymentDate']);
+      if (dt != null) return DateFormat('MMMM yyyy').format(dt);
+    }
+
+    return '';
+  }
+
+  /// Generate continuous voucher code with format EXP-2627-XXXXX
+  String generateVoucherNumber() {
+    return AccountingConfig.generateVoucherCode('EXP');
+  }
 
   /// Record a staff remuneration payment with mandatory document attachment
   Future<StaffPaymentRecordResult> recordStaffPayment({
@@ -72,15 +135,21 @@ class StaffRemunerationService {
       final cleanRole = staffRole.trim();
       final cleanMonth = remunerationMonth.trim();
 
-      // 1. Guard against duplicate payments in society_transactions
-      final existingSnap = await firestore
+      // 1. Guard against duplicate payments in society_transactions (with fallbacks)
+      final allStaffSnap = await firestore
           .collection('society_transactions')
           .where('accountHead', isEqualTo: 'Staff Remuneration')
-          .where('staffRole', isEqualTo: cleanRole)
-          .where('remunerationMonth', isEqualTo: cleanMonth)
           .get();
 
-      final activePaid = existingSnap.docs.where((d) => d.data()['isVoid'] != true).toList();
+      final activePaid = allStaffSnap.docs.where((d) {
+        final data = d.data();
+        if (data['isVoid'] == true) return false;
+        final docRole = extractStaffRole(data);
+        final docMonth = extractRemunerationMonth(data);
+        return docRole.trim().toLowerCase() == cleanRole.toLowerCase() &&
+            docMonth.trim().toLowerCase() == cleanMonth.toLowerCase();
+      }).toList();
+
       if (activePaid.isNotEmpty) {
         final existingVoucher = activePaid.first.data()['voucherNumber'] ?? 'Existing Voucher';
         return StaffPaymentRecordResult(
@@ -204,8 +273,8 @@ class StaffRemunerationService {
       if (data['isVoid'] == true) continue;
       final type = (data['type'] ?? '').toString().toUpperCase();
       final head = (data['accountHead'] ?? '').toString();
-      final month = (data['remunerationMonth'] ?? '').toString().trim();
-      final role = (data['staffRole'] ?? '').toString().trim();
+      final month = extractRemunerationMonth(data).trim();
+      final role = extractStaffRole(data).trim();
 
       if (type == 'EXPENDITURE' &&
           head == 'Staff Remuneration' &&

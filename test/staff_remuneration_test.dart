@@ -124,6 +124,41 @@ void main() {
       final elecStatus = statuses.firstWhere((s) => s.role == 'Electrician');
       expect(elecStatus.isPaid, isFalse);
     });
+
+    test('currentDate and financialYearMonths month matching', () {
+      final months = AccountingConfig.financialYearMonths;
+      expect(months, contains('September 2026'));
+    });
+
+    test('computeMonthlyStatus recognizes legacy transactions via paidTo and description fallbacks', () {
+      final service = StaffRemunerationService();
+      final legacyTxn = {
+        'id': 'legacy-1',
+        'type': 'EXPENDITURE',
+        'accountHead': 'Staff Remuneration',
+        'paidToOrReceivedFrom': 'Electrician',
+        'description': 'Staff Remuneration - Electrician (September 2026)',
+        'amount': 5346.0,
+        'voucherNumber': 'EXP-2627-00001',
+      };
+
+      final statuses = service.computeMonthlyStatus(
+        selectedMonth: 'September 2026',
+        transactions: [legacyTxn],
+      );
+
+      final elec = statuses.firstWhere((s) => s.role == 'Electrician');
+      expect(elec.isPaid, isTrue);
+      expect(elec.voucherNumber, 'EXP-2627-00001');
+
+      final found = service.findRoleStatus(
+        role: 'Electrician',
+        month: 'September 2026',
+        transactions: [legacyTxn],
+      );
+      expect(found, isNotNull);
+      expect(found!.isPaid, isTrue);
+    });
   });
 }
 
