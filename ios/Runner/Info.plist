@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Society Management</string>
+	<string>Ramkrishnapuram RWA</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -66,5 +66,15 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Ramkrishnapuram RWA needs access to your photo library to upload residence documents and vehicle RC images.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Ramkrishnapuram RWA needs access to your camera to capture and upload documents.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Ramkrishnapuram RWA may save files to your photo library.</string>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 </dict>
 </plist>

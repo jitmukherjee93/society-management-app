@@ -28,12 +28,22 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
   String _searchQuery = '';
   String? _filterHead;
   String? _filterType; // 'ALL', 'INCOME', 'EXPENDITURE'
-  String _selectedRemunerationMonth = 'April 2026';
+  late String _selectedRemunerationMonth;
+
+  String _getCurrentMonth() {
+    final now = AccountingConfig.currentDate;
+    final currentMonthStr = DateFormat('MMMM yyyy').format(now);
+    final months = AccountingConfig.financialYearMonths;
+    return months.contains(currentMonthStr)
+        ? currentMonthStr
+        : (months.isNotEmpty ? months.first : 'September 2026');
+  }
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 5, vsync: this);
+    _selectedRemunerationMonth = _getCurrentMonth();
   }
 
   @override
@@ -1190,8 +1200,17 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
           final double allocated = headInfo?.yearlyBudget ?? 0.0;
           final double alreadySpent = currentSpentMap[selectedHead] ?? 0.0;
           final double remaining = allocated - alreadySpent;
+          final isMobile = MediaQuery.sizeOf(ctx).width < 480;
 
           return AlertDialog(
+            insetPadding: EdgeInsets.symmetric(
+              horizontal: isMobile ? 12 : 24,
+              vertical: isMobile ? 32 : 24,
+            ),
+            titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+            contentPadding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
+            actionsPadding: EdgeInsets.fromLTRB(16, 4, 16, isMobile ? 16 : 16),
+            actionsOverflowButtonSpacing: 8,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Row(
               children: [
@@ -1306,6 +1325,58 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                           ],
                         ),
                       ),
+                      if (selectedHead == 'Staff Remuneration') ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.shade50,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.amber.shade400, width: 1.5),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.info_outline, color: Colors.amber.shade900, size: 22),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Staff Remuneration Must Be Paid via Dedicated Payroll',
+                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.amber.shade900),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Staff Remuneration consists of 11 approved positions with approved rates and mandatory salary slips. To prevent duplicate disbursements and track monthly payouts, please use the dedicated "Pay Staff Remuneration" dialog.',
+                                      style: TextStyle(fontSize: 11, color: Colors.grey.shade800),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.indigo,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                        minimumSize: const Size(0, 32),
+                                      ),
+                                      icon: const Icon(Icons.badge, size: 15),
+                                      label: const Text('Open Staff Payroll Dialog', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                      onPressed: () {
+                                        Navigator.pop(ctx);
+                                        _openPayStaffRemunerationDialog(
+                                          preselectedMonth: _selectedRemunerationMonth,
+                                          currentSpentMap: currentSpentMap,
+                                        );
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 14),
 
                       // Amount & Paid To
@@ -1524,6 +1595,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                           ],
                         ),
                       ),
+                      const SizedBox(height: 16),
                     ],
                   ),
                 ),
@@ -1536,15 +1608,17 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
               ),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red.shade700,
+                  backgroundColor: selectedHead == 'Staff Remuneration' ? Colors.grey.shade400 : Colors.red.shade700,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 20, vertical: 12),
                 ),
                 icon: isSubmitting
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white))
-                    : const Icon(Icons.check),
-                label: const Text('Confirm & Post Payment'),
-                onPressed: isSubmitting
+                    : Icon(selectedHead == 'Staff Remuneration' ? Icons.lock : Icons.check),
+                label: Text(selectedHead == 'Staff Remuneration'
+                    ? 'Use Payroll Dialog'
+                    : (isMobile ? 'Confirm & Post' : 'Confirm & Post Payment')),
+                onPressed: (isSubmitting || selectedHead == 'Staff Remuneration')
                     ? null
                     : () async {
                         if (!formKey.currentState!.validate()) return;
@@ -1627,21 +1701,38 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     String? preselectedRole,
     String? preselectedMonth,
     Map<String, double>? currentSpentMap,
+    List<QueryDocumentSnapshot>? allDocs,
   }) async {
     final formKey = GlobalKey<FormState>();
     final staffRoles = AccountingConfig.staffRemunerationMonthly.keys.toList();
-    final months = [
-      'April 2026', 'May 2026', 'June 2026', 'July 2026',
-      'August 2026', 'September 2026', 'October 2026', 'November 2026',
-      'December 2026', 'January 2027', 'February 2027', 'March 2027',
-    ];
+    final months = AccountingConfig.financialYearMonths;
 
-    String selectedRole = (preselectedRole != null && staffRoles.contains(preselectedRole))
-        ? preselectedRole
-        : staffRoles.first;
+    final service = StaffRemunerationService();
+    final transactionDocs = allDocs ??
+        (await FirebaseFirestore.instance.collection('society_transactions').get()).docs;
+
+    final defaultMonth = months.contains(_selectedRemunerationMonth)
+        ? _selectedRemunerationMonth
+        : _getCurrentMonth();
+
     String selectedMonth = (preselectedMonth != null && months.contains(preselectedMonth))
         ? preselectedMonth
-        : _selectedRemunerationMonth;
+        : defaultMonth;
+
+    // Pick first unpaid role if not specified or if specified role is already paid
+    final initialStatusList = service.computeMonthlyStatus(
+      selectedMonth: selectedMonth,
+      transactions: transactionDocs,
+    );
+    final unpaidRoles = initialStatusList.where((s) => !s.isPaid).map((s) => s.role).toList();
+    String selectedRole;
+    if (preselectedRole != null && staffRoles.contains(preselectedRole)) {
+      selectedRole = preselectedRole;
+    } else if (unpaidRoles.isNotEmpty) {
+      selectedRole = unpaidRoles.first;
+    } else {
+      selectedRole = staffRoles.first;
+    }
 
     final defaultAmt = AccountingConfig.staffRemunerationMonthly[selectedRole] ?? 0.0;
     final amountCtrl = TextEditingController(text: defaultAmt.toStringAsFixed(0));
@@ -1654,6 +1745,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     bool isSubmitting = false;
 
     try {
+      if (!mounted) return;
       await showDialog(
         context: context,
         barrierDismissible: false,
@@ -1663,7 +1755,26 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
           final double totalHeadSpent = currentSpentMap?['Staff Remuneration'] ?? 0.0;
           final double totalHeadBudget = AccountingConfig.getBudgetHead('Staff Remuneration')?.yearlyBudget ?? 630468.0;
 
+          final isMobile = MediaQuery.sizeOf(ctx).width < 480;
+
+          final currentStatusList = service.computeMonthlyStatus(
+            selectedMonth: selectedMonth,
+            transactions: transactionDocs,
+          );
+          final StaffRemunerationStatus? roleStatus = currentStatusList.cast<StaffRemunerationStatus?>().firstWhere(
+            (s) => s?.role.trim().toLowerCase() == selectedRole.trim().toLowerCase(),
+            orElse: () => null,
+          );
+          final bool isAlreadyPaid = roleStatus?.isPaid == true;
+
           return AlertDialog(
+            insetPadding: EdgeInsets.symmetric(
+              horizontal: isMobile ? 12 : 24,
+              vertical: isMobile ? 32 : 24,
+            ),
+            titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+            contentPadding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
+            actionsPadding: EdgeInsets.fromLTRB(16, 4, 16, isMobile ? 16 : 16),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Row(
               children: [
@@ -1698,68 +1809,235 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      const SizedBox(height: 10),
                       // Role & Month Selector
-                      Row(
-                        children: [
-                          Expanded(
-                            flex: 3,
-                            child: DropdownButtonFormField<String>(
-                              initialValue: selectedRole,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Staff Position / Role *',
-                                prefixIcon: Icon(Icons.engineering),
-                                border: OutlineInputBorder(),
-                              ),
-                              items: staffRoles.map((role) {
-                                final rAmt = AccountingConfig.staffRemunerationMonthly[role] ?? 0.0;
-                                return DropdownMenuItem(
-                                  value: role,
-                                  child: Text(
-                                    '$role (₹${rAmt.toInt()}/mo)',
-                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                                    overflow: TextOverflow.ellipsis,
+                      if (isMobile) ...[
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedRole,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Staff Position / Role *',
+                            prefixIcon: Icon(Icons.engineering),
+                            border: OutlineInputBorder(),
+                          ),
+                          items: staffRoles.map((role) {
+                            final rAmt = AccountingConfig.staffRemunerationMonthly[role] ?? 0.0;
+                            final isPaidForMonth = currentStatusList.any((s) => s.role.trim().toLowerCase() == role.trim().toLowerCase() && s.isPaid);
+                            return DropdownMenuItem(
+                              value: role,
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      '$role (₹${rAmt.toInt()}/mo)',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: isPaidForMonth ? Colors.green.shade800 : Colors.black87,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
-                                );
-                              }).toList(),
-                              onChanged: (val) {
-                                if (val != null) {
-                                  setDS(() {
-                                    selectedRole = val;
-                                    final amt = AccountingConfig.staffRemunerationMonthly[val] ?? 0.0;
-                                    amountCtrl.text = amt.toStringAsFixed(0);
-                                    paidToCtrl.text = val;
-                                    descCtrl.text = 'Staff Remuneration - $val ($selectedMonth)';
-                                  });
-                                }
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            flex: 2,
-                            child: DropdownButtonFormField<String>(
-                              initialValue: selectedMonth,
-                              decoration: const InputDecoration(
-                                labelText: 'Salary Month *',
-                                prefixIcon: Icon(Icons.calendar_month),
-                                border: OutlineInputBorder(),
+                                  if (isPaidForMonth) ...[
+                                    const SizedBox(width: 4),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.shade100,
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: const Text(
+                                        '✓ Paid',
+                                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green),
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
-                              items: months
-                                  .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13))))
-                                  .toList(),
-                              onChanged: (val) {
-                                if (val != null) {
-                                  setDS(() {
-                                    selectedMonth = val;
-                                    descCtrl.text = 'Staff Remuneration - $selectedRole ($selectedMonth)';
-                                  });
-                                }
-                              },
-                            ),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setDS(() {
+                                selectedRole = val;
+                                final amt = AccountingConfig.staffRemunerationMonthly[val] ?? 0.0;
+                                amountCtrl.text = amt.toStringAsFixed(0);
+                                paidToCtrl.text = val;
+                                descCtrl.text = 'Staff Remuneration - $val ($selectedMonth)';
+                              });
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedMonth,
+                          decoration: const InputDecoration(
+                            labelText: 'Salary Month *',
+                            prefixIcon: Icon(Icons.calendar_month),
+                            border: OutlineInputBorder(),
                           ),
-                        ],
-                      ),
+                          items: months
+                              .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13))))
+                              .toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setDS(() {
+                                selectedMonth = val;
+                                descCtrl.text = 'Staff Remuneration - $selectedRole ($selectedMonth)';
+                              });
+                            }
+                          },
+                        ),
+                      ] else ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: selectedRole,
+                                isExpanded: true,
+                                decoration: const InputDecoration(
+                                  labelText: 'Staff Position / Role *',
+                                  prefixIcon: Icon(Icons.engineering),
+                                  border: OutlineInputBorder(),
+                                ),
+                                items: staffRoles.map((role) {
+                                  final rAmt = AccountingConfig.staffRemunerationMonthly[role] ?? 0.0;
+                                  final isPaidForMonth = currentStatusList.any((s) => s.role.trim().toLowerCase() == role.trim().toLowerCase() && s.isPaid);
+                                  return DropdownMenuItem(
+                                    value: role,
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            '$role (₹${rAmt.toInt()}/mo)',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                              color: isPaidForMonth ? Colors.green.shade800 : Colors.black87,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        if (isPaidForMonth) ...[
+                                          const SizedBox(width: 4),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                            decoration: BoxDecoration(
+                                              color: Colors.green.shade100,
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: const Text(
+                                              '✓ Paid',
+                                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                                onChanged: (val) {
+                                  if (val != null) {
+                                    setDS(() {
+                                      selectedRole = val;
+                                      final amt = AccountingConfig.staffRemunerationMonthly[val] ?? 0.0;
+                                      amountCtrl.text = amt.toStringAsFixed(0);
+                                      paidToCtrl.text = val;
+                                      descCtrl.text = 'Staff Remuneration - $val ($selectedMonth)';
+                                    });
+                                  }
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 2,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: selectedMonth,
+                                decoration: const InputDecoration(
+                                  labelText: 'Salary Month *',
+                                  prefixIcon: Icon(Icons.calendar_month),
+                                  border: OutlineInputBorder(),
+                                ),
+                                items: months
+                                    .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13))))
+                                    .toList(),
+                                onChanged: (val) {
+                                  if (val != null) {
+                                    setDS(() {
+                                      selectedMonth = val;
+                                      descCtrl.text = 'Staff Remuneration - $selectedRole ($selectedMonth)';
+                                    });
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                      if (isAlreadyPaid) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.red.shade300, width: 1.5),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.block, color: Colors.red.shade800, size: 22),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Already Settled: $selectedRole ($selectedMonth)',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.red.shade900,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Payment of ₹${(roleStatus?.paidAmount ?? roleStatus?.budgetAmount ?? 0).toInt()} has already been recorded and posted to the ledger.\n'
+                                      '• Voucher: ${roleStatus?.voucherNumber ?? "N/A"}\n'
+                                      '${roleStatus?.payeeName != null ? "• Paid to: ${roleStatus!.payeeName}\n" : ""}'
+                                      '${roleStatus?.paymentDate != null ? "• Paid on: ${DateFormat('dd MMM yyyy').format(roleStatus!.paymentDate!)}\n" : ""}'
+                                      'Duplicate payments for the same staff position & month are blocked application-wide.',
+                                      style: TextStyle(fontSize: 11, color: Colors.red.shade900, height: 1.35),
+                                    ),
+                                    if (roleStatus?.documentUrl != null && roleStatus!.documentUrl!.isNotEmpty) ...[
+                                      const SizedBox(height: 6),
+                                      OutlinedButton.icon(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.indigo.shade900,
+                                          side: BorderSide(color: Colors.indigo.shade300),
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          visualDensity: VisualDensity.compact,
+                                        ),
+                                        icon: const Icon(Icons.description, size: 14),
+                                        label: const Text(
+                                          'View Existing Voucher / Slip',
+                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                        onPressed: () => _showDocumentPreview(
+                                          roleStatus.documentUrl!,
+                                          roleStatus.documentFileName ?? 'Salary_Voucher.pdf',
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 10),
 
                       // Budget Rate Info Pill
@@ -1786,97 +2064,178 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                       const SizedBox(height: 14),
 
                       // Amount & Payee Name
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            flex: 5,
-                            child: TextFormField(
-                              controller: amountCtrl,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              decoration: const InputDecoration(
-                                labelText: 'Amount (₹) *',
-                                prefixIcon: Icon(Icons.currency_rupee),
-                                border: OutlineInputBorder(),
-                              ),
-                              validator: (val) {
-                                if (val == null || val.trim().isEmpty) return 'Enter amount';
-                                final n = double.tryParse(val.trim());
-                                if (n == null || n <= 0) return 'Valid amount';
-                                return null;
-                              },
-                            ),
+                      if (isMobile) ...[
+                        TextFormField(
+                          controller: amountCtrl,
+                          enabled: !isAlreadyPaid && !isSubmitting,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'Amount (₹) *',
+                            prefixIcon: Icon(Icons.currency_rupee),
+                            border: OutlineInputBorder(),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            flex: 7,
-                            child: TextFormField(
-                              controller: paidToCtrl,
-                              decoration: const InputDecoration(
-                                labelText: 'Staff Name / Payee *',
-                                prefixIcon: Icon(Icons.person),
-                                border: OutlineInputBorder(),
-                              ),
-                              validator: (val) {
-                                if (val == null || val.trim().isEmpty) return 'Payee name required';
-                                return null;
-                              },
-                            ),
+                          validator: (val) {
+                            if (isAlreadyPaid) return null;
+                            if (val == null || val.trim().isEmpty) return 'Enter amount';
+                            final n = double.tryParse(val.trim());
+                            if (n == null || n <= 0) return 'Valid amount';
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: paidToCtrl,
+                          enabled: !isAlreadyPaid && !isSubmitting,
+                          decoration: const InputDecoration(
+                            labelText: 'Staff Name / Payee *',
+                            prefixIcon: Icon(Icons.person),
+                            border: OutlineInputBorder(),
                           ),
-                        ],
-                      ),
+                          validator: (val) {
+                            if (isAlreadyPaid) return null;
+                            if (val == null || val.trim().isEmpty) return 'Payee name required';
+                            return null;
+                          },
+                        ),
+                      ] else ...[
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              flex: 5,
+                              child: TextFormField(
+                                controller: amountCtrl,
+                                enabled: !isAlreadyPaid && !isSubmitting,
+                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                decoration: const InputDecoration(
+                                  labelText: 'Amount (₹) *',
+                                  prefixIcon: Icon(Icons.currency_rupee),
+                                  border: OutlineInputBorder(),
+                                ),
+                                validator: (val) {
+                                  if (isAlreadyPaid) return null;
+                                  if (val == null || val.trim().isEmpty) return 'Enter amount';
+                                  final n = double.tryParse(val.trim());
+                                  if (n == null || n <= 0) return 'Valid amount';
+                                  return null;
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 6,
+                              child: TextFormField(
+                                controller: paidToCtrl,
+                                enabled: !isAlreadyPaid && !isSubmitting,
+                                decoration: const InputDecoration(
+                                  labelText: 'Staff Name / Payee *',
+                                  prefixIcon: Icon(Icons.person),
+                                  border: OutlineInputBorder(),
+                                ),
+                                validator: (val) {
+                                  if (isAlreadyPaid) return null;
+                                  if (val == null || val.trim().isEmpty) return 'Payee name required';
+                                  return null;
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 14),
 
                       // Payment Date & Payment Mode
-                      Row(
-                        children: [
-                          Expanded(
-                            child: InkWell(
-                              onTap: () async {
-                                final picked = await showDatePicker(
-                                  context: ctx,
-                                  initialDate: paymentDate,
-                                  firstDate: DateTime(2025, 4, 1),
-                                  lastDate: DateTime(2028, 3, 31),
-                                );
-                                if (picked != null) {
-                                  setDS(() => paymentDate = picked);
-                                }
-                              },
-                              child: InputDecorator(
+                      if (isMobile) ...[
+                        InkWell(
+                          onTap: (isAlreadyPaid || isSubmitting) ? null : () async {
+                            final picked = await showDatePicker(
+                              context: ctx,
+                              initialDate: paymentDate,
+                              firstDate: DateTime(2025, 4, 1),
+                              lastDate: DateTime(2028, 3, 31),
+                            );
+                            if (picked != null) {
+                              setDS(() => paymentDate = picked);
+                            }
+                          },
+                          child: InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'Payment Date *',
+                              prefixIcon: Icon(Icons.calendar_today),
+                              border: OutlineInputBorder(),
+                            ),
+                            child: Text(dateFmt.format(paymentDate), style: const TextStyle(fontSize: 13)),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          initialValue: paymentMode,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Payment Mode *',
+                            prefixIcon: Icon(Icons.payments),
+                            border: OutlineInputBorder(),
+                          ),
+                          items: AccountingConfig.paymentModes
+                              .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 12))))
+                              .toList(),
+                          onChanged: (isAlreadyPaid || isSubmitting) ? null : (val) {
+                            if (val != null) setDS(() => paymentMode = val);
+                          },
+                        ),
+                      ] else ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: InkWell(
+                                onTap: (isAlreadyPaid || isSubmitting) ? null : () async {
+                                  final picked = await showDatePicker(
+                                    context: ctx,
+                                    initialDate: paymentDate,
+                                    firstDate: DateTime(2025, 4, 1),
+                                    lastDate: DateTime(2028, 3, 31),
+                                  );
+                                  if (picked != null) {
+                                    setDS(() => paymentDate = picked);
+                                  }
+                                },
+                                child: InputDecorator(
+                                  decoration: const InputDecoration(
+                                    labelText: 'Payment Date *',
+                                    prefixIcon: Icon(Icons.calendar_today),
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  child: Text(dateFmt.format(paymentDate), style: const TextStyle(fontSize: 13)),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                initialValue: paymentMode,
+                                isExpanded: true,
                                 decoration: const InputDecoration(
-                                  labelText: 'Payment Date *',
-                                  prefixIcon: Icon(Icons.calendar_today),
+                                  labelText: 'Payment Mode *',
+                                  prefixIcon: Icon(Icons.payments),
                                   border: OutlineInputBorder(),
                                 ),
-                                child: Text(dateFmt.format(paymentDate), style: const TextStyle(fontSize: 13)),
+                                items: AccountingConfig.paymentModes
+                                    .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 12))))
+                                    .toList(),
+                                onChanged: (isAlreadyPaid || isSubmitting) ? null : (val) {
+                                  if (val != null) setDS(() => paymentMode = val);
+                                },
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: DropdownButtonFormField<String>(
-                              initialValue: paymentMode,
-                              decoration: const InputDecoration(
-                                labelText: 'Payment Mode *',
-                                prefixIcon: Icon(Icons.payments),
-                                border: OutlineInputBorder(),
-                              ),
-                              items: AccountingConfig.paymentModes
-                                  .map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 12))))
-                                  .toList(),
-                              onChanged: (val) {
-                                if (val != null) setDS(() => paymentMode = val);
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 14),
 
                       // Reference Number & Description
                       TextFormField(
                         controller: refCtrl,
+                        enabled: !isAlreadyPaid && !isSubmitting,
                         decoration: const InputDecoration(
                           labelText: 'Cheque No. / Bank UTR / Ref (Optional)',
                           prefixIcon: Icon(Icons.numbers),
@@ -1886,6 +2245,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                       const SizedBox(height: 14),
                       TextFormField(
                         controller: descCtrl,
+                        enabled: !isAlreadyPaid && !isSubmitting,
                         maxLines: 2,
                         decoration: const InputDecoration(
                           labelText: 'Notes / Remuneration Details',
@@ -1909,48 +2269,93 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: [
-                                Icon(
-                                  voucherFile == null ? Icons.attach_file : Icons.check_circle,
-                                  color: voucherFile == null ? Colors.red.shade900 : Colors.green.shade900,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'Salary Voucher / Signed Receipt / Slip (MANDATORY) *',
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold,
-                                          color: voucherFile == null ? Colors.red.shade900 : Colors.green.shade900,
-                                        ),
-                                      ),
-                                      Text(
-                                        'Attach signed payment voucher, salary slip, or bank debit advice.',
-                                        style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
-                                      ),
-                                    ],
+                            if (isMobile) ...[
+                              Row(
+                                children: [
+                                  Icon(
+                                    voucherFile == null ? Icons.attach_file : Icons.check_circle,
+                                    color: voucherFile == null ? Colors.red.shade900 : Colors.green.shade900,
                                   ),
-                                ),
-                                ElevatedButton.icon(
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Salary Voucher / Signed Slip *',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.bold,
+                                        color: voucherFile == null ? Colors.red.shade900 : Colors.green.shade900,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Attach signed payment voucher, salary slip, or bank debit advice.',
+                                style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                              ),
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: voucherFile == null ? Colors.indigo : Colors.teal,
                                     foregroundColor: Colors.white,
                                   ),
                                   icon: const Icon(Icons.upload_file, size: 16),
                                   label: Text(voucherFile == null ? 'Attach Slip' : 'Change'),
-                                  onPressed: () async {
+                                  onPressed: (isAlreadyPaid || isSubmitting) ? null : () async {
                                     final file = await pickFile(context: context);
                                     if (file != null) {
                                       setDS(() => voucherFile = file);
                                     }
                                   },
                                 ),
-                              ],
-                            ),
+                              ),
+                            ] else ...[
+                              Row(
+                                children: [
+                                  Icon(
+                                    voucherFile == null ? Icons.attach_file : Icons.check_circle,
+                                    color: voucherFile == null ? Colors.red.shade900 : Colors.green.shade900,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Salary Voucher / Signed Receipt / Slip (MANDATORY) *',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                            color: voucherFile == null ? Colors.red.shade900 : Colors.green.shade900,
+                                          ),
+                                        ),
+                                        Text(
+                                          'Attach signed payment voucher, salary slip, or bank debit advice.',
+                                          style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  ElevatedButton.icon(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: voucherFile == null ? Colors.indigo : Colors.teal,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    icon: const Icon(Icons.upload_file, size: 16),
+                                    label: Text(voucherFile == null ? 'Attach Slip' : 'Change'),
+                                    onPressed: (isAlreadyPaid || isSubmitting) ? null : () async {
+                                      final file = await pickFile(context: context);
+                                      if (file != null) {
+                                        setDS(() => voucherFile = file);
+                                      }
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ],
                             if (voucherFile != null) ...[
                               const Divider(height: 16),
                               Row(
@@ -1981,11 +2386,13 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                           ],
                         ),
                       ),
+                      const SizedBox(height: 16),
                     ],
                   ),
                 ),
               ),
             ),
+            actionsOverflowButtonSpacing: 8,
             actions: [
               TextButton(
                 onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
@@ -1993,15 +2400,15 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
               ),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.indigo.shade700,
+                  backgroundColor: isAlreadyPaid ? Colors.grey.shade400 : Colors.indigo.shade700,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 16, vertical: 12),
                 ),
                 icon: isSubmitting
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white))
-                    : const Icon(Icons.check),
-                label: const Text('Confirm & Post Staff Remuneration'),
-                onPressed: isSubmitting
+                    : Icon(isAlreadyPaid ? Icons.lock : Icons.check),
+                label: Text(isAlreadyPaid ? 'Already Paid' : (isMobile ? 'Confirm & Post' : 'Confirm & Post Staff Remuneration')),
+                onPressed: (isSubmitting || isAlreadyPaid)
                     ? null
                     : () async {
                         if (!formKey.currentState!.validate()) return;
@@ -2075,17 +2482,16 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     Map<String, double> headExpenditures, [
     List<BudgetHead>? activeHeads,
   ]) {
+    final months = AccountingConfig.financialYearMonths;
+    if (!months.contains(_selectedRemunerationMonth)) {
+      _selectedRemunerationMonth = _getCurrentMonth();
+    }
+
     final service = StaffRemunerationService();
     final statusList = service.computeMonthlyStatus(
       selectedMonth: _selectedRemunerationMonth,
       transactions: allDocs,
     );
-
-    final months = [
-      'April 2026', 'May 2026', 'June 2026', 'July 2026',
-      'August 2026', 'September 2026', 'October 2026', 'November 2026',
-      'December 2026', 'January 2027', 'February 2027', 'March 2027',
-    ];
 
     const double totalMonthlyBudget = 52539.0;
     double disbursedThisMonth = 0.0;
@@ -2294,7 +2700,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                           ],
                         ] else ...[
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
                               color: Colors.amber.shade100,
                               borderRadius: BorderRadius.circular(6),
@@ -2302,10 +2708,27 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                             child: Text(
                               'Pending',
                               style: TextStyle(
-                                fontSize: 12,
+                                fontSize: 11,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.amber.shade900,
                               ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.indigo,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              minimumSize: const Size(0, 28),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            child: const Text('Pay', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                            onPressed: () => _openPayStaffRemunerationDialog(
+                              preselectedRole: s.role,
+                              preselectedMonth: _selectedRemunerationMonth,
+                              currentSpentMap: headExpenditures,
+                              allDocs: allDocs,
                             ),
                           ),
                         ],
@@ -3012,6 +3435,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                 onPressed: () => _openPayStaffRemunerationDialog(
                   preselectedMonth: _selectedRemunerationMonth,
                   currentSpentMap: headExpenditures,
+                  allDocs: allDocs,
                 ),
               ),
               ElevatedButton.icon(
@@ -3264,6 +3688,7 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
                 onPressed: () => _openPayStaffRemunerationDialog(
                   preselectedMonth: _selectedRemunerationMonth,
                   currentSpentMap: headExpenditures,
+                  allDocs: allDocs,
                 ),
               ),
               const SizedBox(width: 12),

@@ -1,6 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Internet access (required for Firebase) -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Post notifications (Firebase Messaging on Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- File picker: read images/videos from gallery (Android 13+) -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <!-- File picker: read external storage (Android 12 and below) -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <application
-        android:label="society_management"
+        android:label="Ramkrishnapuram RWA"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

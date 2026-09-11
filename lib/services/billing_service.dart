@@ -189,8 +189,16 @@ class BillingService {
 
     final batch = _fs.batch();
 
-    // 1. Update maintenance due
+    // 1. Guard against duplicate cash payment
     final dueRef = _fs.collection('maintenance_dues').doc(dueId);
+    final dueDoc = await dueRef.get();
+    if (dueDoc.exists) {
+      final currentStatus = (dueDoc.data()?['status'] ?? '').toString().toUpperCase();
+      if (currentStatus.startsWith('PAID')) {
+        throw Exception('Bill for $month ($normFlat) is already marked as paid ($currentStatus). Duplicate payment blocked.');
+      }
+    }
+
     batch.update(dueRef, {
       'status': 'PAID_OFFLINE_VERIFIED',
       'receiptNumber': voucherCode,

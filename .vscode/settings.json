@@ -10,5 +10,6 @@
   },
   "git.openRepositoryInParentFolders": "never",
   "git.decorations.enabled": true,
-  "dart.hotReloadOnSave": "always"
+  "dart.hotReloadOnSave": "always",
+  "java.configuration.updateBuildConfiguration": "interactive"
 }

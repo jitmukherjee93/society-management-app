@@ -69,12 +69,15 @@ class StaffRemunerationService {
     required String recordedBy,
   }) async {
     try {
-      // 1. Guard against duplicate payments for the same role + month
+      final cleanRole = staffRole.trim();
+      final cleanMonth = remunerationMonth.trim();
+
+      // 1. Guard against duplicate payments in society_transactions
       final existingSnap = await firestore
           .collection('society_transactions')
           .where('accountHead', isEqualTo: 'Staff Remuneration')
-          .where('staffRole', isEqualTo: staffRole)
-          .where('remunerationMonth', isEqualTo: remunerationMonth)
+          .where('staffRole', isEqualTo: cleanRole)
+          .where('remunerationMonth', isEqualTo: cleanMonth)
           .get();
 
       final activePaid = existingSnap.docs.where((d) => d.data()['isVoid'] != true).toList();
@@ -82,13 +85,25 @@ class StaffRemunerationService {
         final existingVoucher = activePaid.first.data()['voucherNumber'] ?? 'Existing Voucher';
         return StaffPaymentRecordResult(
           success: false,
-          error: '$staffRole has already been paid for $remunerationMonth ($existingVoucher).',
+          error: '$cleanRole has already been paid for $cleanMonth (Voucher: $existingVoucher). Duplicate payment is strictly blocked application-wide.',
+        );
+      }
+
+      // 2. Deterministic payroll registry document to prevent concurrent duplicate payments
+      final registryDocId = 'PAYROLL_${cleanRole.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '_')}_${cleanMonth.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '_')}';
+      final registryRef = firestore.collection('staff_payroll_registry').doc(registryDocId);
+      final registrySnap = await registryRef.get();
+      if (registrySnap.exists && registrySnap.data()?['isVoid'] != true) {
+        final existingVoucher = registrySnap.data()?['voucherNumber'] ?? 'Existing Voucher';
+        return StaffPaymentRecordResult(
+          success: false,
+          error: '$cleanRole has already been paid for $cleanMonth (Voucher: $existingVoucher). Duplicate payment is strictly blocked application-wide.',
         );
       }
 
       final voucherNumber = generateVoucherNumber();
 
-      // 2. Upload voucher/salary slip
+      // 3. Upload voucher/salary slip
       final docUrl = await uploadFile(
         voucherFile,
         'society_accounts_vouchers/${voucherNumber}_${voucherFile.name}',
@@ -103,10 +118,9 @@ class StaffRemunerationService {
 
       final notes = (description != null && description.trim().isNotEmpty)
           ? description.trim()
-          : 'Staff Remuneration - $staffRole for $remunerationMonth';
+          : 'Staff Remuneration - $cleanRole for $cleanMonth';
 
-      // 2. Post atomic transaction to society_transactions ledger
-      await firestore.collection('society_transactions').add({
+      final txnData = {
         'type': 'EXPENDITURE',
         'voucherNumber': voucherNumber,
         'accountHead': 'Staff Remuneration',
@@ -119,11 +133,22 @@ class StaffRemunerationService {
         'description': notes,
         'documentUrl': docUrl,
         'documentFileName': voucherFile.name,
-        'staffRole': staffRole,
-        'remunerationMonth': remunerationMonth,
+        'staffRole': cleanRole,
+        'remunerationMonth': cleanMonth,
         'recordedBy': recordedBy,
+        'financialYear': AccountingConfig.currentFinancialYear,
         'createdAt': FieldValue.serverTimestamp(),
+      };
+
+      // 4. Atomically commit to society_transactions ledger AND registry
+      final batch = firestore.batch();
+      final txnRef = firestore.collection('society_transactions').doc();
+      batch.set(txnRef, txnData);
+      batch.set(registryRef, {
+        ...txnData,
+        'transactionId': txnRef.id,
       });
+      await batch.commit();
 
       return StaffPaymentRecordResult(
         success: true,
@@ -137,26 +162,57 @@ class StaffRemunerationService {
     }
   }
 
+  /// Find if a staff role is already paid for a given month in a list of transaction docs
+  StaffRemunerationStatus? findRoleStatus({
+    required String role,
+    required String month,
+    required Iterable<dynamic> transactions,
+  }) {
+    final statusList = computeMonthlyStatus(selectedMonth: month, transactions: transactions);
+    try {
+      return statusList.firstWhere(
+        (s) => s.role.trim().toLowerCase() == role.trim().toLowerCase() && s.isPaid,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Get status of all 11 staff remuneration positions for a selected month
   List<StaffRemunerationStatus> computeMonthlyStatus({
     required String selectedMonth,
-    required List<QueryDocumentSnapshot> transactions,
+    required Iterable<dynamic> transactions,
   }) {
     // Filter transactions for Staff Remuneration in the given month
-    final Map<String, QueryDocumentSnapshot> paidMap = {};
+    final Map<String, Map<String, dynamic>> paidMap = {};
+    final Map<String, String> idMap = {};
 
     for (final doc in transactions) {
-      final data = doc.data() as Map<String, dynamic>;
+      final Map<String, dynamic> data;
+      final String docId;
+      if (doc is Map<String, dynamic>) {
+        data = doc;
+        docId = doc['id']?.toString() ?? '';
+      } else if (doc is DocumentSnapshot) {
+        data = (doc.data() as Map<String, dynamic>?) ?? {};
+        docId = doc.id;
+      } else {
+        data = (doc.data() as Map<String, dynamic>);
+        docId = doc.id?.toString() ?? '';
+      }
+
+      if (data['isVoid'] == true) continue;
       final type = (data['type'] ?? '').toString().toUpperCase();
       final head = (data['accountHead'] ?? '').toString();
-      final month = (data['remunerationMonth'] ?? '').toString();
-      final role = (data['staffRole'] ?? '').toString();
+      final month = (data['remunerationMonth'] ?? '').toString().trim();
+      final role = (data['staffRole'] ?? '').toString().trim();
 
       if (type == 'EXPENDITURE' &&
           head == 'Staff Remuneration' &&
-          month == selectedMonth &&
+          month.toLowerCase() == selectedMonth.trim().toLowerCase() &&
           role.isNotEmpty) {
-        paidMap[role] = doc;
+        paidMap[role] = data;
+        idMap[role] = docId;
       }
     }
 
@@ -166,8 +222,7 @@ class StaffRemunerationService {
       final budgetAmt = entry.value;
 
       if (paidMap.containsKey(role)) {
-        final doc = paidMap[role]!;
-        final data = doc.data() as Map<String, dynamic>;
+        final data = paidMap[role]!;
         final pDate = (data['paymentDate'] as Timestamp?)?.toDate();
 
         return StaffRemunerationStatus(
@@ -182,7 +237,7 @@ class StaffRemunerationService {
           documentUrl: data['documentUrl'] as String?,
           documentFileName: data['documentFileName'] as String?,
           referenceNumber: data['referenceNumber'] as String?,
-          transactionId: doc.id,
+          transactionId: idMap[role],
         );
       } else {
         return StaffRemunerationStatus(
