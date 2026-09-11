@@ -7,6 +7,7 @@ import '../../models/accounting_heads.dart';
 import '../../constants/society_config.dart';
 import '../../utils/app_formatters.dart';
 import '../../services/billing_service.dart';
+import '../../utils/flat_utils.dart';
 import 'tabs/community_feed_tab.dart';
 import '../../utils/storage_utils.dart';
 import '../../services/visitor_pass_service.dart';
@@ -1617,11 +1618,20 @@ class _HomeTabState extends State<HomeTab> {
           ),
         ),
         const SizedBox(height: 8),
-        const Card(
+        Card(
           child: ListTile(
-            leading: Icon(Icons.security, size: 40, color: Colors.teal),
-            title: Text('Gate Pass System'),
-            subtitle: Text('Manage your visitors securely.'),
+            leading: const Icon(Icons.security, size: 40, color: Colors.teal),
+            title: const Text('Gate Pass System', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            subtitle: const Text('Pre-approve visitors, view gate clearances & deliveries.'),
+            trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PreApproveVisitorScreen(userFlat: flatLabel),
+                ),
+              );
+            },
           ),
         ),
       ],
@@ -1707,44 +1717,82 @@ class NotificationsTab extends StatelessWidget {
                     final isComplaint = type.contains('COMPLAINT');
                     final isMaintenance =
                         type.contains('MAINTENANCE') || type.contains('PAYMENT');
+                    final isVisitor = type.contains('VISITOR');
+                    final isParcel = type.contains('PARCEL');
+                    final isEmergency = type.contains('EMERGENCY');
+
+                    final cardColor = isEmergency
+                        ? Colors.red.shade50
+                        : isVisitor
+                            ? Colors.teal.shade50
+                            : isParcel
+                                ? Colors.amber.shade50
+                                : isApproved
+                                    ? Colors.green.shade50
+                                    : isRejected
+                                        ? Colors.red.shade50
+                                        : Colors.teal.shade50;
+
+                    final borderColor = isEmergency
+                        ? Colors.red.shade200
+                        : isVisitor
+                            ? Colors.teal.shade200
+                            : isParcel
+                                ? Colors.amber.shade300
+                                : isApproved
+                                    ? Colors.green.shade200
+                                    : isRejected
+                                        ? Colors.red.shade200
+                                        : Colors.teal.shade200;
+
+                    final iconBgColor = isEmergency
+                        ? Colors.red.shade100
+                        : isVisitor
+                            ? Colors.teal.shade100
+                            : isParcel
+                                ? Colors.amber.shade100
+                                : isApproved
+                                    ? Colors.green.shade100
+                                    : isRejected
+                                        ? Colors.red.shade100
+                                        : Colors.teal.shade100;
+
+                    final iconColor = isEmergency
+                        ? Colors.red.shade800
+                        : isVisitor
+                            ? Colors.teal.shade800
+                            : isParcel
+                                ? Colors.amber.shade900
+                                : isApproved
+                                    ? Colors.green.shade800
+                                    : isRejected
+                                        ? Colors.red.shade800
+                                        : Colors.teal.shade800;
+
+                    final iconData = isEmergency
+                        ? Icons.warning_rounded
+                        : isVisitor
+                            ? Icons.person_pin_circle_rounded
+                            : isParcel
+                                ? Icons.inventory_2_rounded
+                                : isApproved
+                                    ? Icons.check_circle
+                                    : isRejected
+                                        ? Icons.cancel
+                                        : Icons.info;
 
                     return Card(
                       elevation: 2,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10),
-                        side: BorderSide(
-                          color: isApproved
-                              ? Colors.green.shade200
-                              : isRejected
-                                  ? Colors.red.shade200
-                                  : Colors.teal.shade200,
-                        ),
+                        side: BorderSide(color: borderColor),
                       ),
-                      color: isApproved
-                          ? Colors.green.shade50
-                          : isRejected
-                              ? Colors.red.shade50
-                              : Colors.teal.shade50,
+                      color: cardColor,
                       margin: const EdgeInsets.only(bottom: 10),
                       child: ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: isApproved
-                              ? Colors.green.shade100
-                              : isRejected
-                                  ? Colors.red.shade100
-                                  : Colors.teal.shade100,
-                          child: Icon(
-                            isApproved
-                                ? Icons.check_circle
-                                : isRejected
-                                    ? Icons.cancel
-                                    : Icons.info,
-                            color: isApproved
-                                ? Colors.green.shade800
-                                : isRejected
-                                    ? Colors.red.shade800
-                                    : Colors.teal.shade800,
-                          ),
+                          backgroundColor: iconBgColor,
+                          child: Icon(iconData, color: iconColor),
                         ),
                         title: Text(title,
                             style: const TextStyle(
@@ -1766,14 +1814,16 @@ class NotificationsTab extends StatelessWidget {
                                               ? 'Tap to open Helpdesk'
                                               : isMaintenance
                                                   ? 'Tap to view & pay Maintenance'
-                                                  : 'Tap to view',
+                                                  : isVisitor
+                                                      ? 'Tap to view visitor details'
+                                                      : isParcel
+                                                          ? 'Tap to view parcel & courier details'
+                                                          : isEmergency
+                                                              ? '⚠️ Tap to view emergency alert'
+                                                              : 'Tap to view',
                               style: TextStyle(
                                 fontSize: 11,
-                                color: isApproved
-                                    ? Colors.green.shade800
-                                    : isRejected
-                                        ? Colors.red.shade800
-                                        : Colors.teal.shade800,
+                                color: iconColor,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -1833,6 +1883,12 @@ class NotificationsTab extends StatelessWidget {
                           } else if (isMaintenance) {
                             final month = notif['month']?.toString();
                             onNavigateTab?.call(4, month); // Maintenance tab with month payload
+                          } else if (isVisitor) {
+                            _showVisitorNotificationDialog(context, notif, doc.id);
+                          } else if (isParcel) {
+                            _showParcelNotificationDialog(context, notif);
+                          } else if (isEmergency) {
+                            _showEmergencyNotificationDialog(context, notif);
                           }
                         },
                       ),
@@ -1900,6 +1956,537 @@ class NotificationsTab extends StatelessWidget {
               },
             );
           },
+        ),
+      ],
+    );
+  }
+
+  void _showVisitorNotificationDialog(BuildContext context, Map<String, dynamic> notif, [String? notifDocId]) {
+    final title = notif['title']?.toString() ?? 'Visitor at Gate';
+    final msg = notif['message']?.toString() ?? '';
+
+    String vName = notif['visitorName']?.toString() ?? '';
+    if (vName.isEmpty) {
+      if (title.startsWith('Visitor At Gate: ')) {
+        vName = title.replaceFirst('Visitor At Gate: ', '').trim();
+      } else {
+        vName = 'Visitor';
+      }
+    }
+
+    String vPurpose = notif['purpose']?.toString() ?? '';
+    if (vPurpose.isEmpty) {
+      final match = RegExp(r'\((.*?)\)').firstMatch(msg);
+      vPurpose = match?.group(1) ?? 'Guest / Personal';
+    }
+
+    String vGate = notif['gateName']?.toString() ?? '';
+    if (vGate.isEmpty) {
+      final match = RegExp(r'checked in at (.*?)\.').firstMatch(msg);
+      vGate = match?.group(1) ?? 'Security Gate';
+    }
+
+    final guardName = notif['guardName']?.toString() ?? 'Security Guard';
+    final phone = notif['phone']?.toString();
+    final vehicle = notif['vehicleNumber']?.toString();
+    final flatNumber = notif['flatNumber']?.toString() ?? userFlat ?? fullFlat ?? '';
+    final createdAt = (notif['createdAt'] as Timestamp?)?.toDate();
+    final timeStr = createdAt != null ? DateFormat('hh:mm a, dd MMM yyyy').format(createdAt) : 'Just now';
+
+    String? currentApproval = notif['approvalStatus']?.toString();
+    bool isActionLoading = false;
+    String? visitorDocId = notif['visitorDocId']?.toString();
+
+    Future<String?> resolveVisitorDocId() async {
+      if (visitorDocId != null && visitorDocId!.isNotEmpty) return visitorDocId;
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('visitors')
+            .where('flatNumber', isEqualTo: FlatUtils.normalize(flatNumber))
+            .get();
+        if (snap.docs.isNotEmpty) {
+          final matches = snap.docs.where((d) {
+            final data = d.data();
+            final vN = (data['visitorName'] ?? '').toString().trim().toLowerCase();
+            final vStatus = data['status']?.toString();
+            return vStatus == 'CHECKED_IN' &&
+                   (vN == vName.trim().toLowerCase() ||
+                    vN.contains(vName.trim().toLowerCase()) ||
+                    vName.trim().toLowerCase().contains(vN));
+          }).toList();
+          if (matches.isNotEmpty) {
+            visitorDocId = matches.first.id;
+            return visitorDocId;
+          }
+          final checkedIn = snap.docs.where((d) => d.data()['status'] == 'CHECKED_IN').toList();
+          if (checkedIn.isNotEmpty) {
+            visitorDocId = checkedIn.last.id;
+            return visitorDocId;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+      return null;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final isApproved = currentApproval == 'APPROVED';
+          final isDenied = currentApproval == 'DENIED';
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: isApproved
+                        ? Colors.green.shade50
+                        : (isDenied ? Colors.red.shade50 : Colors.teal.shade50),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    isApproved
+                        ? Icons.check_circle_rounded
+                        : (isDenied ? Icons.cancel_rounded : Icons.person_pin_circle_rounded),
+                    color: isApproved
+                        ? Colors.green
+                        : (isDenied ? Colors.red : Colors.teal),
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(vName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      Text(
+                        isApproved
+                            ? 'Entry Approved'
+                            : (isDenied ? 'Entry Denied' : 'Visitor Gate Clearance'),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: isApproved || isDenied ? FontWeight.bold : FontWeight.normal,
+                          color: isApproved
+                              ? Colors.green
+                              : (isDenied ? Colors.red : Colors.grey),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isApproved)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.green.shade300),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.verified_rounded, color: Colors.green, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'ENTRY APPROVED BY YOU',
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Gate security has been notified that $vName is cleared to enter.',
+                                  style: TextStyle(fontSize: 11, color: Colors.green.shade900),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (isDenied)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.red.shade300),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.block_rounded, color: Colors.red, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'ENTRY DENIED BY YOU',
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Gate security has been instructed to turn $vName away.',
+                                  style: TextStyle(fontSize: 11, color: Colors.red.shade900),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.amber.shade300),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.security_rounded, color: Colors.brown, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'CLEARANCE REQUIRED',
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.brown),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Visitor waiting at $vGate • $timeStr',
+                                  style: TextStyle(fontSize: 11, color: Colors.brown.shade800),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                  _buildDialogRow('Purpose', vPurpose),
+                  if (phone != null && phone.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _buildDialogRow('Phone', phone),
+                  ],
+                  if (vehicle != null && vehicle.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _buildDialogRow('Vehicle', vehicle),
+                  ],
+                  const SizedBox(height: 8),
+                  _buildDialogRow('Gate & Guard', '$vGate • $guardName'),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.cardSurfaceSecondary,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      msg,
+                      style: const TextStyle(fontSize: 12, color: AppColors.textPrimary, height: 1.3),
+                    ),
+                  ),
+                  if (isActionLoading) ...[
+                    const SizedBox(height: 16),
+                    const Center(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                          SizedBox(width: 10),
+                          Text('Notifying gate security...', style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            actions: [
+              if (isApproved || isDenied) ...[
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Close'),
+                ),
+              ] else ...[
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: isActionLoading ? null : () => Navigator.pop(ctx),
+                      child: const Text('Dismiss', style: TextStyle(color: Colors.grey)),
+                    ),
+                    const Spacer(),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red.shade700,
+                        side: BorderSide(color: Colors.red.shade400),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      ),
+                      icon: const Icon(Icons.cancel_outlined, size: 16),
+                      label: const Text('Deny Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      onPressed: isActionLoading
+                          ? null
+                          : () async {
+                              setDialogState(() => isActionLoading = true);
+                              try {
+                                final docId = await resolveVisitorDocId();
+                                await VisitorPassService.denyVisitorEntry(
+                                  visitorDocId: docId,
+                                  flatNumber: flatNumber,
+                                  visitorName: vName,
+                                  notifDocId: notifDocId,
+                                );
+                                setDialogState(() {
+                                  currentApproval = 'DENIED';
+                                  isActionLoading = false;
+                                });
+                              } catch (e) {
+                                setDialogState(() => isActionLoading = false);
+                                if (context.mounted) {
+                                  AppFeedback.showError(context, 'Failed to deny entry: $e');
+                                }
+                              }
+                            },
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade600,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      ),
+                      icon: const Icon(Icons.check_circle_outline, size: 16),
+                      label: const Text('Approve Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      onPressed: isActionLoading
+                          ? null
+                          : () async {
+                              setDialogState(() => isActionLoading = true);
+                              try {
+                                final docId = await resolveVisitorDocId();
+                                await VisitorPassService.approveVisitorEntry(
+                                  visitorDocId: docId,
+                                  flatNumber: flatNumber,
+                                  visitorName: vName,
+                                  notifDocId: notifDocId,
+                                );
+                                setDialogState(() {
+                                  currentApproval = 'APPROVED';
+                                  isActionLoading = false;
+                                });
+                              } catch (e) {
+                                setDialogState(() => isActionLoading = false);
+                                if (context.mounted) {
+                                  AppFeedback.showError(context, 'Failed to approve entry: $e');
+                                }
+                              }
+                            },
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showParcelNotificationDialog(BuildContext context, Map<String, dynamic> notif) {
+    final msg = notif['message']?.toString() ?? '';
+    final deliveryProvider = notif['deliveryProvider']?.toString() ?? 'Courier';
+    final packetCount = notif['packetCount']?.toString() ?? '1';
+    final gateName = notif['gateName']?.toString() ?? 'Main Gate';
+    final remarks = notif['remarks']?.toString();
+    final createdAt = (notif['createdAt'] as Timestamp?)?.toDate();
+    final timeStr = createdAt != null ? DateFormat('hh:mm a, dd MMM yyyy').format(createdAt) : 'Just now';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.inventory_2_rounded, color: Colors.amber, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('$deliveryProvider Delivery', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text('Parcel at Security Gate', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.amber.shade300),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.door_sliding_rounded, color: Colors.amber, size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'HELD AT GATE FOR COLLECTION',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.brown),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Received at $gateName • $timeStr',
+                          style: TextStyle(fontSize: 11, color: Colors.brown.shade800),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildDialogRow('Packages', '$packetCount packet(s)'),
+            const SizedBox(height: 8),
+            _buildDialogRow('Delivery Provider', deliveryProvider),
+            const SizedBox(height: 8),
+            _buildDialogRow('Holding Gate', gateName),
+            if (remarks != null && remarks.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _buildDialogRow('Remarks', remarks),
+            ],
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.cardSurfaceSecondary,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                msg,
+                style: const TextStyle(fontSize: 12, color: AppColors.textPrimary, height: 1.3),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEmergencyNotificationDialog(BuildContext context, Map<String, dynamic> notif) {
+    final title = notif['title']?.toString() ?? 'Emergency Alert';
+    final msg = notif['message']?.toString() ?? '';
+    final createdAt = (notif['createdAt'] as Timestamp?)?.toDate();
+    final timeStr = createdAt != null ? DateFormat('hh:mm a, dd MMM yyyy').format(createdAt) : 'Just now';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.warning_rounded, color: Colors.red, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.red)),
+                  Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        content: Text(msg, style: const TextStyle(fontSize: 13, height: 1.4)),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Dismiss Alert'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Widget _buildDialogRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 110,
+          child: Text(label, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
+        ),
+        Expanded(
+          child: Text(value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
         ),
       ],
     );

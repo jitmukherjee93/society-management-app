@@ -104,6 +104,32 @@ class NotificationService {
     }
   }
 
+  /// Dispatches an action alert to Security Guards
+  static Future<String?> notifyGuard({
+    required String title,
+    required String message,
+    required String type,
+    String? flatNumber,
+    Map<String, dynamic>? extraData,
+  }) async {
+    try {
+      final payload = <String, dynamic>{
+        'targetRole': 'GUARD',
+        'title': title,
+        'message': message,
+        'type': type,
+        'isRead': false,
+        if (flatNumber != null) 'flatNumber': FlatUtils.normalize(flatNumber),
+        'createdAt': FieldValue.serverTimestamp(),
+        ...?extraData,
+      };
+      final docRef = await _firestore.collection('notifications').add(payload);
+      return docRef.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Broadcasts a general notification to all society members
   static Future<void> broadcast({
     required String title,

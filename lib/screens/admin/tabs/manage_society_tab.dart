@@ -15,10 +15,16 @@ import '../../../theme/app_colors.dart';
 import '../../../theme/app_decorations.dart';
 import '../../../widgets/app_dialog.dart';
 import '../../../widgets/app_feedback.dart';
+import 'manage_guards_tab.dart';
 
 class ManageSocietyTab extends StatefulWidget {
   final String? initialSearchQuery;
-  const ManageSocietyTab({super.key, this.initialSearchQuery});
+  final String? initialSubTab;
+  const ManageSocietyTab({
+    super.key,
+    this.initialSearchQuery,
+    this.initialSubTab,
+  });
 
   @override
   State<ManageSocietyTab> createState() => _ManageSocietyTabState();
@@ -27,11 +33,13 @@ class ManageSocietyTab extends StatefulWidget {
 class _ManageSocietyTabState extends State<ManageSocietyTab> {
   bool _isUploading = false;
   String _searchQuery = '';
+  String _activeSection = 'flats'; // 'flats' or 'guards'
   late TextEditingController _searchCtrl;
 
   @override
   void initState() {
     super.initState();
+    _activeSection = widget.initialSubTab ?? 'flats';
     _searchQuery = widget.initialSearchQuery ?? '';
     _searchCtrl = TextEditingController(text: _searchQuery);
   }
@@ -43,6 +51,11 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       setState(() {
         _searchQuery = widget.initialSearchQuery!;
         _searchCtrl.text = _searchQuery;
+      });
+    }
+    if (widget.initialSubTab != oldWidget.initialSubTab && widget.initialSubTab != null) {
+      setState(() {
+        _activeSection = widget.initialSubTab!;
       });
     }
   }
@@ -1677,9 +1690,46 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // Top Action Bar with Search positioned at top right
+        // Section Switcher: Flats & Residents vs Security Guards
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: AppColors.border, width: 0.9)),
+          ),
+          child: Row(
+            children: [
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(
+                    value: 'flats',
+                    icon: Icon(Icons.apartment_rounded, size: 16),
+                    label: Text('Flats & Residents', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  ),
+                  ButtonSegment(
+                    value: 'guards',
+                    icon: Icon(Icons.shield_rounded, size: 16),
+                    label: Text('Security Guards', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  ),
+                ],
+                selected: {_activeSection},
+                onSelectionChanged: (val) {
+                  setState(() => _activeSection = val.first);
+                },
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_activeSection == 'guards')
+          const Expanded(child: ManageGuardsTab())
+        else ...[
+          // Top Action Bar with Search positioned at top right
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: const BoxDecoration(
             color: AppColors.cardSurface,
             border: Border(bottom: BorderSide(color: AppColors.border, width: 0.9)),
@@ -1892,8 +1942,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
           ),
         ),
       ],
-    );
-  }
+    ],
+  );
+}
 }
 
 // ─── Bulb Legend Item Widget ────────────────────────────────────────────────

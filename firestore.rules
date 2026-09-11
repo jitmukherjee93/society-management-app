@@ -32,7 +32,7 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if isAdmin() || (isAuthenticated() && (
+      allow read: if isAdmin() || isGuard() || (isAuthenticated() && (
         request.auth.uid == userId ||
         (resource.data != null && resource.data.uid == request.auth.uid) ||
         (request.auth.token.email != null && resource.data != null && resource.data.email == request.auth.token.email) ||
@@ -97,12 +97,19 @@ service cloud.firestore {
 
     match /visitors/{visitorId} {
       allow read, write: if isAdmin();
-      allow read: if isResident() && resource.data.hostUid == request.auth.uid;
-      allow create: if isResident() && request.resource.data.hostUid == request.auth.uid;
-      allow read: if isGuard();
-      allow update: if isGuard() 
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
-                    && request.resource.data.status == 'CHECKED_IN';
+      allow read, create, update: if isAuthenticated();
+    }
+
+    match /gate_parcels/{parcelId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || isGuard();
+      allow delete: if isAdmin();
+    }
+
+    match /security_alerts/{alertId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() || isGuard();
+      allow update, delete: if isAdmin();
     }
     
     match /posts/{postId} {

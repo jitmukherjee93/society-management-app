@@ -8,6 +8,7 @@ import '../../theme/app_decorations.dart';
 import '../../widgets/app_dialog.dart';
 import 'package:intl/intl.dart';
 import '../../models/accounting_heads.dart';
+import 'tabs/admin_home_dashboard_tab.dart';
 import 'tabs/manage_society_tab.dart';
 import 'tabs/accounts_tab.dart';
 import 'tabs/generate_maintenance_tab.dart';
@@ -24,6 +25,25 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard> {
   int _currentIndex = 0;
   String? _selectedFlatQuery;
+  String? _selectedSubTab;
+  bool _isSidebarCollapsed = false;
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _handleSearchSubmit(String query) {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return;
+    setState(() {
+      _selectedFlatQuery = trimmed;
+      _currentIndex = 1; // Manage Society & Flats Tab
+    });
+    _searchController.clear();
+  }
 
   void _showNotificationsDialog(BuildContext context) {
     AppDialog.show(
@@ -148,13 +168,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
       final flat = notif['flatNumber']?.toString();
       setState(() {
         _selectedFlatQuery = flat;
-        _currentIndex = 0; // Manage Society Tab
+        _currentIndex = 1; // Manage Society & Flats Tab
       });
       _showVehicleReviewDialog(notif, notifDocRef);
     } else if (type == 'COMPLAINT' ||
         title.contains('complaint') ||
         message.contains('complaint')) {
-      setState(() => _currentIndex = 3); // Manage Complaints Tab
+      setState(() => _currentIndex = 4); // Manage Complaints Tab
     } else if (type == 'MAINTENANCE_PAYMENT_APPROVAL_REQUEST' ||
         type == 'OFFLINE_PAYMENT_SUBMITTED' ||
         type == 'PAYMENT' ||
@@ -165,20 +185,20 @@ class _AdminDashboardState extends State<AdminDashboard> {
         type == 'MAINTENANCE' ||
         title.contains('maintenance') ||
         message.contains('maintenance')) {
-      setState(() => _currentIndex = 4); // Bills Tab (Payment Verification & Billing)
+      setState(() => _currentIndex = 5); // Bills Tab (Payment Verification & Billing)
     } else if (type == 'ANNOUNCEMENT' ||
         title.contains('announcement') ||
         message.contains('announcement')) {
-      setState(() => _currentIndex = 2); // Manage Announcements Tab
+      setState(() => _currentIndex = 3); // Manage Announcements Tab
     } else if (type == 'ACCOUNT' ||
         title.contains('account') ||
         title.contains('expense') ||
         title.contains('income')) {
-      setState(() => _currentIndex = 1); // Accounts Tab
+      setState(() => _currentIndex = 2); // Accounts Tab
     } else if (notif['flatNumber'] != null) {
       setState(() {
         _selectedFlatQuery = notif['flatNumber']?.toString();
-        _currentIndex = 0;
+        _currentIndex = 1;
       });
     }
   }
@@ -793,12 +813,470 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
+  Widget _buildDesktopSidebar() {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width: _isSidebarCollapsed ? 72 : 230,
+      clipBehavior: Clip.hardEdge,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          right: BorderSide(color: AppColors.border, width: 1),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            height: 64,
+            padding: EdgeInsets.symmetric(horizontal: _isSidebarCollapsed ? 8 : 16),
+            alignment: _isSidebarCollapsed ? Alignment.center : Alignment.centerLeft,
+            child: _isSidebarCollapsed
+                ? IconButton(
+                    icon: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryLight,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.admin_panel_settings_rounded, size: 20, color: AppColors.primary),
+                    ),
+                    tooltip: 'Expand sidebar',
+                    onPressed: () {
+                      setState(() {
+                        _isSidebarCollapsed = false;
+                      });
+                    },
+                  )
+                : Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryLight,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.admin_panel_settings_rounded, size: 20, color: AppColors.primary),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              'Ramkrishnapuram',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 14,
+                                color: AppColors.textPrimary,
+                                letterSpacing: 0.3,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              'RWA Admin Portal',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: AppColors.textSecondary,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(
+                          Icons.chevron_left_rounded,
+                          color: AppColors.textMuted,
+                          size: 20,
+                        ),
+                        tooltip: 'Collapse sidebar',
+                        onPressed: () {
+                          setState(() {
+                            _isSidebarCollapsed = true;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+          ),
+          const Divider(height: 1, color: AppColors.border),
+          const SizedBox(height: 12),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              children: [
+                _buildSidebarNavItem(0, 'Dashboard', Icons.dashboard_outlined, Icons.dashboard_rounded),
+                _buildSidebarNavItem(1, 'Flats & Units', Icons.apartment_outlined, Icons.apartment_rounded),
+                _buildSidebarNavItem(2, 'Accounts', Icons.account_balance_wallet_outlined, Icons.account_balance_wallet_rounded),
+                _buildSidebarNavItem(3, 'Notices', Icons.campaign_outlined, Icons.campaign_rounded),
+                _buildSidebarNavItem(4, 'Helpdesk', Icons.support_agent_outlined, Icons.support_agent_rounded),
+                _buildSidebarNavItem(5, 'Maintenance', Icons.receipt_long_outlined, Icons.receipt_long_rounded),
+              ],
+            ),
+          ),
+          const Divider(height: 1, color: AppColors.border),
+          Container(
+            padding: EdgeInsets.all(_isSidebarCollapsed ? 12 : 16),
+            child: _isSidebarCollapsed
+                ? const Center(
+                    child: Tooltip(
+                      message: 'Ramkrishnapuram RWA\nVersion 1.2.0',
+                      child: Icon(Icons.info_outline_rounded, size: 18, color: AppColors.textMuted),
+                    ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              color: AppColors.success,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'System Online',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textSecondary),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Ramkrishnapuram RWA',
+                        style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      const Text(
+                        'v1.2.0 • Admin Portal',
+                        style: TextStyle(fontSize: 10, color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebarNavItem(int index, String title, IconData icon, IconData activeIcon) {
+    final isSelected = _currentIndex == index;
+    final content = InkWell(
+      onTap: () {
+        setState(() {
+          _currentIndex = index;
+        });
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primaryLight : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisAlignment: _isSidebarCollapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+          children: [
+            Icon(
+              isSelected ? activeIcon : icon,
+              size: 20,
+              color: isSelected ? AppColors.primary : AppColors.textSecondary,
+            ),
+            if (!_isSidebarCollapsed) ...[
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                    color: isSelected ? AppColors.primaryDark : AppColors.textPrimary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (isSelected)
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: AppColors.primary,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+
+    if (_isSidebarCollapsed) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Tooltip(
+          message: title,
+          preferBelow: false,
+          child: content,
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: content,
+    );
+  }
+
+  Widget _buildDesktopHeader() {
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: AppColors.border, width: 1),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 320,
+            height: 38,
+            decoration: BoxDecoration(
+              color: AppColors.background,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Row(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 10),
+                  child: Icon(Icons.search_rounded, size: 18, color: AppColors.textMuted),
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    onSubmitted: _handleSearchSubmit,
+                    style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+                    decoration: const InputDecoration(
+                      hintText: 'Search flats, units... (Ctrl + K)',
+                      hintStyle: TextStyle(fontSize: 12, color: AppColors.textMuted),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ),
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: const Text(
+                    'Ctrl K',
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppColors.textMuted),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppColors.cardSurfaceSecondary,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.location_city_rounded, size: 15, color: AppColors.textSecondary),
+                SizedBox(width: 6),
+                Text(
+                  'Ramkrishnapuram RWA',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppColors.primaryLight.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: AppColors.primaryBorder),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.calendar_month_rounded, size: 14, color: AppColors.primary),
+                SizedBox(width: 5),
+                Text(
+                  'FY 2026-27',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
+                ),
+              ],
+            ),
+          ),
+          if (AccountingConfig.simulatedDate != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.warningSurface,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: AppColors.warningBorder),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.calendar_today_rounded, size: 13, color: AppColors.warningDark),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Simulated: ${DateFormat('dd MMM yyyy').format(AccountingConfig.currentDate)}',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.warningDark),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(width: 10),
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('notifications')
+                .where('targetRole', isEqualTo: 'ADMIN')
+                .snapshots(),
+            builder: (context, snap) {
+              final count = snap.data?.docs.length ?? 0;
+              return Stack(
+                alignment: Alignment.center,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.notifications_none_rounded, color: AppColors.textPrimary),
+                    tooltip: 'Admin Notifications',
+                    onPressed: () => _showNotificationsDialog(context),
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: const BoxDecoration(
+                          color: AppColors.error,
+                          shape: BoxShape.circle,
+                        ),
+                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                        child: Text(
+                          '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+          PopupMenuButton<String>(
+            tooltip: 'Admin Account',
+            offset: const Offset(0, 48),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            onSelected: (value) {
+              if (value == 'logout') {
+                FirebaseAuth.instance.signOut();
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem<String>(
+                enabled: false,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Signed in as', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                    Text('Admin Office', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                    Divider(),
+                  ],
+                ),
+              ),
+              const PopupMenuItem<String>(
+                value: 'logout',
+                child: Row(
+                  children: [
+                    Icon(Icons.logout_rounded, size: 16, color: AppColors.error),
+                    SizedBox(width: 8),
+                    Text('Logout', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w600, fontSize: 13)),
+                  ],
+                ),
+              ),
+            ],
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.cardSurfaceSecondary,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    radius: 14,
+                    backgroundColor: AppColors.primary,
+                    child: Text('AD', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                  ),
+                  SizedBox(width: 8),
+                  Text('Admin', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                  Icon(Icons.arrow_drop_down_rounded, size: 18, color: AppColors.textSecondary),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = [
+      AdminHomeDashboardTab(
+        onNavigateToTab: (index, {subTab, filter}) {
+          setState(() {
+            _currentIndex = index;
+            _selectedSubTab = subTab;
+            if (filter != null && filter.isNotEmpty) {
+              _selectedFlatQuery = filter;
+            }
+          });
+        },
+        onOpenNotifications: () => _showNotificationsDialog(context),
+      ),
       ManageSocietyTab(
-        key: ValueKey(_selectedFlatQuery ?? 'society_default'),
+        key: ValueKey('${_selectedFlatQuery ?? 'society_default'}_$_selectedSubTab'),
         initialSearchQuery: _selectedFlatQuery,
+        initialSubTab: _selectedSubTab,
       ),
       const AccountsTab(),
       const ManageAnnouncementsTab(),
@@ -806,6 +1284,33 @@ class _AdminDashboardState extends State<AdminDashboard> {
       const GenerateMaintenanceTab(),
     ];
 
+    final isDesktop = MediaQuery.sizeOf(context).width >= 900;
+
+    if (isDesktop) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        body: Row(
+          children: [
+            _buildDesktopSidebar(),
+            Expanded(
+              child: Column(
+                children: [
+                  _buildDesktopHeader(),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _currentIndex,
+                      children: pages,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Mobile / Tablet layout (< 900px)
     final isMobile = MediaQuery.sizeOf(context).width < 600;
 
     return Scaffold(
@@ -934,27 +1439,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
               );
             },
           ),
-          if (isMobile)
-            IconButton(
-              icon: const Icon(Icons.logout_rounded, size: 20, color: AppColors.error),
-              tooltip: 'Logout',
-              onPressed: () => FirebaseAuth.instance.signOut(),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.only(right: 12.0, left: 4.0),
-              child: OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  minimumSize: const Size(0, 32),
-                  side: const BorderSide(color: AppColors.borderDark),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                ),
-                icon: const Icon(Icons.logout_rounded, size: 14, color: AppColors.error),
-                label: const Text('Logout', style: TextStyle(color: AppColors.textPrimary, fontSize: 12)),
-                onPressed: () => FirebaseAuth.instance.signOut(),
-              ),
-            ),
+          IconButton(
+            icon: const Icon(Icons.logout_rounded, size: 20, color: AppColors.error),
+            tooltip: 'Logout',
+            onPressed: () => FirebaseAuth.instance.signOut(),
+          ),
         ],
       ),
       body: IndexedStack(index: _currentIndex, children: pages),
@@ -973,6 +1462,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
             });
           },
           destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.dashboard_outlined, size: 20),
+              selectedIcon: Icon(Icons.dashboard_rounded, size: 20, color: AppColors.primary),
+              label: 'Dashboard',
+            ),
             NavigationDestination(
               icon: Icon(Icons.apartment_outlined, size: 20),
               selectedIcon: Icon(Icons.apartment_rounded, size: 20, color: AppColors.primary),
@@ -994,8 +1488,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
               label: 'Helpdesk',
             ),
             NavigationDestination(
-              icon: Icon(Icons.post_add_outlined, size: 20),
-              selectedIcon: Icon(Icons.post_add_rounded, size: 20, color: AppColors.primary),
+              icon: Icon(Icons.receipt_long_outlined, size: 20),
+              selectedIcon: Icon(Icons.receipt_long_rounded, size: 20, color: AppColors.primary),
               label: 'Bills',
             ),
           ],
