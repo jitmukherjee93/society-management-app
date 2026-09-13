@@ -15,6 +15,7 @@ import '../../../theme/app_colors.dart';
 import '../../../theme/app_decorations.dart';
 import '../../../widgets/app_dialog.dart';
 import '../../../widgets/app_feedback.dart';
+import '../../../widgets/app_error_boundary.dart';
 import 'manage_guards_tab.dart';
 
 class ManageSocietyTab extends StatefulWidget {
@@ -240,21 +241,25 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
               csvFlatBikes[normDocId] = (csvFlatBikes[normDocId] ?? 0) + (hasBike2 ? 2 : 1);
             }
 
-            await _saveRecord(
-              flatNo,
-              name,
-              whatsapp,
-              mobile,
-              block,
-              isCarOwner,
-              carReg,
-              isBikeOwner,
-              bikeReg,
-              hasBike2: hasBike2,
-              bike2Reg: bike2Reg.isNotEmpty ? bike2Reg : null,
-              secondaryAuth: batchAuth,
-            );
-            count++;
+            try {
+              await _saveRecord(
+                flatNo,
+                name,
+                whatsapp,
+                mobile,
+                block,
+                isCarOwner,
+                carReg,
+                isBikeOwner,
+                bikeReg,
+                hasBike2: hasBike2,
+                bike2Reg: bike2Reg.isNotEmpty ? bike2Reg : null,
+                secondaryAuth: batchAuth,
+              );
+              count++;
+            } catch (saveErr) {
+              errors.add('Row ${i + 1} ($docId): $saveErr');
+            }
           }
         } finally {
           if (batchSecondaryApp != null) {
@@ -385,9 +390,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     final defaultAuthEmail = (role == 'Owner')
         ? '$cleanDocId@ramkrishnapuram.com'
         : '${cleanDocId}_$cleanMobile@ramkrishnapuram.com';
-    final authEmail = (email != null && email.trim().isNotEmpty)
-        ? email.trim().toLowerCase()
-        : defaultAuthEmail;
+    final authEmail = defaultAuthEmail;
 
     // Automatically create user account in Firebase Auth without signing out current admin
     String? newUid;
@@ -418,14 +421,16 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
               password: 'Password@123',
             );
             newUid = cred.user?.uid;
-          } catch (_) {
-            debugPrint('Could not sign in to existing auth user ($authEmail)');
+          } catch (signInErr) {
+            throw Exception(
+              'User ($authEmail) already exists with a different password. Please reset password or contact support.',
+            );
           }
         } else {
-          debugPrint('Auth user creation error ($authEmail): $authErr');
+          throw Exception('Failed to create login account ($authEmail): ${authErr.message ?? authErr.code}');
         }
       } catch (e) {
-        debugPrint('Auth user creation general error: $e');
+        throw Exception('Failed to initialize user account ($authEmail): $e');
       }
     } finally {
       if (localSecondaryApp != null) {
@@ -433,6 +438,10 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
           await localSecondaryApp.delete();
         } catch (_) {}
       }
+    }
+
+    if (newUid == null || newUid.isEmpty) {
+      throw Exception('Authentication ID could not be established for $authEmail. Account creation aborted.');
     }
 
     // Ensure flat document exists
@@ -466,7 +475,12 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       'phone': '+91$mobile',
       'whatsapp': whatsapp,
       'username': authEmail,
-      'email': authEmail,
+      'email': (email != null && email.trim().isNotEmpty)
+          ? email.trim().toLowerCase()
+          : authEmail,
+      'personalEmail': (email != null && email.trim().isNotEmpty)
+          ? email.trim().toLowerCase()
+          : null,
       'flatNumber': docId,
       'block': block,
       'role': 'RESIDENT',
@@ -487,12 +501,8 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       userData['rentAgreementFileName'] = rentAgreementFileName ?? '';
     }
 
-    if (newUid != null) {
-      userData['uid'] = newUid;
-      await FirebaseFirestore.instance.collection('users').doc(newUid).set(userData, SetOptions(merge: true));
-    } else {
-      await FirebaseFirestore.instance.collection('users').add(userData);
-    }
+    userData['uid'] = newUid;
+    await FirebaseFirestore.instance.collection('users').doc(newUid).set(userData, SetOptions(merge: true));
   }
 
   Future<void> _removeFlat(String flatId) async {
@@ -715,9 +725,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
 
   // ─── Dialogs ─────────────────────────────────────────────────────────────────
 
-  Future<void> _addRecordDialog() async {
+  Future<void> _addRecordDialog({String? initialBlock, String? initialFlatNo}) async {
     final formKey = GlobalKey<FormState>();
-    final flatCtrl = TextEditingController();
+    final flatCtrl = TextEditingController(text: initialFlatNo ?? '');
     final nameCtrl = TextEditingController();
     final emailCtrl = TextEditingController();
     final waCtrl = TextEditingController();
@@ -729,10 +739,15 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     String isCarOwner = 'No';
     String isBikeOwner = 'No';
     bool hasBike2 = false;
-    String? selectedBlock;
+    String? selectedBlock = (initialBlock != null && kBlockOptions.contains(initialBlock))
+        ? initialBlock
+        : null;
     bool hasAttemptedSubmit = false;
     bool canAddCar = true;
     int maxBikesAddable = 2;
+
+    bool isSaving = false;
+    String? dialogError;
 
     Future<void> updateQuota(void Function(void Function()) setDS) async {
       final b = selectedBlock ?? '';
@@ -768,12 +783,16 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       icon: Icons.person_add,
       maxWidth: 580,
       content: StatefulBuilder(
-        builder: (_, setDS) => Form(
+        builder: (dialogCtx, setDS) => Form(
           key: formKey,
           autovalidateMode: AutovalidateMode.onUserInteraction,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (dialogError != null) ...[
+                AppBanner.error(message: dialogError!),
+                const SizedBox(height: 14),
+              ],
               const SectionHeader(icon: Icons.home, title: 'Flat Details'),
               const SizedBox(height: 12),
               Row(
@@ -786,10 +805,12 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                       items: kBlockOptions
                           .map((v) => DropdownMenuItem(value: v, child: Text(v)))
                           .toList(),
-                      onChanged: (v) {
-                        setDS(() => selectedBlock = v);
-                        updateQuota(setDS);
-                      },
+                      onChanged: isSaving
+                          ? null
+                          : (v) {
+                              setDS(() => selectedBlock = v);
+                              updateQuota(setDS);
+                            },
                       decoration: kInput('Block *'),
                       validator: (v) =>
                           v == null ? (hasAttemptedSubmit ? 'Required' : null) : null,
@@ -800,6 +821,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                     flex: 2,
                     child: TextFormField(
                       controller: flatCtrl,
+                      enabled: !isSaving,
                       decoration: kInput('Flat No. (3 digits) *'),
                       keyboardType: TextInputType.number,
                       onChanged: (_) => updateQuota(setDS),
@@ -821,6 +843,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
               const SizedBox(height: 12),
               TextFormField(
                 controller: nameCtrl,
+                enabled: !isSaving,
                 decoration: kInput('Owner Name *', icon: Icons.badge),
                 validator: (v) =>
                     v!.trim().isEmpty ? (hasAttemptedSubmit ? 'Required' : null) : null,
@@ -828,6 +851,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
               const SizedBox(height: 12),
               TextFormField(
                 controller: emailCtrl,
+                enabled: !isSaving,
                 decoration: kInput('Email Address (Optional)', icon: Icons.email),
                 keyboardType: TextInputType.emailAddress,
                 validator: (v) {
@@ -844,6 +868,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                   Expanded(
                     child: TextFormField(
                       controller: waCtrl,
+                      enabled: !isSaving,
                       decoration: kInput('WhatsApp No. *', icon: Icons.chat),
                       keyboardType: TextInputType.phone,
                       validator: (v) => phoneValidator(v, hasAttemptedSubmit),
@@ -853,6 +878,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                   Expanded(
                     child: TextFormField(
                       controller: mobileCtrl,
+                      enabled: !isSaving,
                       decoration: kInput('Mobile No. *', icon: Icons.phone),
                       keyboardType: TextInputType.phone,
                       validator: (v) => phoneValidator(v, hasAttemptedSubmit),
@@ -871,54 +897,73 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                 canAddCar: canAddCar,
                 maxBikesAddable: maxBikesAddable,
                 hasAttemptedSubmit: hasAttemptedSubmit,
-                onCarChanged: (v) => setDS(() => isCarOwner = v),
-                onBikeChanged: (v) => setDS(() => isBikeOwner = v),
-                onBike2Changed: (v) => setDS(() => hasBike2 = v),
+                onCarChanged: isSaving ? (_) {} : (v) => setDS(() => isCarOwner = v),
+                onBikeChanged: isSaving ? (_) {} : (v) => setDS(() => isBikeOwner = v),
+                onBike2Changed: isSaving ? (_) {} : (v) => setDS(() => hasBike2 = v),
               ),
               const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                  TextButton(
+                    onPressed: isSaving ? null : () => Navigator.pop(dialogCtx),
+                    child: const Text('Cancel'),
+                  ),
                   const SizedBox(width: 8),
                   ElevatedButton.icon(
-                    icon: const Icon(Icons.save, size: 16),
-                    label: const Text('Save Record'),
+                    icon: isSaving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.save, size: 16),
+                    label: Text(isSaving ? 'Saving...' : 'Save Record'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
                     ),
-                    onPressed: () async {
-                      setDS(() => hasAttemptedSubmit = true);
-                      if (!formKey.currentState!.validate()) return;
-                      setState(() => _isUploading = true);
-                      Navigator.pop(context);
-                      try {
-                        await _saveRecord(
-                          flatCtrl.text.trim(),
-                          nameCtrl.text.trim(),
-                          waCtrl.text.trim(),
-                          mobileCtrl.text.trim(),
-                          selectedBlock ?? '',
-                          isCarOwner == 'Yes',
-                          carRegCtrl.text.trim(),
-                          isBikeOwner == 'Yes',
-                          bikeRegCtrl.text.trim(),
-                          hasBike2: hasBike2 && isBikeOwner == 'Yes',
-                          bike2Reg: (hasBike2 && isBikeOwner == 'Yes') ? bike2RegCtrl.text.trim() : '',
-                          email: emailCtrl.text.trim(),
-                        );
-                        if (mounted) {
-                          AppFeedback.showSuccess(context, 'Record added successfully');
-                        }
-                      } catch (e) {
-                        if (mounted) {
-                          AppFeedback.showError(context, 'Error: $e');
-                        }
-                      } finally {
-                        if (mounted) setState(() => _isUploading = false);
-                      }
-                    },
+                    onPressed: isSaving
+                        ? null
+                        : () async {
+                            setDS(() {
+                              hasAttemptedSubmit = true;
+                              dialogError = null;
+                            });
+                            if (!formKey.currentState!.validate()) return;
+                            setDS(() => isSaving = true);
+                            try {
+                              await _saveRecord(
+                                flatCtrl.text.trim(),
+                                nameCtrl.text.trim(),
+                                waCtrl.text.trim(),
+                                mobileCtrl.text.trim(),
+                                selectedBlock ?? '',
+                                isCarOwner == 'Yes',
+                                carRegCtrl.text.trim(),
+                                isBikeOwner == 'Yes',
+                                bikeRegCtrl.text.trim(),
+                                hasBike2: hasBike2 && isBikeOwner == 'Yes',
+                                bike2Reg: (hasBike2 && isBikeOwner == 'Yes') ? bike2RegCtrl.text.trim() : '',
+                                email: emailCtrl.text.trim(),
+                              );
+                              if (dialogCtx.mounted) {
+                                Navigator.pop(dialogCtx);
+                              }
+                              if (mounted) {
+                                AppFeedback.showSuccess(context, 'Record added successfully');
+                              }
+                            } catch (e) {
+                              final cleanMsg = AppErrorFormatter.clean(e);
+                              setDS(() {
+                                isSaving = false;
+                                dialogError = cleanMsg;
+                              });
+                              if (mounted) {
+                                AppFeedback.showError(context, cleanMsg);
+                              }
+                            }
+                          },
                   ),
                 ],
               ),
@@ -960,6 +1005,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     bool renteeAdded = false;
     PlatformFile? rentAgreementFile;
 
+    bool isSaving = false;
+    String? dialogError;
+
     if (!mounted) return;
     try {
       await AppDialog.show(
@@ -969,13 +1017,18 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       icon: Icons.person_add_alt_1,
       maxWidth: 580,
       content: StatefulBuilder(
-        builder: (_, setDS) => Form(
+        builder: (dialogCtx, setDS) => Form(
           key: formKey,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (dialogError != null) ...[
+                AppBanner.error(message: dialogError!),
+                const SizedBox(height: 14),
+              ],
               TextFormField(
                 controller: nameCtrl,
+                enabled: !isSaving,
                 decoration: kInput('Rentee Name *', icon: Icons.badge),
                 validator: (v) =>
                     v!.trim().isEmpty ? (hasAttemptedSubmit ? 'Required' : null) : null,
@@ -983,6 +1036,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
               const SizedBox(height: 12),
               TextFormField(
                 controller: emailCtrl,
+                enabled: !isSaving,
                 decoration: kInput('Email Address (Optional)', icon: Icons.email),
                 keyboardType: TextInputType.emailAddress,
                 validator: (v) {
@@ -994,10 +1048,12 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
               ),
               const SizedBox(height: 12),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: TextFormField(
                       controller: waCtrl,
+                      enabled: !isSaving,
                       decoration: kInput('WhatsApp No. *', icon: Icons.chat),
                       keyboardType: TextInputType.phone,
                       validator: (v) => phoneValidator(v, hasAttemptedSubmit),
@@ -1007,6 +1063,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                   Expanded(
                     child: TextFormField(
                       controller: mobileCtrl,
+                      enabled: !isSaving,
                       decoration: kInput('Mobile No. *', icon: Icons.phone),
                       keyboardType: TextInputType.phone,
                       validator: (v) => phoneValidator(v, hasAttemptedSubmit),
@@ -1025,9 +1082,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                 canAddCar: canAddCar,
                 maxBikesAddable: maxBikesAddable,
                 hasAttemptedSubmit: hasAttemptedSubmit,
-                onCarChanged: (v) => setDS(() => isCarOwner = v),
-                onBikeChanged: (v) => setDS(() => isBikeOwner = v),
-                onBike2Changed: (v) => setDS(() => hasBike2 = v),
+                onCarChanged: isSaving ? (_) {} : (v) => setDS(() => isCarOwner = v),
+                onBikeChanged: isSaving ? (_) {} : (v) => setDS(() => isBikeOwner = v),
+                onBike2Changed: isSaving ? (_) {} : (v) => setDS(() => hasBike2 = v),
               ),
               const SizedBox(height: 20),
               const Align(
@@ -1046,7 +1103,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                       foregroundColor: AppColors.primary,
                       elevation: 0,
                     ),
-                    onPressed: () async {
+                    onPressed: isSaving ? null : () async {
                       final file = await pickFile(context: context);
                       if (file != null) {
                         setDS(() => rentAgreementFile = file);
@@ -1067,7 +1124,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (rentAgreementFile != null)
+                  if (rentAgreementFile != null && !isSaving)
                     IconButton(
                       icon: const Icon(Icons.close, color: AppColors.error, size: 18),
                       splashRadius: 16,
@@ -1090,56 +1147,75 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                  TextButton(
+                    onPressed: isSaving ? null : () => Navigator.pop(dialogCtx),
+                    child: const Text('Cancel'),
+                  ),
                   const SizedBox(width: 8),
                   ElevatedButton.icon(
-                    icon: const Icon(Icons.save, size: 16),
-                    label: const Text('Save Rentee'),
+                    icon: isSaving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.save, size: 16),
+                    label: Text(isSaving ? 'Saving...' : 'Save Rentee'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
                     ),
-                    onPressed: () async {
-                      setDS(() => hasAttemptedSubmit = true);
-                      if (!formKey.currentState!.validate() || rentAgreementFile == null) return;
-                      setState(() => _isUploading = true);
-                      renteeAdded = true;
-                      Navigator.pop(context);
-                      try {
-                        String? downloadUrl;
-                        String? fileName;
-                        if (rentAgreementFile != null) {
-                          fileName = rentAgreementFile!.name;
-                          downloadUrl = await _uploadRentAgreement(rentAgreementFile!);
-                        }
-                        await _saveRecord(
-                          flatId,
-                          nameCtrl.text.trim(),
-                          waCtrl.text.trim(),
-                          mobileCtrl.text.trim(),
-                          block,
-                          isCarOwner == 'Yes',
-                          carRegCtrl.text.trim(),
-                          isBikeOwner == 'Yes',
-                          bikeRegCtrl.text.trim(),
-                          hasBike2: hasBike2 && isBikeOwner == 'Yes',
-                          bike2Reg: (hasBike2 && isBikeOwner == 'Yes') ? bike2RegCtrl.text.trim() : '',
-                          role: 'Rentee',
-                          email: emailCtrl.text.trim(),
-                          rentAgreementUrl: downloadUrl,
-                          rentAgreementFileName: fileName,
-                        );
-                        if (mounted) {
-                          AppFeedback.showSuccess(context, 'Rentee Added Successfully');
-                        }
-                      } catch (e) {
-                        if (mounted) {
-                          AppFeedback.showError(context, 'Error: $e');
-                        }
-                      } finally {
-                        if (mounted) setState(() => _isUploading = false);
-                      }
-                    },
+                    onPressed: isSaving
+                        ? null
+                        : () async {
+                            setDS(() {
+                              hasAttemptedSubmit = true;
+                              dialogError = null;
+                            });
+                            if (!formKey.currentState!.validate() || rentAgreementFile == null) return;
+                            setDS(() => isSaving = true);
+                            try {
+                              String? downloadUrl;
+                              String? fileName;
+                              if (rentAgreementFile != null) {
+                                fileName = rentAgreementFile!.name;
+                                downloadUrl = await _uploadRentAgreement(rentAgreementFile!);
+                              }
+                              await _saveRecord(
+                                flatId,
+                                nameCtrl.text.trim(),
+                                waCtrl.text.trim(),
+                                mobileCtrl.text.trim(),
+                                block,
+                                isCarOwner == 'Yes',
+                                carRegCtrl.text.trim(),
+                                isBikeOwner == 'Yes',
+                                bikeRegCtrl.text.trim(),
+                                hasBike2: hasBike2 && isBikeOwner == 'Yes',
+                                bike2Reg: (hasBike2 && isBikeOwner == 'Yes') ? bike2RegCtrl.text.trim() : '',
+                                role: 'Rentee',
+                                email: emailCtrl.text.trim(),
+                                rentAgreementUrl: downloadUrl,
+                                rentAgreementFileName: fileName,
+                              );
+                              renteeAdded = true;
+                              if (dialogCtx.mounted) {
+                                Navigator.pop(dialogCtx);
+                              }
+                              if (mounted) {
+                                AppFeedback.showSuccess(context, 'Rentee Added Successfully');
+                              }
+                            } catch (e) {
+                              final cleanMsg = AppErrorFormatter.clean(e);
+                              setDS(() {
+                                isSaving = false;
+                                dialogError = cleanMsg;
+                              });
+                              if (mounted) {
+                                AppFeedback.showError(context, cleanMsg);
+                              }
+                            }
+                          },
                   ),
                 ],
               ),
@@ -1216,6 +1292,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
     bool hasBike2 = currentData['hasBike2'] == true;
     bool hasAttemptedSubmit = false;
 
+    bool isSaving = false;
+    String? dialogError;
+
     if (!mounted) return;
     try {
       await AppDialog.show(
@@ -1225,14 +1304,19 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       icon: Icons.edit_note_rounded,
       maxWidth: 580,
       content: StatefulBuilder(
-        builder: (_, setDS) => Form(
+        builder: (dialogCtx, setDS) => Form(
           key: formKey,
           autovalidateMode: AutovalidateMode.onUserInteraction,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (dialogError != null) ...[
+                AppBanner.error(message: dialogError!),
+                const SizedBox(height: 14),
+              ],
               TextFormField(
                 controller: nameCtrl,
+                enabled: !isSaving,
                 decoration: kInput('Name *', icon: Icons.badge),
                 validator: (v) =>
                     v!.trim().isEmpty ? (hasAttemptedSubmit ? 'Required' : null) : null,
@@ -1240,6 +1324,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
               const SizedBox(height: 12),
               TextFormField(
                 controller: emailCtrl,
+                enabled: !isSaving,
                 decoration: kInput('Email Address (Optional)', icon: Icons.email),
                 keyboardType: TextInputType.emailAddress,
                 validator: (v) {
@@ -1256,6 +1341,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                   Expanded(
                     child: TextFormField(
                       controller: waCtrl,
+                      enabled: !isSaving,
                       decoration: kInput('WhatsApp No. *', icon: Icons.chat),
                       keyboardType: TextInputType.phone,
                       validator: (v) => phoneValidator(v, hasAttemptedSubmit),
@@ -1265,6 +1351,7 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                   Expanded(
                     child: TextFormField(
                       controller: mobileCtrl,
+                      enabled: !isSaving,
                       decoration: kInput('Mobile No. *', icon: Icons.phone),
                       keyboardType: TextInputType.phone,
                       validator: (v) => phoneValidator(v, hasAttemptedSubmit),
@@ -1283,76 +1370,98 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                 canAddCar: canAddCar || isCarOwner == 'Yes',
                 maxBikesAddable: maxBikesAddable,
                 hasAttemptedSubmit: hasAttemptedSubmit,
-                onCarChanged: (v) => setDS(() => isCarOwner = v),
-                onBikeChanged: (v) => setDS(() => isBikeOwner = v),
-                onBike2Changed: (v) => setDS(() => hasBike2 = v),
+                onCarChanged: isSaving ? (_) {} : (v) => setDS(() => isCarOwner = v),
+                onBikeChanged: isSaving ? (_) {} : (v) => setDS(() => isBikeOwner = v),
+                onBike2Changed: isSaving ? (_) {} : (v) => setDS(() => hasBike2 = v),
               ),
               const SizedBox(height: 20),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                  TextButton(
+                    onPressed: isSaving ? null : () => Navigator.pop(dialogCtx),
+                    child: const Text('Cancel'),
+                  ),
                   const SizedBox(width: 8),
                   ElevatedButton.icon(
-                    icon: const Icon(Icons.check, size: 16),
-                    label: const Text('Update'),
+                    icon: isSaving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.check, size: 16),
+                    label: Text(isSaving ? 'Updating...' : 'Update'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
                     ),
-                    onPressed: () async {
-                      setDS(() => hasAttemptedSubmit = true);
-                      if (!formKey.currentState!.validate()) return;
-                      Navigator.pop(context);
-                      try {
-                        final updateData = <String, dynamic>{
-                          'name': nameCtrl.text.trim(),
-                          'phone': '+91${mobileCtrl.text.trim()}',
-                          'whatsapp': waCtrl.text.trim(),
-                          'isCarOwner': isCarOwner == 'Yes',
-                          'carReg': isCarOwner == 'Yes' ? carRegCtrl.text.trim() : '',
-                          'isBikeOwner': isBikeOwner == 'Yes',
-                          'bikeReg': isBikeOwner == 'Yes' ? bikeRegCtrl.text.trim() : '',
-                          'hasBike2': isBikeOwner == 'Yes' && hasBike2,
-                          'bike2Reg': (isBikeOwner == 'Yes' && hasBike2) ? bike2RegCtrl.text.trim() : '',
-                        };
-                        if (isCarOwner == 'No') {
-                          updateData['pendingCarReg'] = FieldValue.delete();
-                          updateData['pendingCarRcUrl'] = FieldValue.delete();
-                          updateData['pendingCarRcFileName'] = FieldValue.delete();
-                          updateData['carRejectionReason'] = FieldValue.delete();
-                        }
-                        if (isBikeOwner == 'No') {
-                          updateData['pendingBikeReg'] = FieldValue.delete();
-                          updateData['pendingBikeRcUrl'] = FieldValue.delete();
-                          updateData['pendingBikeRcFileName'] = FieldValue.delete();
-                          updateData['bikeRejectionReason'] = FieldValue.delete();
-                          updateData['pendingBike2Reg'] = FieldValue.delete();
-                          updateData['pendingBike2RcUrl'] = FieldValue.delete();
-                          updateData['pendingBike2RcFileName'] = FieldValue.delete();
-                          updateData['bike2RejectionReason'] = FieldValue.delete();
-                        } else if (!hasBike2) {
-                          updateData['pendingBike2Reg'] = FieldValue.delete();
-                          updateData['pendingBike2RcUrl'] = FieldValue.delete();
-                          updateData['pendingBike2RcFileName'] = FieldValue.delete();
-                          updateData['bike2RejectionReason'] = FieldValue.delete();
-                        }
-                        if (emailCtrl.text.trim().isNotEmpty) {
-                          updateData['email'] = emailCtrl.text.trim().toLowerCase();
-                        }
-                        await FirebaseFirestore.instance
-                            .collection('users')
-                            .doc(memberId)
-                            .update(updateData);
-                        if (mounted) {
-                          AppFeedback.showSuccess(context, 'Member Updated Successfully');
-                        }
-                      } catch (e) {
-                        if (mounted) {
-                          AppFeedback.showError(context, 'Error: $e');
-                        }
-                      }
-                    },
+                    onPressed: isSaving
+                        ? null
+                        : () async {
+                            setDS(() {
+                              hasAttemptedSubmit = true;
+                              dialogError = null;
+                            });
+                            if (!formKey.currentState!.validate()) return;
+                            setDS(() => isSaving = true);
+                            try {
+                              final updateData = <String, dynamic>{
+                                'name': nameCtrl.text.trim(),
+                                'phone': '+91${mobileCtrl.text.trim()}',
+                                'whatsapp': waCtrl.text.trim(),
+                                'isCarOwner': isCarOwner == 'Yes',
+                                'carReg': isCarOwner == 'Yes' ? carRegCtrl.text.trim() : '',
+                                'isBikeOwner': isBikeOwner == 'Yes',
+                                'bikeReg': isBikeOwner == 'Yes' ? bikeRegCtrl.text.trim() : '',
+                                'hasBike2': isBikeOwner == 'Yes' && hasBike2,
+                                'bike2Reg': (isBikeOwner == 'Yes' && hasBike2) ? bike2RegCtrl.text.trim() : '',
+                              };
+                              if (isCarOwner == 'No') {
+                                updateData['pendingCarReg'] = FieldValue.delete();
+                                updateData['pendingCarRcUrl'] = FieldValue.delete();
+                                updateData['pendingCarRcFileName'] = FieldValue.delete();
+                                updateData['carRejectionReason'] = FieldValue.delete();
+                              }
+                              if (isBikeOwner == 'No') {
+                                updateData['pendingBikeReg'] = FieldValue.delete();
+                                updateData['pendingBikeRcUrl'] = FieldValue.delete();
+                                updateData['pendingBikeRcFileName'] = FieldValue.delete();
+                                updateData['bikeRejectionReason'] = FieldValue.delete();
+                                updateData['pendingBike2Reg'] = FieldValue.delete();
+                                updateData['pendingBike2RcUrl'] = FieldValue.delete();
+                                updateData['pendingBike2RcFileName'] = FieldValue.delete();
+                                updateData['bike2RejectionReason'] = FieldValue.delete();
+                              } else if (!hasBike2) {
+                                updateData['pendingBike2Reg'] = FieldValue.delete();
+                                updateData['pendingBike2RcUrl'] = FieldValue.delete();
+                                updateData['pendingBike2RcFileName'] = FieldValue.delete();
+                                updateData['bike2RejectionReason'] = FieldValue.delete();
+                              }
+                              if (emailCtrl.text.trim().isNotEmpty) {
+                                updateData['email'] = emailCtrl.text.trim().toLowerCase();
+                              }
+                              await FirebaseFirestore.instance
+                                  .collection('users')
+                                  .doc(memberId)
+                                  .update(updateData);
+                              if (dialogCtx.mounted) {
+                                Navigator.pop(dialogCtx);
+                              }
+                              if (mounted) {
+                                AppFeedback.showSuccess(context, 'Member Updated Successfully');
+                              }
+                            } catch (e) {
+                              final cleanMsg = AppErrorFormatter.clean(e);
+                              setDS(() {
+                                isSaving = false;
+                                dialogError = cleanMsg;
+                              });
+                              if (mounted) {
+                                AppFeedback.showError(context, cleanMsg);
+                              }
+                            }
+                          },
                   ),
                 ],
               ),
@@ -2624,7 +2733,7 @@ class _FlatDetailsDialog extends StatelessWidget {
 
                   if (resDocs.isEmpty) {
                     return Container(
-                      padding: const EdgeInsets.all(20),
+                      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         color: AppColors.cardSurfaceSecondary,
@@ -2632,7 +2741,7 @@ class _FlatDetailsDialog extends StatelessWidget {
                       ),
                       child: const Text(
                         'No members assigned to this flat yet.',
-                        style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+                        style: TextStyle(color: AppColors.textMuted, fontSize: 13),
                       ),
                     );
                   }

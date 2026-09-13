@@ -19,6 +19,7 @@ import '../../widgets/app_feedback.dart';
 import '../../widgets/receipt_preview_dialog.dart';
 import '../../models/notice_model.dart';
 import '../../widgets/notices/two_column_notice_list.dart';
+import '../../widgets/maintenance/maintenance_months_calendar.dart';
 
 bool _isNotificationForResident(Map<String, dynamic> data, User? user, [String? userFlat, String? fullFlat]) {
   if (user == null) return false;
@@ -96,7 +97,7 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
       builder: (context, docRefSnap) {
         final docRef = docRefSnap.data;
         if (docRef == null) {
-          return _buildDashboardScaffold(context, user, null, null);
+          return _buildDashboardScaffold(context, user, null, null, null, null);
         }
         return StreamBuilder<DocumentSnapshot>(
           stream: docRef.snapshots(),
@@ -108,14 +109,44 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                 ? '$blockStr-$userFlat'
                 : userFlat;
 
-            return _buildDashboardScaffold(context, user, userFlat, fullFlat);
+            return _buildDashboardScaffold(context, user, userFlat, fullFlat, userData, docRef);
           },
         );
       },
     );
   }
 
-  Widget _buildDashboardScaffold(BuildContext context, User user, String? userFlat, String? fullFlat) {
+  Widget _buildDashboardScaffold(
+    BuildContext context,
+    User user,
+    String? userFlat,
+    String? fullFlat, [
+    Map<String, dynamic>? userData,
+    DocumentReference? userDocRef,
+  ]) {
+    final uData = userData ?? {};
+    final personalEmail = (uData['personalEmail'] ?? '').toString().trim();
+    final docEmail = (uData['email'] ?? '').toString().trim().toLowerCase();
+    final authEmail = (user.email ?? '').trim().toLowerCase();
+
+    final bool hasValidPersonalEmail = personalEmail.isNotEmpty &&
+        personalEmail.contains('@') &&
+        !personalEmail.toLowerCase().endsWith('@ramkrishnapuram.com');
+
+    final bool isDefaultSocietyEmail = authEmail.endsWith('@ramkrishnapuram.com') ||
+        docEmail.endsWith('@ramkrishnapuram.com') ||
+        docEmail.isEmpty;
+
+    final bool showEmailWarning = !hasValidPersonalEmail && isDefaultSocietyEmail;
+    final bool isDefaultPassword = (uData['defaultPasswordRevoked'] != true) &&
+        ((uData['isDefaultPassword'] ?? true) == true);
+    final bool showPasswordRevocationWarning = !showEmailWarning && isDefaultPassword;
+    final defaultLoginId = authEmail.isNotEmpty
+        ? authEmail
+        : (docEmail.isNotEmpty
+            ? docEmail
+            : '${(fullFlat ?? userFlat ?? 'flat').toLowerCase()}@ramkrishnapuram.com');
+
     final pages = [
       HomeTab(
         onNavigateTab: (idx, [payload]) {
@@ -192,6 +223,17 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
             ),
             actions: [
               IconButton(
+                icon: const Icon(Icons.shield_outlined, color: AppColors.slate700),
+                tooltip: 'Account & Security Settings',
+                onPressed: () => _showUpdateEmailDialog(
+                  context,
+                  user,
+                  userDocRef,
+                  uData,
+                  defaultLoginId,
+                ),
+              ),
+              IconButton(
                 icon: Badge(
                   isLabelVisible: notifCount > 0,
                   backgroundColor: AppColors.error,
@@ -264,7 +306,29 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                 ),
             ],
           ),
-          body: IndexedStack(index: _currentIndex, children: pages),
+          body: Column(
+            children: [
+              if (showEmailWarning)
+                _buildEmailWarningBanner(
+                  context,
+                  user,
+                  defaultLoginId,
+                  userDocRef,
+                  uData,
+                )
+              else if (showPasswordRevocationWarning)
+                _buildPasswordRevocationBanner(
+                  context,
+                  user,
+                  defaultLoginId,
+                  userDocRef,
+                  uData,
+                ),
+              Expanded(
+                child: IndexedStack(index: _currentIndex, children: pages),
+              ),
+            ],
+          ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _currentIndex,
             indicatorColor: AppColors.primarySurface,
@@ -306,6 +370,493 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
       },
     );
   }
+
+  Widget _buildEmailWarningBanner(
+    BuildContext context,
+    User user,
+    String defaultLoginId,
+    DocumentReference? userDocRef,
+    Map<String, dynamic> userData,
+  ) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFF87171), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.red.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFEE2E2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: Color(0xFFDC2626),
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Action Required: Update Your Email Address',
+                      style: TextStyle(
+                        color: Color(0xFF991B1B),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          const TextSpan(
+                            text: '* ',
+                            style: TextStyle(
+                              color: Color(0xFFDC2626),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          TextSpan(
+                            text:
+                                'Please update your email id with a valid email address. Post that you will be able to reset your password and your login user id will be updated to your email id from ',
+                            style: const TextStyle(
+                              color: Color(0xFF7F1D1D),
+                              fontSize: 12.5,
+                              height: 1.4,
+                            ),
+                          ),
+                          TextSpan(
+                            text: defaultLoginId,
+                            style: const TextStyle(
+                              color: Color(0xFF991B1B),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12.5,
+                            ),
+                          ),
+                          const TextSpan(
+                            text: '.',
+                            style: TextStyle(
+                              color: Color(0xFF7F1D1D),
+                              fontSize: 12.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Notice: Your account is currently using the initial default password (Password@123). Updating your personal email enables you to revoke this default password and secure your account.',
+                      style: TextStyle(
+                        color: Color(0xFFB91C1C),
+                        fontSize: 11.5,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.mark_email_read_outlined, size: 16),
+              label: const Text(
+                'Update Email & Secure Account',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => _showUpdateEmailDialog(
+                context,
+                user,
+                userDocRef,
+                userData,
+                defaultLoginId,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPasswordRevocationBanner(
+    BuildContext context,
+    User user,
+    String defaultLoginId,
+    DocumentReference? userDocRef,
+    Map<String, dynamic> userData,
+  ) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFCD34D), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.amber.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFEF3C7),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.shield_outlined,
+                  color: Color(0xFFD97706),
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Security Alert: Default Password Active',
+                      style: TextStyle(
+                        color: Color(0xFF92400E),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Your account is currently using the initial default password (Password@123). Please set a private password or request a password reset email to secure your account.',
+                      style: TextStyle(
+                        color: Color(0xFF78350F),
+                        fontSize: 12.5,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.lock_reset_rounded, size: 16),
+              label: const Text(
+                'Change Password & Security',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFD97706),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => _showUpdateEmailDialog(
+                context,
+                user,
+                userDocRef,
+                userData,
+                defaultLoginId,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showUpdateEmailDialog(
+    BuildContext context,
+    User user,
+    DocumentReference? userDocRef,
+    Map<String, dynamic> userData,
+    String defaultLoginId,
+  ) async {
+    final emailCtrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    final initialPersonal = (userData['personalEmail'] ?? userData['email'] ?? '').toString().trim();
+    if (initialPersonal.isNotEmpty && !initialPersonal.toLowerCase().endsWith('@ramkrishnapuram.com')) {
+      emailCtrl.text = initialPersonal;
+    }
+
+    final bool isDefaultPasswordRevoked = userData['defaultPasswordRevoked'] == true;
+    bool isSaving = false;
+    bool triggerPasswordReset = !isDefaultPasswordRevoked;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDS) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: isDefaultPasswordRevoked ? const Color(0xFFDEF7EC) : const Color(0xFFFEE2E2),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isDefaultPasswordRevoked ? Icons.shield_rounded : Icons.security,
+                  color: isDefaultPasswordRevoked ? const Color(0xFF03543F) : const Color(0xFFDC2626),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Account Security & Email',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: MediaQuery.sizeOf(context).width.clamp(0.0, 480.0),
+            child: Form(
+              key: formKey,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Current Login ID: $defaultLoginId',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                          ),
+                          const SizedBox(height: 3),
+                          if (isDefaultPasswordRevoked)
+                            const Row(
+                              children: [
+                                Icon(Icons.check_circle, color: Color(0xFF059669), size: 14),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Private Password Active',
+                                  style: TextStyle(color: Color(0xFF059669), fontSize: 11.5, fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            )
+                          else
+                            const Row(
+                              children: [
+                                Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 14),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Initial Password: Password@123 (Default - Should be revoked)',
+                                  style: TextStyle(color: Color(0xFFDC2626), fontSize: 11.5, fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Your registered personal email address is used to sign in, receive society notices, and reset your password.',
+                      style: TextStyle(fontSize: 12.5, color: AppColors.slate700, height: 1.35),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: emailCtrl,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'Personal Email Address *',
+                        hintText: 'e.g. name@gmail.com',
+                        prefixIcon: Icon(Icons.email_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: (v) {
+                        final val = v?.trim() ?? '';
+                        if (val.isEmpty) return 'Please enter your email address';
+                        if (!RegExp(r'^[\w\.-]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(val)) {
+                          return 'Please enter a valid email address';
+                        }
+                        if (val.toLowerCase().endsWith('@ramkrishnapuram.com')) {
+                          return 'Please enter your personal email address, not the society placeholder';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    const Divider(),
+                    const SizedBox(height: 8),
+                    CheckboxListTile(
+                      value: triggerPasswordReset,
+                      onChanged: (val) => setDS(() => triggerPasswordReset = val ?? false),
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text(
+                        'Send password reset email to verify email address & set password',
+                        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: const Text(
+                        'Dispatches an official password reset link directly to your inbox.',
+                        style: TextStyle(fontSize: 11, color: AppColors.slate500),
+                      ),
+                      activeColor: const Color(0xFFDC2626),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSaving ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton.icon(
+              icon: isSaving
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                    )
+                  : Icon(triggerPasswordReset ? Icons.send_rounded : Icons.check_circle_outline, size: 16),
+              label: Text(triggerPasswordReset ? 'Save & Send Reset Email' : 'Save & Update'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: isSaving
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+                      setDS(() => isSaving = true);
+                      final newEmail = emailCtrl.text.trim().toLowerCase();
+
+                      try {
+                        final willRevokeDefault = triggerPasswordReset;
+
+                        // 1. Update Firestore user doc
+                        final updates = <String, dynamic>{
+                          'email': newEmail,
+                          'personalEmail': newEmail,
+                          'emailUpdatedAt': FieldValue.serverTimestamp(),
+                        };
+                        if (willRevokeDefault) {
+                          updates['isDefaultPassword'] = false;
+                          updates['defaultPasswordRevoked'] = true;
+                        }
+
+                        if (userDocRef != null) {
+                          await userDocRef.update(updates);
+                        } else {
+                          await FirebaseFirestore.instance.collection('users').doc(user.uid).set(
+                            updates,
+                            SetOptions(merge: true),
+                          );
+                        }
+
+                        // 2. Email update / verification in Firebase Auth
+                        if (newEmail != (user.email ?? '').toLowerCase()) {
+                          try {
+                            await user.verifyBeforeUpdateEmail(newEmail);
+                          } catch (authErr) {
+                            debugPrint('verifyBeforeUpdateEmail note: $authErr');
+                          }
+                        }
+
+                        // 3. Trigger password reset email if requested
+                        bool resetEmailSent = false;
+                        if (triggerPasswordReset) {
+                          try {
+                            await FirebaseAuth.instance.sendPasswordResetEmail(email: newEmail);
+                            resetEmailSent = true;
+                          } on FirebaseAuthException catch (resetErr) {
+                            debugPrint('sendPasswordResetEmail note: $resetErr');
+                            if (resetErr.code != 'user-not-found') {
+                              throw Exception('Password reset email error: ${resetErr.message ?? resetErr.code}');
+                            }
+                          }
+                        }
+
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (context.mounted) {
+                          String msg = 'Email updated to $newEmail!';
+                          if (resetEmailSent) {
+                            msg = 'Password reset email sent to $newEmail! Please check your inbox (and Spam/Promotions).';
+                          }
+
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.green.shade700,
+                              content: Text(msg),
+                              duration: const Duration(seconds: 5),
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        setDS(() => isSaving = false);
+                        if (ctx.mounted) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              backgroundColor: Colors.red.shade700,
+                              content: Text('Error: $e'),
+                            ),
+                          );
+                        }
+                      }
+                    },
+            ),
+          ],
+        ),
+      ),
+    );
+    emailCtrl.dispose();
+  }
 }
 
 Future<DocumentReference?> _resolveUserDocRef(String uid, String? userEmail, String? flatPrefix) async {
@@ -321,7 +872,19 @@ Future<DocumentReference?> _resolveUserDocRef(String uid, String? userEmail, Str
     if (emailSnap.docs.isNotEmpty) return emailSnap.docs.first.reference;
   }
 
-  // 3. Query by flatPrefix / flatNumber
+  // 3. Query by personalEmail
+  if (userEmail != null && userEmail.isNotEmpty) {
+    final pEmailSnap = await usersRef.where('personalEmail', isEqualTo: userEmail).limit(1).get();
+    if (pEmailSnap.docs.isNotEmpty) return pEmailSnap.docs.first.reference;
+  }
+
+  // 4. Query by username
+  if (userEmail != null && userEmail.isNotEmpty) {
+    final userSnap = await usersRef.where('username', isEqualTo: userEmail).limit(1).get();
+    if (userSnap.docs.isNotEmpty) return userSnap.docs.first.reference;
+  }
+
+  // 5. Query by flatPrefix / flatNumber
   if (flatPrefix != null && flatPrefix.isNotEmpty) {
     final flatSnap = await usersRef.where('flatNumber', isEqualTo: flatPrefix.toUpperCase()).limit(1).get();
     if (flatSnap.docs.isNotEmpty) return flatSnap.docs.first.reference;
@@ -404,7 +967,14 @@ class _HomeTabState extends State<HomeTab> {
 
     final mobileCtrl = TextEditingController(text: rawPhone);
     final waCtrl = TextEditingController(text: data['whatsapp']?.toString() ?? '');
-    final emailCtrl = TextEditingController(text: data['email']?.toString() ?? '');
+    final personalEmail = data['personalEmail']?.toString().trim() ?? '';
+    final existingEmail = data['email']?.toString().trim() ?? '';
+    final initialEmail = (personalEmail.isNotEmpty && !personalEmail.endsWith('@ramkrishnapuram.com'))
+        ? personalEmail
+        : (!existingEmail.endsWith('@ramkrishnapuram.com') ? existingEmail : '');
+    final emailCtrl = TextEditingController(text: initialEmail);
+    final bool isUsingDefaultEmail = (personalEmail.isEmpty || personalEmail.endsWith('@ramkrishnapuram.com')) &&
+        (existingEmail.isEmpty || existingEmail.endsWith('@ramkrishnapuram.com'));
 
     final pendingCarReg = data['pendingCarReg']?.toString().trim() ?? '';
     final pendingBikeReg = data['pendingBikeReg']?.toString().trim() ?? '';
@@ -504,10 +1074,39 @@ class _HomeTabState extends State<HomeTab> {
                       },
                     ),
                     const SizedBox(height: 12),
+                    if (isUsingDefaultEmail)
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFFF87171)),
+                        ),
+                        child: const Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.warning_amber_rounded, size: 18, color: Color(0xFFDC2626)),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '* Please update your email id with a valid email address. Post that you will be able to reset your password and your login user id will be updated to your email id from flatno@ramkrishnapuram.com.',
+                                style: TextStyle(
+                                  color: Color(0xFF991B1B),
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     TextFormField(
                       controller: emailCtrl,
                       decoration: const InputDecoration(
                         labelText: 'Email Address *',
+                        hintText: 'e.g. yourname@gmail.com',
                         prefixIcon: Icon(Icons.email),
                         border: OutlineInputBorder(),
                       ),
@@ -516,6 +1115,9 @@ class _HomeTabState extends State<HomeTab> {
                         final val = v?.trim() ?? '';
                         if (val.isEmpty) return 'Email is required';
                         if (!val.contains('@')) return 'Enter a valid email address';
+                        if (val.toLowerCase().endsWith('@ramkrishnapuram.com')) {
+                          return 'Please enter your personal email address, not the society placeholder';
+                        }
                         return null;
                       },
                     ),
@@ -935,10 +1537,15 @@ class _HomeTabState extends State<HomeTab> {
 
                       setDS(() => isSaving = true);
                       try {
+                        final newEmail = emailCtrl.text.trim().toLowerCase();
+                        final isNewPersonalEmail = newEmail.isNotEmpty && !newEmail.endsWith('@ramkrishnapuram.com');
                         final updatePayload = <String, dynamic>{
                           'phone': '+91${mobileCtrl.text.trim()}',
                           'whatsapp': waCtrl.text.trim(),
-                          'email': emailCtrl.text.trim().toLowerCase(),
+                          'email': newEmail,
+                          if (isNewPersonalEmail) 'personalEmail': newEmail,
+                          if (isNewPersonalEmail) 'defaultPasswordRevoked': true,
+                          if (isNewPersonalEmail) 'isDefaultPassword': false,
                         };
 
                         final residentName = data['name'] ?? 'Resident';
@@ -1068,6 +1675,15 @@ class _HomeTabState extends State<HomeTab> {
                         }
 
                         await FirebaseFirestore.instance.collection('users').doc(docId).update(updatePayload);
+
+                        if (isNewPersonalEmail) {
+                          final currentUser = FirebaseAuth.instance.currentUser;
+                          if (currentUser != null) {
+                            try {
+                              await currentUser.verifyBeforeUpdateEmail(newEmail);
+                            } catch (_) {}
+                          }
+                        }
 
                         if (ctx.mounted) Navigator.pop(ctx);
                         scaffoldMessenger.showSnackBar(
@@ -1311,13 +1927,33 @@ class _HomeTabState extends State<HomeTab> {
                 ),
                 const SizedBox(height: 6),
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Icon(Icons.email, size: 18, color: Colors.teal),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        'Email: $email',
-                        overflow: TextOverflow.ellipsis,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Email: $email',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (email.endsWith('@ramkrishnapuram.com') ||
+                              (data?['personalEmail'] == null ||
+                                  data!['personalEmail'].toString().trim().isEmpty))
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                '* Action Required: Please update your email ID with a valid address to secure your account and revoke the default password.',
+                                style: TextStyle(
+                                  color: Colors.red.shade700,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ],
@@ -2940,7 +3576,14 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text('• Maintenance (Block ${breakdown.block})', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                            Expanded(
+                              child: Text(
+                                '• Maintenance (Block ${breakdown.block})',
+                                style: const TextStyle(color: Colors.white, fontSize: 13),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
                             Text(_currencyFmt.format(breakdown.baseMaintenance), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                           ],
                         ),
@@ -2949,7 +3592,14 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('• 4-Wheeler Parking (${breakdown.carCount} Car @ ₹430)', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                              Expanded(
+                                child: Text(
+                                  '• 4-Wheeler Parking (${breakdown.carCount} Car @ ₹430)',
+                                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
                               Text(_currencyFmt.format(breakdown.carParkingCharges), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                             ],
                           ),
@@ -2959,7 +3609,14 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('• 2-Wheeler Parking (${breakdown.bikeCount} Bike @ ₹100)', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                              Expanded(
+                                child: Text(
+                                  '• 2-Wheeler Parking (${breakdown.bikeCount} Bike @ ₹100)',
+                                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
                               Text(_currencyFmt.format(breakdown.bikeParkingCharges), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                             ],
                           ),
@@ -3063,14 +3720,39 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // Interactive 12-Month Financial Year Calendar
+                          MaintenanceMonthsCalendar(
+                            duesDocs: allDocs,
+                            breakdown: breakdown,
+                            userData: userData,
+                            flatDisplay: flatDisplay,
+                            onPayMonth: (month, dueId) {
+                              _openMaintenancePayment(
+                                context: context,
+                                userFlat: userFlat,
+                                blockStr: blockStr,
+                                breakdown: breakdown,
+                                userData: userData,
+                                allDocs: allDocs,
+                                unpaidDocs: unpaidDocs,
+                                isDefaulter: isDefaulter,
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 20),
+
                           // Outstanding Dues Section
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text(
-                                'Outstanding Maintenance Dues',
-                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                              const Expanded(
+                                child: Text(
+                                  'Outstanding Maintenance Dues',
+                                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
+                              const SizedBox(width: 8),
                               ElevatedButton.icon(
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: AppColors.primary,
@@ -3279,71 +3961,79 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                       Row(
                                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
-                                          Row(
-                                            children: [
-                                              Container(
-                                                padding: const EdgeInsets.all(8),
-                                                decoration: BoxDecoration(
-                                                  color: isParkingOnly
-                                                      ? Colors.amber.shade50
-                                                      : (isFocusMonth ? Colors.teal.shade50 : Colors.red.shade50),
-                                                  borderRadius: BorderRadius.circular(8),
+                                          Expanded(
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: const EdgeInsets.all(8),
+                                                  decoration: BoxDecoration(
+                                                    color: isParkingOnly
+                                                        ? Colors.amber.shade50
+                                                        : (isFocusMonth ? Colors.teal.shade50 : Colors.red.shade50),
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  child: Icon(
+                                                    isParkingOnly
+                                                        ? Icons.local_parking_rounded
+                                                        : (isFocusMonth ? Icons.star_rate_rounded : Icons.receipt_long),
+                                                    color: isParkingOnly
+                                                        ? Colors.amber.shade800
+                                                        : (isFocusMonth ? Colors.teal : Colors.red),
+                                                  ),
                                                 ),
-                                                child: Icon(
-                                                  isParkingOnly
-                                                      ? Icons.local_parking_rounded
-                                                      : (isFocusMonth ? Icons.star_rate_rounded : Icons.receipt_long),
-                                                  color: isParkingOnly
-                                                      ? Colors.amber.shade800
-                                                      : (isFocusMonth ? Colors.teal : Colors.red),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 10),
-                                              Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Row(
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
                                                     children: [
-                                                      Text(
-                                                        isParkingOnly ? 'Parking Dues: $month' : 'Maintenance Bill: $month',
-                                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                                      Row(
+                                                        children: [
+                                                          Flexible(
+                                                            child: Text(
+                                                              isParkingOnly ? 'Parking Dues: $month' : 'Maintenance Bill: $month',
+                                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                                              overflow: TextOverflow.ellipsis,
+                                                            ),
+                                                          ),
+                                                          if (isParkingOnly) ...[
+                                                            const SizedBox(width: 6),
+                                                            Container(
+                                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                              decoration: BoxDecoration(
+                                                                color: Colors.amber.shade100,
+                                                                borderRadius: BorderRadius.circular(4),
+                                                              ),
+                                                              child: Text('PARKING ONLY', style: TextStyle(color: Colors.amber.shade900, fontWeight: FontWeight.bold, fontSize: 9)),
+                                                            ),
+                                                          ] else if (isFocusMonth) ...[
+                                                            const SizedBox(width: 6),
+                                                            Container(
+                                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                              decoration: BoxDecoration(
+                                                                color: Colors.teal.shade100,
+                                                                borderRadius: BorderRadius.circular(4),
+                                                              ),
+                                                              child: const Text('ALERTED', style: TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 9)),
+                                                            ),
+                                                          ],
+                                                        ],
                                                       ),
-                                                      if (isParkingOnly) ...[
-                                                        const SizedBox(width: 6),
-                                                        Container(
-                                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.amber.shade100,
-                                                            borderRadius: BorderRadius.circular(4),
-                                                          ),
-                                                          child: Text('PARKING ONLY', style: TextStyle(color: Colors.amber.shade900, fontWeight: FontWeight.bold, fontSize: 9)),
-                                                        ),
-                                                      ] else if (isFocusMonth) ...[
-                                                        const SizedBox(width: 6),
-                                                        Container(
-                                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.teal.shade100,
-                                                            borderRadius: BorderRadius.circular(4),
-                                                          ),
-                                                          child: const Text('ALERTED', style: TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 9)),
-                                                        ),
-                                                      ],
+                                                      Text(
+                                                        'FY ${data['financialYear'] ?? AccountingConfig.currentFinancialYear}',
+                                                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                                      ),
                                                     ],
                                                   ),
-                                                  Text(
-                                                    'FY ${data['financialYear'] ?? AccountingConfig.currentFinancialYear}',
-                                                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                                                  ),
-                                                ],
-                                              ),
-                                            ],
+                                                ),
+                                              ],
+                                            ),
                                           ),
+                                          const SizedBox(width: 8),
                                           Text(
                                             _currencyFmt.format(amt),
                                             style: TextStyle(
                                               fontWeight: FontWeight.bold,
-                                              fontSize: 18,
+                                              fontSize: 17,
                                               color: isParkingOnly
                                                   ? Colors.amber.shade900
                                                   : (isFocusMonth ? Colors.teal.shade800 : Colors.red),
@@ -3429,8 +4119,11 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                       const SizedBox(height: 12),
                                       const Divider(),
                                       const SizedBox(height: 6),
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      Wrap(
+                                        alignment: WrapAlignment.spaceBetween,
+                                        crossAxisAlignment: WrapCrossAlignment.center,
+                                        spacing: 8,
+                                        runSpacing: 8,
                                         children: [
                                           canPayPastMonth
                                               ? (isParkingOnly
@@ -3524,30 +4217,37 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                     Row(
                                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                       children: [
-                                        Row(
-                                          children: [
-                                            AppDecorations.iconContainer(
-                                              icon: Icons.hourglass_top_rounded,
-                                              color: AppColors.warningDark,
-                                              surfaceColor: AppColors.warning.withValues(alpha: 0.15),
-                                              size: 20,
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  'Maintenance Bill: $month',
-                                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                                        Expanded(
+                                          child: Row(
+                                            children: [
+                                              AppDecorations.iconContainer(
+                                                icon: Icons.hourglass_top_rounded,
+                                                color: AppColors.warningDark,
+                                                surfaceColor: AppColors.warning.withValues(alpha: 0.15),
+                                                size: 20,
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      'Maintenance Bill: $month',
+                                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                                                      overflow: TextOverflow.ellipsis,
+                                                    ),
+                                                    Text(
+                                                      'Amount: ${_currencyFmt.format(amt)}',
+                                                      style: const TextStyle(fontSize: 12, color: AppColors.slate600, fontWeight: FontWeight.w500),
+                                                      overflow: TextOverflow.ellipsis,
+                                                    ),
+                                                  ],
                                                 ),
-                                                Text(
-                                                  'Amount: ${_currencyFmt.format(amt)}',
-                                                  style: const TextStyle(fontSize: 12, color: AppColors.slate600, fontWeight: FontWeight.w500),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
+                                              ),
+                                            ],
+                                          ),
                                         ),
+                                        const SizedBox(width: 8),
                                         AppBadge.category(category, isOnline: category == 'ONLINE'),
                                       ],
                                     ),
@@ -3634,11 +4334,23 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
                                         child: Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            Text('$month — ${_currencyFmt.format(amount)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900)),
+                                            Text(
+                                              '$month — ${_currencyFmt.format(amount)}',
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
                                             const SizedBox(height: 2),
-                                            Text('Receipt: $receiptNo • $dateStr', style: const TextStyle(fontSize: 12, color: AppColors.slate500)),
+                                            Text(
+                                              'Receipt: $receiptNo • $dateStr',
+                                              style: const TextStyle(fontSize: 12, color: AppColors.slate500),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
                                             if (uniqueId.isNotEmpty)
-                                              Text('ID: $uniqueId • Verified in Accounts', style: const TextStyle(fontSize: 11, color: AppColors.successDark, fontWeight: FontWeight.w500)),
+                                              Text(
+                                                'ID: $uniqueId • Verified in Accounts',
+                                                style: const TextStyle(fontSize: 11, color: AppColors.successDark, fontWeight: FontWeight.w500),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
                                           ],
                                         ),
                                       ),
@@ -4084,20 +4796,26 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Row(
-                            children: [
-                              Icon(
-                                isParkingOnlyDue ? Icons.local_parking_rounded : Icons.home_rounded,
-                                size: 18,
-                                color: isParkingOnlyDue ? Colors.amber.shade900 : AppColors.primary,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Flat ${widget.flat} (Block $_block)',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
-                              ),
-                            ],
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Icon(
+                                  isParkingOnlyDue ? Icons.local_parking_rounded : Icons.home_rounded,
+                                  size: 18,
+                                  color: isParkingOnlyDue ? Colors.amber.shade900 : AppColors.primary,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Flat ${widget.flat} (Block $_block)',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.slate900),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
+                          const SizedBox(width: 8),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                             decoration: BoxDecoration(

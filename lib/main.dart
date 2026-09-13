@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide EmailAuthProvider, PhoneAuthProvider;
@@ -10,10 +11,28 @@ import 'screens/admin/admin_dashboard.dart';
 import 'theme/app_theme.dart';
 import 'theme/app_colors.dart';
 import 'widgets/app_feedback.dart';
+import 'widgets/app_error_boundary.dart';
 import 'constants/app_flavor.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Gracefully handle UI build errors and framework assertions without red screens
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    return AppErrorWidget(errorDetails: details);
+  };
+
+  // Catch unhandled Flutter framework errors and format to console/reporting
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+  };
+
+  // Catch unhandled asynchronous errors from Dart/web zones
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('Global Async Error: $error\n$stack');
+    return true; // Mark as handled to prevent application breakdown
+  };
+
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
@@ -46,6 +65,11 @@ class SocietyManagementApp extends StatelessWidget {
       title: config.appTitle,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
+      builder: (context, child) {
+        return AppGlobalErrorBoundary(
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: const AuthWrapper(),
     );
   }
@@ -118,6 +142,62 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
         targetAuthEmail = '${cleanInput.replaceAll(' ', '')}@ramkrishnapuram.com';
       }
 
+      // Check if user is trying to log in using flat number or default society email
+      final bool isFlatOrSocietyEmailInput =
+          !cleanInput.contains('@') || cleanInput.endsWith('@ramkrishnapuram.com');
+
+      if (isFlatOrSocietyEmailInput) {
+        String flatCode = cleanInput;
+        if (flatCode.contains('@')) {
+          flatCode = flatCode.split('@').first;
+        }
+        flatCode = flatCode.toUpperCase().replaceAll(' ', '');
+
+        try {
+          final usersRef = FirebaseFirestore.instance.collection('users');
+          var snap = await usersRef
+              .where('flatNumber', isEqualTo: flatCode)
+              .where('isOwner', isEqualTo: true)
+              .limit(1)
+              .get();
+
+          if (snap.docs.isEmpty) {
+            snap = await usersRef
+                .where('flatNumber', isEqualTo: flatCode)
+                .limit(1)
+                .get();
+          }
+
+          if (snap.docs.isEmpty) {
+            snap = await usersRef
+                .where('username', isEqualTo: targetAuthEmail)
+                .limit(1)
+                .get();
+          }
+
+          if (snap.docs.isNotEmpty) {
+            final data = snap.docs.first.data();
+            final personalEmail = (data['personalEmail'] ?? '').toString().trim();
+            final bool hasUpdatedEmail = personalEmail.isNotEmpty &&
+                personalEmail.contains('@') &&
+                !personalEmail.toLowerCase().endsWith('@ramkrishnapuram.com');
+
+            if (hasUpdatedEmail) {
+              if (mounted) {
+                setState(() {
+                  _errorMessage =
+                      'Login via Flat Number or default society ID is disabled. Since you have updated your email, please sign in using your registered email address ($personalEmail).';
+                  _isLoading = false;
+                });
+              }
+              return;
+            }
+          }
+        } catch (_) {
+          // If Firestore query fails, fallback gracefully
+        }
+      }
+
       // 1. Try direct Firebase Auth sign-in first
       try {
         await FirebaseAuth.instance.signInWithEmailAndPassword(
@@ -126,28 +206,74 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
         );
         return;
       } catch (authError) {
-        // If direct email failed and input contains '@', try lookup by personal email in Firestore
-        if (cleanInput.contains('@')) {
-          try {
-            final snapByEmail = await FirebaseFirestore.instance
+        // Fallback: If direct sign-in failed, check Firestore:
+        try {
+          String? resolvedAuthEmail;
+
+          // 1. Check by personal email or email
+          final snapByEmail = await FirebaseFirestore.instance
+              .collection('users')
+              .where('email', isEqualTo: cleanInput)
+              .limit(1)
+              .get();
+
+          if (snapByEmail.docs.isNotEmpty) {
+            final data = snapByEmail.docs.first.data();
+            resolvedAuthEmail = data['username']?.toString() ?? data['email']?.toString();
+          }
+
+          if (resolvedAuthEmail == null) {
+            final snapByPersonalEmail = await FirebaseFirestore.instance
                 .collection('users')
-                .where('email', isEqualTo: cleanInput)
+                .where('personalEmail', isEqualTo: cleanInput)
+                .limit(1)
+                .get();
+            if (snapByPersonalEmail.docs.isNotEmpty) {
+              final data = snapByPersonalEmail.docs.first.data();
+              resolvedAuthEmail = data['username']?.toString() ?? data['email']?.toString();
+            }
+          }
+
+          // 2. If not found and input was a society email or flat ID, check by flatNumber
+          if (resolvedAuthEmail == null || resolvedAuthEmail == targetAuthEmail) {
+            String flatCode = cleanInput;
+            if (flatCode.contains('@')) {
+              flatCode = flatCode.split('@').first;
+            }
+            flatCode = flatCode.toUpperCase().replaceAll(' ', '');
+            final snapByFlat = await FirebaseFirestore.instance
+                .collection('users')
+                .where('flatNumber', isEqualTo: flatCode)
+                .where('isOwner', isEqualTo: true)
+                .limit(1)
                 .get();
 
-            if (snapByEmail.docs.isNotEmpty) {
-              final data = snapByEmail.docs.first.data();
-              final username = data['username']?.toString();
-              if (username != null && username.isNotEmpty && username != cleanInput) {
-                await FirebaseAuth.instance.signInWithEmailAndPassword(
-                  email: username,
-                  password: password,
-                );
+            if (snapByFlat.docs.isNotEmpty) {
+              final data = snapByFlat.docs.first.data();
+              final pEmail = (data['personalEmail'] ?? '').toString().trim();
+              if (pEmail.isNotEmpty && pEmail.contains('@') && !pEmail.toLowerCase().endsWith('@ramkrishnapuram.com')) {
+                if (mounted) {
+                  setState(() {
+                    _errorMessage =
+                        'Login via Flat Number or default society ID is disabled. Since you have updated your email, please sign in using your registered email address ($pEmail).';
+                    _isLoading = false;
+                  });
+                }
                 return;
               }
+              resolvedAuthEmail = data['email']?.toString() ?? data['username']?.toString();
             }
-          } catch (_) {
-            // Unauthenticated Firestore read rules will be bypassed gracefully
           }
+
+          if (resolvedAuthEmail != null && resolvedAuthEmail.isNotEmpty && resolvedAuthEmail != targetAuthEmail) {
+            await FirebaseAuth.instance.signInWithEmailAndPassword(
+              email: resolvedAuthEmail,
+              password: password,
+            );
+            return;
+          }
+        } catch (_) {
+          // Unauthenticated Firestore read rules will be bypassed gracefully
         }
         rethrow;
       }
@@ -189,7 +315,7 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
         targetEmail = '${cleanInput.replaceAll(' ', '')}@ramkrishnapuram.com';
       }
 
-      // Check if custom email exists for this user in Firestore to send reset email there
+      // Check if custom or personal email exists for this user in Firestore to send reset email there
       try {
         final userSnap = await FirebaseFirestore.instance
             .collection('users')
@@ -198,23 +324,76 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
 
         if (userSnap.docs.isNotEmpty) {
           final data = userSnap.docs.first.data();
-          final personalEmail = data['email']?.toString();
-          if (personalEmail != null && personalEmail.contains('@')) {
+          final personalEmail = data['personalEmail']?.toString() ?? data['email']?.toString();
+          if (personalEmail != null && personalEmail.contains('@') && !personalEmail.endsWith('@ramkrishnapuram.com')) {
             targetEmail = personalEmail;
+          }
+        } else {
+          // Fallback: check by flatNumber
+          String flatCode = cleanInput;
+          if (flatCode.contains('@')) {
+            flatCode = flatCode.split('@').first;
+          }
+          flatCode = flatCode.toUpperCase().replaceAll(' ', '');
+          final snapByFlat = await FirebaseFirestore.instance
+              .collection('users')
+              .where('flatNumber', isEqualTo: flatCode)
+              .where('isOwner', isEqualTo: true)
+              .limit(1)
+              .get();
+
+          if (snapByFlat.docs.isNotEmpty) {
+            final data = snapByFlat.docs.first.data();
+            final personalEmail = data['personalEmail']?.toString() ?? data['email']?.toString();
+            if (personalEmail != null && personalEmail.contains('@') && !personalEmail.endsWith('@ramkrishnapuram.com')) {
+              targetEmail = personalEmail;
+            }
           }
         }
       } catch (_) {}
 
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: targetEmail);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Password reset email sent to $targetEmail! Check your inbox.')),
-        );
+      try {
+        await FirebaseAuth.instance.sendPasswordResetEmail(email: targetEmail);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: Colors.green.shade700,
+              content: Text('Password reset email sent to $targetEmail! Check your inbox (and Spam/Promotions folder).'),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+      } on FirebaseAuthException catch (authErr) {
+        if (mounted) {
+          String msg = authErr.message ?? 'Failed to send password reset email.';
+          if (authErr.code == 'user-not-found') {
+            msg = 'No password reset account found for $targetEmail. If you recently registered this email, please check your inbox for the email verification link to finalize your update, or log in with your initial password.';
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: Colors.red.shade700,
+              content: Text(msg),
+              duration: const Duration(seconds: 6),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: Colors.red.shade700,
+              content: Text('Error: $e'),
+            ),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            backgroundColor: Colors.red.shade700,
+            content: Text('Error: $e'),
+          ),
         );
       }
     }

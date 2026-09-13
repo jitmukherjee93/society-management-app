@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_decorations.dart';
+import 'app_error_boundary.dart';
 
 /// Professional, standardized modal dialog wrapper
 class AppDialog extends StatelessWidget {
@@ -127,7 +128,10 @@ class AppDialog extends StatelessWidget {
             Flexible(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(18),
-                child: content,
+                child: AppErrorBoundary(
+                  componentName: title,
+                  child: content,
+                ),
               ),
             ),
 

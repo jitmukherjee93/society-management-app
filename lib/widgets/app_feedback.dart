@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
+import 'app_error_boundary.dart';
 
 /// Professional floating snackbars and embedded feedback banners
 class AppFeedback {
@@ -14,11 +15,12 @@ class AppFeedback {
     );
   }
 
-  /// Displays a modern floating Error Toast
-  static void showError(BuildContext context, String message, {String? title}) {
+  /// Displays a modern floating Error Toast with automatic error cleaning
+  static void showError(BuildContext context, dynamic messageOrError, {String? title}) {
+    final cleanMessage = AppErrorFormatter.clean(messageOrError);
     _showSnackBar(
       context,
-      message: message,
+      message: cleanMessage,
       title: title,
       icon: Icons.error_rounded,
       backgroundColor: AppColors.error,
@@ -154,12 +156,12 @@ class AppBanner extends StatelessWidget {
   }
 
   factory AppBanner.error({
-    required String message,
+    required dynamic message,
     String? title,
     Widget? trailing,
   }) {
     return AppBanner(
-      message: message,
+      message: AppErrorFormatter.clean(message),
       title: title,
       icon: Icons.error_outline_rounded,
       textColor: AppColors.error,
