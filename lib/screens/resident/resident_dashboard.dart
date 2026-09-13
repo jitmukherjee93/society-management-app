@@ -2041,235 +2041,54 @@ class NotificationsTab extends StatelessWidget {
           final isApproved = currentApproval == 'APPROVED';
           final isDenied = currentApproval == 'DENIED';
 
-          return AlertDialog(
+          return Dialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isApproved
-                        ? Colors.green.shade50
-                        : (isDenied ? Colors.red.shade50 : Colors.teal.shade50),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    isApproved
-                        ? Icons.check_circle_rounded
-                        : (isDenied ? Icons.cancel_rounded : Icons.person_pin_circle_rounded),
-                    color: isApproved
-                        ? Colors.green
-                        : (isDenied ? Colors.red : Colors.teal),
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(vName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      Text(
-                        isApproved
-                            ? 'Entry Approved'
-                            : (isDenied ? 'Entry Denied' : 'Visitor Gate Clearance'),
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: isApproved || isDenied ? FontWeight.bold : FontWeight.normal,
-                          color: isApproved
-                              ? Colors.green
-                              : (isDenied ? Colors.red : Colors.grey),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (isApproved)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.green.shade50,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.green.shade300),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.verified_rounded, color: Colors.green, size: 22),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'ENTRY APPROVED BY YOU',
-                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Gate security has been notified that $vName is cleared to enter.',
-                                  style: TextStyle(fontSize: 11, color: Colors.green.shade900),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  else if (isDenied)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.red.shade300),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.block_rounded, color: Colors.red, size: 22),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'ENTRY DENIED BY YOU',
-                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Gate security has been instructed to turn $vName away.',
-                                  style: TextStyle(fontSize: 11, color: Colors.red.shade900),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  else
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.shade50,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.amber.shade300),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.security_rounded, color: Colors.brown, size: 22),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'CLEARANCE REQUIRED',
-                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.brown),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Visitor waiting at $vGate • $timeStr',
-                                  style: TextStyle(fontSize: 11, color: Colors.brown.shade800),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  if (photoUrl != null && photoUrl!.isNotEmpty) ...[
-                    const SizedBox(height: 14),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 440),
+              padding: const EdgeInsets.all(20),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
                       children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.camera_alt_outlined, size: 14, color: AppColors.primary),
-                            SizedBox(width: 6),
-                            Text('Visitor Photo (Gate Verification)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textSecondary)),
-                          ],
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: isApproved
+                                ? Colors.green.shade50
+                                : (isDenied ? Colors.red.shade50 : Colors.teal.shade50),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            isApproved
+                                ? Icons.check_circle_rounded
+                                : (isDenied ? Icons.cancel_rounded : Icons.person_pin_circle_rounded),
+                            color: isApproved
+                                ? Colors.green
+                                : (isDenied ? Colors.red : Colors.teal),
+                            size: 24,
+                          ),
                         ),
-                        const SizedBox(height: 6),
-                        GestureDetector(
-                          onTap: () {
-                            showDialog(
-                              context: context,
-                              builder: (_) => Dialog(
-                                insetPadding: const EdgeInsets.all(16),
-                                child: Stack(
-                                  children: [
-                                    InteractiveViewer(
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: Image.network(
-                                          photoUrl!,
-                                          fit: BoxFit.contain,
-                                        ),
-                                      ),
-                                    ),
-                                    Positioned(
-                                      top: 8,
-                                      right: 8,
-                                      child: CircleAvatar(
-                                        backgroundColor: Colors.black54,
-                                        radius: 18,
-                                        child: IconButton(
-                                          icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white),
-                                          onPressed: () => Navigator.pop(context),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                          child: Stack(
-                            alignment: Alignment.bottomRight,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: Container(
-                                  height: 180,
-                                  width: double.infinity,
-                                  color: AppColors.cardSurfaceSecondary,
-                                  child: Image.network(
-                                    photoUrl!,
-                                    height: 180,
-                                    width: double.infinity,
-                                    fit: BoxFit.cover,
-                                    loadingBuilder: (_, child, progress) {
-                                      if (progress == null) return child;
-                                      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
-                                    },
-                                    errorBuilder: (_, _, _) => const Center(
-                                      child: Icon(Icons.broken_image_rounded, size: 40, color: Colors.grey),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                margin: const EdgeInsets.all(8),
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.65),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: const Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.zoom_in_rounded, size: 14, color: Colors.white),
-                                    SizedBox(width: 4),
-                                    Text('Tap to zoom', style: TextStyle(color: Colors.white, fontSize: 10)),
-                                  ],
+                              Text(vName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                              Text(
+                                isApproved
+                                    ? 'Entry Approved'
+                                    : (isDenied ? 'Entry Denied' : 'Visitor Gate Clearance'),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: isApproved || isDenied ? FontWeight.bold : FontWeight.normal,
+                                  color: isApproved
+                                      ? Colors.green
+                                      : (isDenied ? Colors.red : Colors.grey),
                                 ),
                               ),
                             ],
@@ -2277,139 +2096,326 @@ class NotificationsTab extends StatelessWidget {
                         ),
                       ],
                     ),
-                  ],
-                  const SizedBox(height: 16),
-                  _buildDialogRow('Purpose', vPurpose),
-                  if (phone != null && phone.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    _buildDialogRow('Phone', phone),
-                  ],
-                  if (vehicle != null && vehicle.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    _buildDialogRow('Vehicle', vehicle),
-                  ],
-                  const SizedBox(height: 8),
-                  _buildDialogRow('Gate & Guard', '$vGate • $guardName'),
-                  const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppColors.cardSurfaceSecondary,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      msg,
-                      style: const TextStyle(fontSize: 12, color: AppColors.textPrimary, height: 1.3),
-                    ),
-                  ),
-                  if (isActionLoading) ...[
                     const SizedBox(height: 16),
-                    const Center(
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                    if (isApproved)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.green.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.verified_rounded, color: Colors.green, size: 22),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'ENTRY APPROVED BY YOU',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Gate security has been notified that $vName is cleared to enter.',
+                                    style: TextStyle(fontSize: 11, color: Colors.green.shade900),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else if (isDenied)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.red.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.block_rounded, color: Colors.red, size: 22),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'ENTRY DENIED BY YOU',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Gate security has been instructed to turn $vName away.',
+                                    style: TextStyle(fontSize: 11, color: Colors.red.shade900),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.amber.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.security_rounded, color: Colors.brown, size: 22),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'CLEARANCE REQUIRED',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.brown),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Visitor waiting at $vGate • $timeStr',
+                                    style: TextStyle(fontSize: 11, color: Colors.brown.shade800),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (photoUrl != null && photoUrl!.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-                          SizedBox(width: 10),
-                          Text('Notifying gate security...', style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
+                          const Row(
+                            children: [
+                              Icon(Icons.camera_alt_outlined, size: 14, color: AppColors.primary),
+                              SizedBox(width: 6),
+                              Text('Visitor Photo (Gate Verification)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textSecondary)),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          GestureDetector(
+                            onTap: () {
+                              showDialog(
+                                context: context,
+                                builder: (_) => Dialog(
+                                  insetPadding: const EdgeInsets.all(16),
+                                  child: Stack(
+                                    children: [
+                                      InteractiveViewer(
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(12),
+                                          child: Image.network(
+                                            photoUrl!,
+                                            fit: BoxFit.contain,
+                                          ),
+                                        ),
+                                      ),
+                                      Positioned(
+                                        top: 8,
+                                        right: 8,
+                                        child: CircleAvatar(
+                                          backgroundColor: Colors.black54,
+                                          radius: 18,
+                                          child: IconButton(
+                                            icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white),
+                                            onPressed: () => Navigator.pop(context),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                            child: Stack(
+                              alignment: Alignment.bottomRight,
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Container(
+                                    height: 180,
+                                    width: double.infinity,
+                                    color: AppColors.cardSurfaceSecondary,
+                                    child: Image.network(
+                                      photoUrl!,
+                                      height: 180,
+                                      width: double.infinity,
+                                      fit: BoxFit.cover,
+                                      loadingBuilder: (_, child, progress) {
+                                        if (progress == null) return child;
+                                        return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+                                      },
+                                      errorBuilder: (_, _, _) => const Center(
+                                        child: Icon(Icons.broken_image_rounded, size: 40, color: Colors.grey),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                Container(
+                                  margin: const EdgeInsets.all(8),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.65),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.zoom_in_rounded, size: 14, color: Colors.white),
+                                      SizedBox(width: 4),
+                                      Text('Tap to zoom', style: TextStyle(color: Colors.white, fontSize: 10)),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
+                    ],
+                    const SizedBox(height: 16),
+                    _buildDialogRow('Purpose', vPurpose),
+                    if (phone != null && phone.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      _buildDialogRow('Phone', phone),
+                    ],
+                    if (vehicle != null && vehicle.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      _buildDialogRow('Vehicle', vehicle),
+                    ],
+                    const SizedBox(height: 8),
+                    _buildDialogRow('Gate & Guard', '$vGate • $guardName'),
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.cardSurfaceSecondary,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        msg,
+                        style: const TextStyle(fontSize: 12, color: AppColors.textPrimary, height: 1.3),
+                      ),
                     ),
+                    if (isActionLoading) ...[
+                      const SizedBox(height: 16),
+                      const Center(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                            SizedBox(width: 10),
+                            Text('Notifying gate security...', style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 20),
+                    if (isApproved || isDenied)
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Close'),
+                        ),
+                      )
+                    else
+                      Row(
+                        children: [
+                          TextButton(
+                            onPressed: isActionLoading ? null : () => Navigator.pop(ctx),
+                            child: const Text('Dismiss', style: TextStyle(color: Colors.grey)),
+                          ),
+                          const Spacer(),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red.shade700,
+                              side: BorderSide(color: Colors.red.shade400),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            ),
+                            icon: const Icon(Icons.cancel_outlined, size: 16),
+                            label: const Text('Deny Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                            onPressed: isActionLoading
+                                ? null
+                                : () async {
+                                    setDialogState(() => isActionLoading = true);
+                                    try {
+                                      final docId = await resolveVisitorDocId();
+                                      await VisitorPassService.denyVisitorEntry(
+                                        visitorDocId: docId,
+                                        flatNumber: flatNumber,
+                                        visitorName: vName,
+                                        notifDocId: notifDocId,
+                                      );
+                                      setDialogState(() {
+                                        currentApproval = 'DENIED';
+                                        isActionLoading = false;
+                                      });
+                                    } catch (e) {
+                                      setDialogState(() => isActionLoading = false);
+                                      if (context.mounted) {
+                                        AppFeedback.showError(context, 'Failed to deny entry: $e');
+                                      }
+                                    }
+                                  },
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green.shade600,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            ),
+                            icon: const Icon(Icons.check_circle_outline, size: 16),
+                            label: const Text('Approve Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                            onPressed: isActionLoading
+                                ? null
+                                : () async {
+                                    setDialogState(() => isActionLoading = true);
+                                    try {
+                                      final docId = await resolveVisitorDocId();
+                                      await VisitorPassService.approveVisitorEntry(
+                                        visitorDocId: docId,
+                                        flatNumber: flatNumber,
+                                        visitorName: vName,
+                                        notifDocId: notifDocId,
+                                      );
+                                      setDialogState(() {
+                                        currentApproval = 'APPROVED';
+                                        isActionLoading = false;
+                                      });
+                                    } catch (e) {
+                                      setDialogState(() => isActionLoading = false);
+                                      if (context.mounted) {
+                                        AppFeedback.showError(context, 'Failed to approve entry: $e');
+                                      }
+                                    }
+                                  },
+                          ),
+                        ],
+                      ),
                   ],
-                ],
+                ),
               ),
             ),
-            actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            actions: [
-              if (isApproved || isDenied) ...[
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Close'),
-                ),
-              ] else ...[
-                Row(
-                  children: [
-                    TextButton(
-                      onPressed: isActionLoading ? null : () => Navigator.pop(ctx),
-                      child: const Text('Dismiss', style: TextStyle(color: Colors.grey)),
-                    ),
-                    const Spacer(),
-                    OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.red.shade700,
-                        side: BorderSide(color: Colors.red.shade400),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      ),
-                      icon: const Icon(Icons.cancel_outlined, size: 16),
-                      label: const Text('Deny Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                      onPressed: isActionLoading
-                          ? null
-                          : () async {
-                              setDialogState(() => isActionLoading = true);
-                              try {
-                                final docId = await resolveVisitorDocId();
-                                await VisitorPassService.denyVisitorEntry(
-                                  visitorDocId: docId,
-                                  flatNumber: flatNumber,
-                                  visitorName: vName,
-                                  notifDocId: notifDocId,
-                                );
-                                setDialogState(() {
-                                  currentApproval = 'DENIED';
-                                  isActionLoading = false;
-                                });
-                              } catch (e) {
-                                setDialogState(() => isActionLoading = false);
-                                if (context.mounted) {
-                                  AppFeedback.showError(context, 'Failed to deny entry: $e');
-                                }
-                              }
-                            },
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green.shade600,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      ),
-                      icon: const Icon(Icons.check_circle_outline, size: 16),
-                      label: const Text('Approve Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                      onPressed: isActionLoading
-                          ? null
-                          : () async {
-                              setDialogState(() => isActionLoading = true);
-                              try {
-                                final docId = await resolveVisitorDocId();
-                                await VisitorPassService.approveVisitorEntry(
-                                  visitorDocId: docId,
-                                  flatNumber: flatNumber,
-                                  visitorName: vName,
-                                  notifDocId: notifDocId,
-                                );
-                                setDialogState(() {
-                                  currentApproval = 'APPROVED';
-                                  isActionLoading = false;
-                                });
-                              } catch (e) {
-                                setDialogState(() => isActionLoading = false);
-                                if (context.mounted) {
-                                  AppFeedback.showError(context, 'Failed to approve entry: $e');
-                                }
-                              }
-                            },
-                    ),
-                  ],
-                ),
-              ],
-            ],
           );
         },
       ),

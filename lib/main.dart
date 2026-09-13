@@ -10,6 +10,7 @@ import 'screens/admin/admin_dashboard.dart';
 import 'theme/app_theme.dart';
 import 'theme/app_colors.dart';
 import 'widgets/app_feedback.dart';
+import 'constants/app_flavor.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,17 +22,29 @@ void main() async {
     EmailAuthProvider(),
     PhoneAuthProvider(),
   ]);
+
+  AppFlavorConfig.initialize(AppFlavor.unified);
   
   runApp(const SocietyManagementApp());
 }
 
 class SocietyManagementApp extends StatelessWidget {
-  const SocietyManagementApp({super.key});
+  final AppFlavor? flavor;
+  const SocietyManagementApp({super.key, this.flavor});
 
   @override
   Widget build(BuildContext context) {
+    if (flavor != null && (!AppFlavorConfig.isInitialized || AppFlavorConfig.current.flavor != flavor)) {
+      AppFlavorConfig.initialize(flavor!);
+    } else if (!AppFlavorConfig.isInitialized) {
+      AppFlavorConfig.initialize(AppFlavor.unified);
+    }
+
+    final config = AppFlavorConfig.current;
+
     return MaterialApp(
-      title: 'Ramkrishnapuram RWA',
+      title: config.appTitle,
+      debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       home: const AuthWrapper(),
     );
@@ -234,12 +247,21 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
                           color: AppColors.primaryLight,
                           borderRadius: BorderRadius.circular(14),
                         ),
-                        child: const Icon(Icons.apartment_rounded, size: 40, color: AppColors.primary),
+                        child: Icon(
+                          AppFlavorConfig.current.flavor == AppFlavor.guard
+                              ? Icons.shield_rounded
+                              : (AppFlavorConfig.current.flavor == AppFlavor.admin
+                                  ? Icons.admin_panel_settings_rounded
+                                  : Icons.apartment_rounded),
+                          size: 40,
+                          color: AppColors.primary,
+                        ),
                       ),
                       const SizedBox(height: 16),
-                      const Text(
-                        'Ramkrishnapuram RWA',
-                        style: TextStyle(
+                      Text(
+                        AppFlavorConfig.current.appTitle,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w800,
                           color: AppColors.textPrimary,
@@ -247,10 +269,10 @@ class _CustomAuthScreenState extends State<CustomAuthScreen> {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      const Text(
-                        'Smart Society Management System',
+                      Text(
+                        AppFlavorConfig.current.appSubtitle,
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                        style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
                       ),
                       const SizedBox(height: 24),
                       if (_errorMessage != null) ...[
@@ -459,6 +481,54 @@ class _RoleRouterState extends State<RoleRouter> {
 
         final data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
         final role = data['role'] as String?;
+
+        // Role authorization check for current app flavor
+        if (!AppFlavorConfig.current.isRoleAllowed(role)) {
+          return Scaffold(
+            body: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Card(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.no_accounts_rounded, size: 54, color: Colors.amber),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Different App Required',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'You are logged in with role "$role", but this is the ${AppFlavorConfig.current.appTitle}.\n\nPlease launch the appropriate app target for your role, or log in with an authorized account.',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.4),
+                          ),
+                          const SizedBox(height: 24),
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.logout_rounded, size: 18),
+                            label: const Text('Sign Out'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            onPressed: () => FirebaseAuth.instance.signOut(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
 
         if (role == 'RESIDENT') return const ResidentDashboard();
         if (role == 'GUARD') return const GuardDashboard();
