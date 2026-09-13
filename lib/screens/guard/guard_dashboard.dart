@@ -423,6 +423,265 @@ class _GuardDashboardState extends State<GuardDashboard> {
     );
   }
 
+  // ─── Society Notices Modal ────────────────────────────────────────────────
+
+  void _showNoticesModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        builder: (_, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.campaign_rounded, color: AppColors.primary, size: 24),
+                    const SizedBox(width: 10),
+                    const Text('Society Announcements & Circulars', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                    const Spacer(),
+                    IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.pop(ctx)),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance.collection('announcements').orderBy('createdAt', descending: true).snapshots(),
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final docs = snap.data?.docs ?? [];
+                    if (docs.isEmpty) {
+                      return const Center(child: Text('No announcements posted yet.', style: TextStyle(color: Colors.grey)));
+                    }
+                    return ListView.separated(
+                      controller: scrollController,
+                      padding: const EdgeInsets.all(16),
+                      itemCount: docs.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
+                      itemBuilder: (context, idx) {
+                        final data = docs[idx].data() as Map<String, dynamic>;
+                        final title = data['title']?.toString() ?? 'Notice';
+                        final msg = data['message']?.toString() ?? '';
+                        final priority = data['priority']?.toString() ?? 'NORMAL';
+                        final isPinned = data['isPinned'] == true;
+                        final ts = (data['createdAt'] as Timestamp?)?.toDate();
+                        final timeStr = ts != null ? DateFormat('dd MMM yyyy, hh:mm a').format(ts) : '';
+
+                        return Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: isPinned ? Colors.amber.shade50 : AppColors.cardSurfaceSecondary,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: isPinned ? Colors.amber.shade300 : AppColors.border),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  if (isPinned) ...[
+                                    const Icon(Icons.push_pin_rounded, size: 14, color: Colors.amber),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  Expanded(
+                                    child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary)),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: priority == 'HIGH' ? Colors.red.shade100 : Colors.teal.shade50,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      priority,
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                        color: priority == 'HIGH' ? Colors.red.shade900 : Colors.teal.shade800,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (timeStr.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                              ],
+                              const SizedBox(height: 8),
+                              Text(msg, style: const TextStyle(fontSize: 13, height: 1.4, color: AppColors.textPrimary)),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Gate Security Alerts Modal ───────────────────────────────────────────
+
+  void _showGuardAlertsModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        builder: (_, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.notifications_active_rounded, color: AppColors.primary, size: 24),
+                    const SizedBox(width: 10),
+                    const Text('Gate Security & Clearance Alerts', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                    const Spacer(),
+                    IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.pop(ctx)),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('notifications')
+                      .where('targetRole', isEqualTo: 'GUARD')
+                      .snapshots(),
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final docs = snap.data?.docs ?? [];
+                    if (docs.isEmpty) {
+                      return const Center(
+                        child: Text('No gate clearance alerts yet.', style: TextStyle(color: Colors.grey)),
+                      );
+                    }
+                    final sortedDocs = docs.toList()
+                      ..sort((a, b) {
+                        final aD = a.data() as Map<String, dynamic>;
+                        final bD = b.data() as Map<String, dynamic>;
+                        final aT = (aD['createdAt'] as Timestamp?)?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+                        final bT = (bD['createdAt'] as Timestamp?)?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+                        return bT.compareTo(aT);
+                      });
+
+                    return ListView.separated(
+                      controller: scrollController,
+                      padding: const EdgeInsets.all(16),
+                      itemCount: sortedDocs.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, idx) {
+                        final data = sortedDocs[idx].data() as Map<String, dynamic>;
+                        final title = data['title']?.toString() ?? 'Alert';
+                        final msg = data['message']?.toString() ?? '';
+                        final isDenied = title.contains('DENIED');
+                        final isApproved = title.contains('Approved');
+                        final ts = (data['createdAt'] as Timestamp?)?.toDate();
+                        final timeStr = ts != null ? DateFormat('hh:mm a, dd MMM').format(ts) : 'Just now';
+
+                        return Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isDenied
+                                ? Colors.red.shade50
+                                : (isApproved ? Colors.green.shade50 : AppColors.cardSurfaceSecondary),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: isDenied
+                                  ? Colors.red.shade300
+                                  : (isApproved ? Colors.green.shade300 : AppColors.border),
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                isDenied
+                                    ? Icons.cancel_rounded
+                                    : (isApproved ? Icons.check_circle_rounded : Icons.info_rounded),
+                                color: isDenied ? Colors.red : (isApproved ? Colors.green : AppColors.primary),
+                                size: 22,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            title,
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 13,
+                                              color: isDenied ? Colors.red.shade900 : (isApproved ? Colors.green.shade900 : AppColors.textPrimary),
+                                            ),
+                                          ),
+                                        ),
+                                        Text(timeStr, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(msg, style: const TextStyle(fontSize: 12, height: 1.3, color: AppColors.textPrimary)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ─── Main Build ────────────────────────────────────────────────────────────
 
   @override
@@ -519,6 +778,41 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     ],
                   ),
                 ),
+              ),
+              // Society Announcements Button
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance.collection('announcements').snapshots(),
+                builder: (context, notifSnap) {
+                  final count = notifSnap.data?.docs.length ?? 0;
+                  return IconButton(
+                    icon: Badge(
+                      isLabelVisible: count > 0,
+                      label: Text('$count', style: const TextStyle(fontSize: 9)),
+                      child: const Icon(Icons.campaign_rounded, size: 20, color: Colors.white),
+                    ),
+                    tooltip: 'Society Notices',
+                    onPressed: () => _showNoticesModal(context),
+                  );
+                },
+              ),
+              // Security Alerts Bell with unread badge
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('notifications')
+                    .where('targetRole', isEqualTo: 'GUARD')
+                    .snapshots(),
+                builder: (context, alertSnap) {
+                  final unreadCount = alertSnap.data?.docs.where((d) => (d.data() as Map)['isRead'] != true).length ?? 0;
+                  return IconButton(
+                    icon: Badge(
+                      isLabelVisible: unreadCount > 0,
+                      label: Text('$unreadCount', style: const TextStyle(fontSize: 9)),
+                      child: const Icon(Icons.notifications_rounded, size: 20, color: Colors.white),
+                    ),
+                    tooltip: 'Security & Clearance Alerts',
+                    onPressed: () => _showGuardAlertsModal(context),
+                  );
+                },
               ),
               // Emergency SOS Button
               IconButton(
@@ -1302,6 +1596,44 @@ class _GuardDashboardState extends State<GuardDashboard> {
         ),
         const Divider(height: 1, color: AppColors.border),
 
+        // Emergency & Society Helplines Quick Dial
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.red.shade50,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.red.shade200),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.phone_in_talk_rounded, color: Colors.red.shade800, size: 16),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Emergency Helplines & Intercom',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.red.shade900),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  _buildHelplineChip('Police: 112', '112'),
+                  _buildHelplineChip('Fire: 101', '101'),
+                  _buildHelplineChip('Ambulance: 108', '108'),
+                  _buildHelplineChip('Lift Helpline', '1800120120'),
+                  _buildHelplineChip('Estate Office', '9876543210'),
+                ],
+              ),
+            ],
+          ),
+        ),
+
         // Stream of Flats / Users
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
@@ -1388,6 +1720,22 @@ class _GuardDashboardState extends State<GuardDashboard> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildHelplineChip(String label, String phone) {
+    return ActionChip(
+      avatar: const Icon(Icons.call_rounded, size: 13, color: AppColors.primary),
+      label: Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+      backgroundColor: Colors.white,
+      side: const BorderSide(color: AppColors.border),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      onPressed: () async {
+        final uri = Uri.parse('tel:$phone');
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri);
+        }
+      },
     );
   }
 
