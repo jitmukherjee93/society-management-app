@@ -498,8 +498,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   children: [
                     const Icon(Icons.campaign_rounded, color: AppColors.primary, size: 24),
                     const SizedBox(width: 10),
-                    const Text('Society Announcements & Circulars', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                    const Spacer(),
+                    const Expanded(
+                      child: Text(
+                        'Society Announcements & Circulars',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                     IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.pop(ctx)),
                   ],
                 ),
@@ -617,8 +622,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   children: [
                     const Icon(Icons.notifications_active_rounded, color: AppColors.primary, size: 24),
                     const SizedBox(width: 10),
-                    const Text('Gate Security & Clearance Alerts', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                    const Spacer(),
+                    const Expanded(
+                      child: Text(
+                        'Gate Security & Clearance Alerts',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                     IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.pop(ctx)),
                   ],
                 ),
@@ -794,8 +804,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 },
                 borderRadius: BorderRadius.circular(16),
                 child: Container(
-                  margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: isOnDuty ? AppColors.success : AppColors.cardSurfaceSecondary,
                     borderRadius: BorderRadius.circular(16),
@@ -804,18 +814,18 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        width: 8,
-                        height: 8,
+                        width: 7,
+                        height: 7,
                         decoration: BoxDecoration(
                           color: isOnDuty ? Colors.white : AppColors.textMuted,
                           shape: BoxShape.circle,
                         ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 4),
                       Text(
-                        isOnDuty ? 'ON DUTY' : 'OFF DUTY',
+                        isOnDuty ? 'ON DUTY' : 'OFF',
                         style: TextStyle(
-                          fontSize: 11,
+                          fontSize: 10,
                           fontWeight: FontWeight.bold,
                           color: isOnDuty ? Colors.white : AppColors.textSecondary,
                         ),
@@ -823,22 +833,6 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     ],
                   ),
                 ),
-              ),
-              // Society Announcements Button
-              StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance.collection('announcements').snapshots(),
-                builder: (context, notifSnap) {
-                  final count = notifSnap.data?.docs.length ?? 0;
-                  return IconButton(
-                    icon: Badge(
-                      isLabelVisible: count > 0,
-                      label: Text('$count', style: const TextStyle(fontSize: 9)),
-                      child: const Icon(Icons.campaign_rounded, size: 20, color: Colors.white),
-                    ),
-                    tooltip: 'Society Notices',
-                    onPressed: () => _showNoticesModal(context),
-                  );
-                },
               ),
               // Security Alerts Bell with unread badge
               StreamBuilder<QuerySnapshot>(
@@ -849,20 +843,24 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 builder: (context, alertSnap) {
                   final unreadCount = alertSnap.data?.docs.where((d) => (d.data() as Map)['isRead'] != true).length ?? 0;
                   return IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                     icon: Badge(
                       isLabelVisible: unreadCount > 0,
-                      label: Text('$unreadCount', style: const TextStyle(fontSize: 9)),
-                      child: const Icon(Icons.notifications_rounded, size: 20, color: Colors.white),
+                      label: Text('$unreadCount', style: const TextStyle(fontSize: 8)),
+                      child: const Icon(Icons.notifications_rounded, size: 19, color: Colors.white),
                     ),
-                    tooltip: 'Security & Clearance Alerts',
+                    tooltip: 'Security Alerts',
                     onPressed: () => _showGuardAlertsModal(context),
                   );
                 },
               ),
               // Emergency SOS Button
               IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 icon: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                   decoration: BoxDecoration(
                     color: AppColors.error,
                     borderRadius: BorderRadius.circular(6),
@@ -870,19 +868,50 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.warning_amber_rounded, size: 14, color: Colors.white),
-                      SizedBox(width: 4),
-                      Text('SOS', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                      Icon(Icons.warning_amber_rounded, size: 12, color: Colors.white),
+                      SizedBox(width: 2),
+                      Text('SOS', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ),
                 tooltip: 'Emergency SOS Alert',
                 onPressed: () => _showEmergencyDialog(guardName, gateName),
               ),
-              IconButton(
-                icon: const Icon(Icons.logout_rounded, size: 20, color: Colors.white),
-                tooltip: 'Log out',
-                onPressed: () => FirebaseAuth.instance.signOut(),
+              // Overflow Menu for Notices & Logout
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert_rounded, size: 20, color: Colors.white),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                tooltip: 'More actions',
+                onSelected: (value) {
+                  if (value == 'notices') {
+                    _showNoticesModal(context);
+                  } else if (value == 'logout') {
+                    FirebaseAuth.instance.signOut();
+                  }
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'notices',
+                    child: Row(
+                      children: [
+                        Icon(Icons.campaign_rounded, size: 18, color: AppColors.textPrimary),
+                        SizedBox(width: 8),
+                        Text('Society Notices', style: TextStyle(fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'logout',
+                    child: Row(
+                      children: [
+                        Icon(Icons.logout_rounded, size: 18, color: AppColors.error),
+                        SizedBox(width: 8),
+                        Text('Log out', style: TextStyle(fontSize: 13, color: AppColors.error)),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

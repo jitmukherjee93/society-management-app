@@ -12,7 +12,12 @@
           "package_name": "com.society.society_management"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "202094225926-0mi39nr0nbisephs1l5jjopc17jeh590.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyDmFGRGQlbmFBtKRIev8XsrgYsBGTgSI_U"
@@ -20,7 +25,127 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "202094225926-0mi39nr0nbisephs1l5jjopc17jeh590.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "202094225926-tqmqm84ornerp38gqo2i6ff6sig6nku8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.society.societyManagement"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:202094225926:android:fa67cc0af55c87c714b187",
+        "android_client_info": {
+          "package_name": "com.society.society_management.admin"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "202094225926-0mi39nr0nbisephs1l5jjopc17jeh590.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDmFGRGQlbmFBtKRIev8XsrgYsBGTgSI_U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "202094225926-0mi39nr0nbisephs1l5jjopc17jeh590.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "202094225926-tqmqm84ornerp38gqo2i6ff6sig6nku8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.society.societyManagement"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:202094225926:android:49de71832dd1d13e14b187",
+        "android_client_info": {
+          "package_name": "com.society.society_management.guard"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "202094225926-0mi39nr0nbisephs1l5jjopc17jeh590.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDmFGRGQlbmFBtKRIev8XsrgYsBGTgSI_U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "202094225926-0mi39nr0nbisephs1l5jjopc17jeh590.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "202094225926-tqmqm84ornerp38gqo2i6ff6sig6nku8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.society.societyManagement"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:202094225926:android:f45eff1efac81c7a14b187",
+        "android_client_info": {
+          "package_name": "com.society.society_management.resident"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "202094225926-0mi39nr0nbisephs1l5jjopc17jeh590.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDmFGRGQlbmFBtKRIev8XsrgYsBGTgSI_U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "202094225926-0mi39nr0nbisephs1l5jjopc17jeh590.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "202094225926-tqmqm84ornerp38gqo2i6ff6sig6nku8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.society.societyManagement"
+              }
+            }
+          ]
         }
       }
     }
