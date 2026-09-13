@@ -1989,6 +1989,8 @@ class NotificationsTab extends StatelessWidget {
     final guardName = notif['guardName']?.toString() ?? 'Security Guard';
     final phone = notif['phone']?.toString();
     final vehicle = notif['vehicleNumber']?.toString();
+    final deliveryApp = notif['deliveryApp']?.toString() ??
+        (notif['extraData'] is Map ? (notif['extraData'] as Map)['deliveryApp']?.toString() : null);
     final flatNumber = notif['flatNumber']?.toString() ?? userFlat ?? fullFlat ?? '';
     final createdAt = (notif['createdAt'] as Timestamp?)?.toDate();
     final timeStr = createdAt != null ? DateFormat('hh:mm a, dd MMM yyyy').format(createdAt) : 'Just now';
@@ -2285,6 +2287,10 @@ class NotificationsTab extends StatelessWidget {
                     ],
                     const SizedBox(height: 16),
                     _buildDialogRow('Purpose', vPurpose),
+                    if (deliveryApp != null && deliveryApp.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      _buildDialogRow('Delivery App', deliveryApp),
+                    ],
                     if (phone != null && phone.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       _buildDialogRow('Phone', phone),

@@ -99,6 +99,7 @@ class VisitorPassService {
     required String phone,
     required String flatNumber,
     required String purpose,
+    String? deliveryApp,
     String? vehicleNumber,
     String? photoUrl,
     required String guardUid,
@@ -113,6 +114,7 @@ class VisitorPassService {
       'flatNumber': normFlat,
       'hostFlatNumber': normFlat,
       'purpose': purpose,
+      'deliveryApp': deliveryApp?.trim(),
       'vehicleNumber': vehicleNumber?.trim().toUpperCase() ?? '',
       'photoUrl': photoUrl,
       'status': 'CHECKED_IN',
@@ -125,17 +127,20 @@ class VisitorPassService {
       'gateName': gateName ?? 'Main Gate',
     });
 
+    final deliveryPrefix = (deliveryApp != null && deliveryApp.isNotEmpty) ? '[$deliveryApp] ' : '';
+
     // Notify resident of the visiting flat
     await NotificationService.notifyResident(
       flatNumber: normFlat,
-      title: 'Visitor At Gate: ${visitorName.trim()}',
-      message: '${visitorName.trim()} ($purpose) has checked in at ${gateName ?? 'Security Gate'}.',
+      title: 'Visitor At Gate: $deliveryPrefix${visitorName.trim()}',
+      message: '$deliveryPrefix${visitorName.trim()} ($purpose) has checked in at ${gateName ?? 'Security Gate'}.',
       type: 'VISITOR_CHECK_IN',
       extraData: {
         'visitorDocId': docRef.id,
         'visitorName': visitorName.trim(),
         'phone': phone.trim(),
         'purpose': purpose,
+        'deliveryApp': deliveryApp?.trim(),
         'photoUrl': photoUrl,
         'gateName': gateName ?? 'Security Gate',
         'guardName': guardName ?? 'Security Guard',

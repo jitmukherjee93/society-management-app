@@ -32,7 +32,9 @@ class _GuardDashboardState extends State<GuardDashboard> {
   final _walkInPhoneCtrl = TextEditingController();
   final _walkInFlatCtrl = TextEditingController();
   final _walkInVehicleCtrl = TextEditingController();
-  String _walkInPurpose = 'Guest / Personal';
+  String _walkInPurpose = 'Delivery / Courier';
+  String _deliveryApp = 'Blinkit';
+  final _customDeliveryAppCtrl = TextEditingController();
   bool _isLoggingWalkIn = false;
   Uint8List? _walkInPhotoBytes;
   String? _walkInPhotoName;
@@ -89,6 +91,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
     _walkInPhoneCtrl.dispose();
     _walkInFlatCtrl.dispose();
     _walkInVehicleCtrl.dispose();
+    _customDeliveryAppCtrl.dispose();
     _campusSearchCtrl.dispose();
     _parcelFlatCtrl.dispose();
     _parcelCountCtrl.dispose();
@@ -175,9 +178,11 @@ class _GuardDashboardState extends State<GuardDashboard> {
     final name = _walkInNameCtrl.text.trim();
     final phone = _walkInPhoneCtrl.text.trim();
     final flat = _walkInFlatCtrl.text.trim();
+    final vehicle = _walkInVehicleCtrl.text.trim();
+    final isDelivery = _walkInPurpose == 'Delivery / Courier';
 
     if (name.isEmpty) {
-      AppFeedback.showError(context, 'Please enter visitor name.');
+      AppFeedback.showError(context, 'Please enter visitor full name.');
       return;
     }
     if (phone.length < 10) {
@@ -187,6 +192,26 @@ class _GuardDashboardState extends State<GuardDashboard> {
     if (flat.isEmpty) {
       AppFeedback.showError(context, 'Please enter or select visiting flat number.');
       return;
+    }
+
+    String? effectiveDeliveryApp;
+    if (isDelivery) {
+      effectiveDeliveryApp = _deliveryApp == 'Other Delivery'
+          ? _customDeliveryAppCtrl.text.trim()
+          : _deliveryApp;
+
+      if (effectiveDeliveryApp.isEmpty) {
+        AppFeedback.showError(context, 'Please specify the delivery app name.');
+        return;
+      }
+      if (vehicle.isEmpty) {
+        AppFeedback.showError(context, 'Vehicle number is mandatory for delivery personnel.');
+        return;
+      }
+      if (_walkInPhotoBytes == null) {
+        AppFeedback.showError(context, 'Visitor photo is mandatory for delivery personnel. Please take a photo.');
+        return;
+      }
     }
 
     setState(() => _isLoggingWalkIn = true);
@@ -206,7 +231,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
         phone: phone,
         flatNumber: flat,
         purpose: _walkInPurpose,
-        vehicleNumber: _walkInVehicleCtrl.text,
+        deliveryApp: isDelivery ? effectiveDeliveryApp : null,
+        vehicleNumber: vehicle,
         photoUrl: uploadedPhotoUrl,
         guardUid: _currentGuardUid,
         guardName: guardName,
@@ -214,11 +240,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
       );
 
       if (mounted) {
-        AppFeedback.showSuccess(context, 'Walk-in visitor $name checked in at $flat.');
+        final label = isDelivery && effectiveDeliveryApp != null ? '$name ($effectiveDeliveryApp)' : name;
+        AppFeedback.showSuccess(context, 'Walk-in visitor $label checked in at $flat.');
         _walkInNameCtrl.clear();
         _walkInPhoneCtrl.clear();
         _walkInFlatCtrl.clear();
         _walkInVehicleCtrl.clear();
+        _customDeliveryAppCtrl.clear();
         _walkInPhotoBytes = null;
         _walkInPhotoName = null;
         setState(() => _currentTab = 2); // Switch to In-Campus view
@@ -1164,40 +1192,77 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 ),
                 const SizedBox(height: 14),
 
-                // Purpose Selection Chips
-                const Text('Purpose of Visit *', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    'Delivery / Courier',
-                    'Cab / Taxi',
-                    'Guest / Personal',
-                    'Maid / Domestic',
-                    'Maintenance / Repair',
-                    'Other',
-                  ].map((p) {
-                    final isSel = _walkInPurpose == p;
-                    return ChoiceChip(
-                      label: Text(p, style: TextStyle(fontSize: 11, fontWeight: isSel ? FontWeight.bold : FontWeight.normal)),
-                      selected: isSel,
-                      selectedColor: AppColors.primaryLight,
-                      onSelected: (val) {
-                        if (val) setState(() => _walkInPurpose = p);
-                      },
-                    );
-                  }).toList(),
+                // Purpose Selection Dropdown
+                DropdownButtonFormField<String>(
+                  initialValue: _walkInPurpose,
+                  decoration: const InputDecoration(
+                    labelText: 'Purpose of Visit *',
+                    prefixIcon: Icon(Icons.assignment_outlined),
+                    isDense: true,
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'Delivery / Courier', child: Text('Delivery / Courier')),
+                    DropdownMenuItem(value: 'Guest / Personal', child: Text('Guest / Personal')),
+                    DropdownMenuItem(value: 'Cab / Taxi', child: Text('Cab / Taxi')),
+                    DropdownMenuItem(value: 'Maid / Domestic Helper', child: Text('Maid / Domestic Helper')),
+                    DropdownMenuItem(value: 'Maintenance / Repair', child: Text('Maintenance / Repair')),
+                    DropdownMenuItem(value: 'Other', child: Text('Other')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) setState(() => _walkInPurpose = val);
+                  },
                 ),
                 const SizedBox(height: 14),
+
+                // Delivery App Selection (Mandatory for Delivery / Courier)
+                if (_walkInPurpose == 'Delivery / Courier') ...[
+                  DropdownButtonFormField<String>(
+                    initialValue: _deliveryApp,
+                    decoration: const InputDecoration(
+                      labelText: 'Delivery App / Company *',
+                      prefixIcon: Icon(Icons.local_shipping_outlined),
+                      isDense: true,
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'Blinkit', child: Text('Blinkit')),
+                      DropdownMenuItem(value: 'Swiggy / Instamart', child: Text('Swiggy / Instamart')),
+                      DropdownMenuItem(value: 'Zomato', child: Text('Zomato')),
+                      DropdownMenuItem(value: 'Zepto', child: Text('Zepto')),
+                      DropdownMenuItem(value: 'Amazon', child: Text('Amazon')),
+                      DropdownMenuItem(value: 'Flipkart', child: Text('Flipkart')),
+                      DropdownMenuItem(value: 'BigBasket', child: Text('BigBasket')),
+                      DropdownMenuItem(value: 'Blue Dart / Courier', child: Text('Blue Dart / Courier')),
+                      DropdownMenuItem(value: 'India Post', child: Text('India Post')),
+                      DropdownMenuItem(value: 'Other Delivery', child: Text('Other Delivery (Custom)')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) setState(() => _deliveryApp = val);
+                    },
+                  ),
+                  if (_deliveryApp == 'Other Delivery') ...[
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: _customDeliveryAppCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Enter App / Courier Name *',
+                        hintText: 'e.g. DTDC, Dunzo, Shadowfax',
+                        prefixIcon: Icon(Icons.storefront_outlined),
+                        isDense: true,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                ],
 
                 // Vehicle Number
                 TextFormField(
                   controller: _walkInVehicleCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Vehicle Number (Optional)',
+                  decoration: InputDecoration(
+                    labelText: _walkInPurpose == 'Delivery / Courier'
+                        ? 'Vehicle Number (Mandatory) *'
+                        : 'Vehicle Number (Optional)',
                     hintText: 'e.g. DL 01 AB 1234',
-                    prefixIcon: Icon(Icons.directions_car_outlined),
+                    prefixIcon: const Icon(Icons.directions_car_outlined),
                     isDense: true,
                   ),
                 ),
@@ -1207,10 +1272,14 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: _walkInPhotoBytes != null ? Colors.green.shade50 : AppColors.cardSurfaceSecondary,
+                    color: _walkInPhotoBytes != null
+                        ? Colors.green.shade50
+                        : (_walkInPurpose == 'Delivery / Courier' ? Colors.amber.shade50 : AppColors.cardSurfaceSecondary),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: _walkInPhotoBytes != null ? Colors.green.shade300 : AppColors.border,
+                      color: _walkInPhotoBytes != null
+                          ? Colors.green.shade300
+                          : (_walkInPurpose == 'Delivery / Courier' ? Colors.amber.shade400 : AppColors.border),
                     ),
                   ),
                   child: Column(
@@ -1219,17 +1288,27 @@ class _GuardDashboardState extends State<GuardDashboard> {
                       Row(
                         children: [
                           Icon(
-                            _walkInPhotoBytes != null ? Icons.check_circle_rounded : Icons.camera_alt_rounded,
+                            _walkInPhotoBytes != null
+                                ? Icons.check_circle_rounded
+                                : (_walkInPurpose == 'Delivery / Courier' ? Icons.camera_alt_rounded : Icons.camera_alt_outlined),
                             size: 18,
-                            color: _walkInPhotoBytes != null ? Colors.green : AppColors.primary,
+                            color: _walkInPhotoBytes != null
+                                ? Colors.green
+                                : (_walkInPurpose == 'Delivery / Courier' ? Colors.amber.shade800 : AppColors.primary),
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            _walkInPhotoBytes != null ? 'Visitor Photo Captured' : 'Visitor Photo (Recommended)',
+                            _walkInPhotoBytes != null
+                                ? 'Visitor Photo Captured'
+                                : (_walkInPurpose == 'Delivery / Courier'
+                                    ? 'Visitor Photo (Mandatory) *'
+                                    : 'Visitor Photo (Recommended)'),
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.bold,
-                              color: _walkInPhotoBytes != null ? Colors.green.shade900 : AppColors.textPrimary,
+                              color: _walkInPhotoBytes != null
+                                  ? Colors.green.shade900
+                                  : (_walkInPurpose == 'Delivery / Courier' ? Colors.amber.shade900 : AppColors.textPrimary),
                             ),
                           ),
                         ],
@@ -1238,8 +1317,15 @@ class _GuardDashboardState extends State<GuardDashboard> {
                       Text(
                         _walkInPhotoBytes != null
                             ? 'Photo will be sent with resident approval alert.'
-                            : 'Capture visitor face photo for gate pass and resident clearance.',
-                        style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+                            : (_walkInPurpose == 'Delivery / Courier'
+                                ? 'Mandatory: Guard must take photo of delivery personnel for resident security clearance.'
+                                : 'Capture visitor face photo for gate pass and resident clearance.'),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: _walkInPurpose == 'Delivery / Courier' && _walkInPhotoBytes == null
+                              ? Colors.amber.shade900
+                              : AppColors.textMuted,
+                        ),
                       ),
                       const SizedBox(height: 10),
                       if (_walkInPhotoBytes != null) ...[
