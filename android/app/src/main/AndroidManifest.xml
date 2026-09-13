@@ -6,6 +6,8 @@
     <!-- File picker: read images/videos from gallery (Android 13+) -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <!-- Camera access for guard visitor photo verification -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <!-- File picker: read external storage (Android 12 and below) -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <application

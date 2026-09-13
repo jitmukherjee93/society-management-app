@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/visitor_pass_service.dart';
@@ -33,6 +34,38 @@ class _GuardDashboardState extends State<GuardDashboard> {
   final _walkInVehicleCtrl = TextEditingController();
   String _walkInPurpose = 'Guest / Personal';
   bool _isLoggingWalkIn = false;
+  Uint8List? _walkInPhotoBytes;
+  String? _walkInPhotoName;
+  final ImagePicker _imagePicker = ImagePicker();
+
+  Future<void> _pickWalkInPhoto(ImageSource source) async {
+    try {
+      final XFile? file = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 900,
+        maxHeight: 900,
+        imageQuality: 75,
+      );
+      if (file != null) {
+        final bytes = await file.readAsBytes();
+        setState(() {
+          _walkInPhotoBytes = bytes;
+          _walkInPhotoName = file.name;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        AppFeedback.showError(context, 'Could not access camera/photo: $e');
+      }
+    }
+  }
+
+  void _removeWalkInPhoto() {
+    setState(() {
+      _walkInPhotoBytes = null;
+      _walkInPhotoName = null;
+    });
+  }
 
   // Campus search
   String _campusSearchQuery = '';
@@ -159,12 +192,22 @@ class _GuardDashboardState extends State<GuardDashboard> {
     setState(() => _isLoggingWalkIn = true);
 
     try {
+      String? uploadedPhotoUrl;
+      if (_walkInPhotoBytes != null) {
+        uploadedPhotoUrl = await VisitorPassService.uploadVisitorPhoto(
+          bytes: _walkInPhotoBytes!,
+          guardUid: _currentGuardUid,
+          fileName: _walkInPhotoName,
+        );
+      }
+
       await VisitorPassService.logWalkInVisitor(
         visitorName: name,
         phone: phone,
         flatNumber: flat,
         purpose: _walkInPurpose,
         vehicleNumber: _walkInVehicleCtrl.text,
+        photoUrl: uploadedPhotoUrl,
         guardUid: _currentGuardUid,
         guardName: guardName,
         gateName: gateName,
@@ -176,6 +219,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
         _walkInPhoneCtrl.clear();
         _walkInFlatCtrl.clear();
         _walkInVehicleCtrl.clear();
+        _walkInPhotoBytes = null;
+        _walkInPhotoName = null;
         setState(() => _currentTab = 2); // Switch to In-Campus view
       }
     } catch (e) {
@@ -1127,6 +1172,120 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     isDense: true,
                   ),
                 ),
+                const SizedBox(height: 18),
+
+                // Visitor Photo Capture Section
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _walkInPhotoBytes != null ? Colors.green.shade50 : AppColors.cardSurfaceSecondary,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: _walkInPhotoBytes != null ? Colors.green.shade300 : AppColors.border,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            _walkInPhotoBytes != null ? Icons.check_circle_rounded : Icons.camera_alt_rounded,
+                            size: 18,
+                            color: _walkInPhotoBytes != null ? Colors.green : AppColors.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _walkInPhotoBytes != null ? 'Visitor Photo Captured' : 'Visitor Photo (Recommended)',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: _walkInPhotoBytes != null ? Colors.green.shade900 : AppColors.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _walkInPhotoBytes != null
+                            ? 'Photo will be sent with resident approval alert.'
+                            : 'Capture visitor face photo for gate pass and resident clearance.',
+                        style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+                      ),
+                      const SizedBox(height: 10),
+                      if (_walkInPhotoBytes != null) ...[
+                        Row(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.memory(
+                                _walkInPhotoBytes!,
+                                width: 72,
+                                height: 72,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      side: const BorderSide(color: AppColors.primary),
+                                    ),
+                                    icon: const Icon(Icons.refresh_rounded, size: 14),
+                                    label: const Text('Retake Photo', style: TextStyle(fontSize: 11)),
+                                    onPressed: () => _pickWalkInPhoto(ImageSource.camera),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  TextButton.icon(
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: AppColors.error,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    ),
+                                    icon: const Icon(Icons.delete_outline_rounded, size: 14),
+                                    label: const Text('Remove Photo', style: TextStyle(fontSize: 11)),
+                                    onPressed: _removeWalkInPhoto,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ] else ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primaryDark,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                icon: const Icon(Icons.camera_alt_rounded, size: 16),
+                                label: const Text('Take Photo', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                onPressed: () => _pickWalkInPhoto(ImageSource.camera),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              icon: const Icon(Icons.photo_library_outlined, size: 16),
+                              label: const Text('Gallery', style: TextStyle(fontSize: 12)),
+                              onPressed: () => _pickWalkInPhoto(ImageSource.gallery),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 24),
 
                 // Submit Button
@@ -1257,6 +1416,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     }
                   }
 
+                  final photoUrl = data['photoUrl']?.toString();
+
                   return Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -1266,11 +1427,27 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     ),
                     child: Row(
                       children: [
-                        CircleAvatar(
-                          radius: 20,
-                          backgroundColor: AppColors.primaryLight,
-                          child: const Icon(Icons.person_rounded, color: AppColors.primary, size: 20),
-                        ),
+                        if (photoUrl != null && photoUrl.isNotEmpty)
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(20),
+                            child: Image.network(
+                              photoUrl,
+                              width: 44,
+                              height: 44,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => CircleAvatar(
+                                radius: 22,
+                                backgroundColor: AppColors.primaryLight,
+                                child: const Icon(Icons.person_rounded, color: AppColors.primary, size: 20),
+                              ),
+                            ),
+                          )
+                        else
+                          CircleAvatar(
+                            radius: 20,
+                            backgroundColor: AppColors.primaryLight,
+                            child: const Icon(Icons.person_rounded, color: AppColors.primary, size: 20),
+                          ),
                         const SizedBox(width: 14),
                         Expanded(
                           child: Column(

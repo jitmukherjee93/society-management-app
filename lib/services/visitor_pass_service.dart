@@ -1,5 +1,7 @@
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import '../utils/flat_utils.dart';
 import 'notification_service.dart';
 
@@ -72,6 +74,25 @@ class VisitorPassService {
     });
   }
 
+  /// Uploads a visitor photo to Firebase Storage and returns the public download URL
+  static Future<String> uploadVisitorPhoto({
+    required Uint8List bytes,
+    required String guardUid,
+    String? fileName,
+  }) async {
+    final name = fileName ?? 'visitor_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final ref = FirebaseStorage.instance
+        .ref()
+        .child('visitors')
+        .child('${DateTime.now().millisecondsSinceEpoch}_${guardUid.substring(0, min(8, guardUid.length))}_$name');
+    final metadata = SettableMetadata(
+      contentType: 'image/jpeg',
+      customMetadata: {'uploadedBy': guardUid},
+    );
+    final task = await ref.putData(bytes, metadata);
+    return await task.ref.getDownloadURL();
+  }
+
   /// Logs a walk-in / unscheduled visitor directly by the guard
   static Future<String> logWalkInVisitor({
     required String visitorName,
@@ -79,6 +100,7 @@ class VisitorPassService {
     required String flatNumber,
     required String purpose,
     String? vehicleNumber,
+    String? photoUrl,
     required String guardUid,
     String? guardName,
     String? gateName,
@@ -92,6 +114,7 @@ class VisitorPassService {
       'hostFlatNumber': normFlat,
       'purpose': purpose,
       'vehicleNumber': vehicleNumber?.trim().toUpperCase() ?? '',
+      'photoUrl': photoUrl,
       'status': 'CHECKED_IN',
       'approvalStatus': 'PENDING',
       'isWalkIn': true,
@@ -113,6 +136,7 @@ class VisitorPassService {
         'visitorName': visitorName.trim(),
         'phone': phone.trim(),
         'purpose': purpose,
+        'photoUrl': photoUrl,
         'gateName': gateName ?? 'Security Gate',
         'guardName': guardName ?? 'Security Guard',
         'vehicleNumber': vehicleNumber?.trim().toUpperCase() ?? '',

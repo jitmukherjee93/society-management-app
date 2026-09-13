@@ -1996,6 +1996,8 @@ class NotificationsTab extends StatelessWidget {
     String? currentApproval = notif['approvalStatus']?.toString();
     bool isActionLoading = false;
     String? visitorDocId = notif['visitorDocId']?.toString();
+    String? photoUrl = notif['photoUrl']?.toString() ??
+        (notif['extraData'] is Map ? (notif['extraData'] as Map)['photoUrl']?.toString() : null);
 
     Future<String?> resolveVisitorDocId() async {
       if (visitorDocId != null && visitorDocId!.isNotEmpty) return visitorDocId;
@@ -2016,11 +2018,13 @@ class NotificationsTab extends StatelessWidget {
           }).toList();
           if (matches.isNotEmpty) {
             visitorDocId = matches.first.id;
+            photoUrl ??= matches.first.data()['photoUrl']?.toString();
             return visitorDocId;
           }
           final checkedIn = snap.docs.where((d) => d.data()['status'] == 'CHECKED_IN').toList();
           if (checkedIn.isNotEmpty) {
             visitorDocId = checkedIn.last.id;
+            photoUrl ??= checkedIn.last.data()['photoUrl']?.toString();
             return visitorDocId;
           }
         }
@@ -2181,6 +2185,99 @@ class NotificationsTab extends StatelessWidget {
                         ],
                       ),
                     ),
+                  if (photoUrl != null && photoUrl!.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.camera_alt_outlined, size: 14, color: AppColors.primary),
+                            SizedBox(width: 6),
+                            Text('Visitor Photo (Gate Verification)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textSecondary)),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        GestureDetector(
+                          onTap: () {
+                            showDialog(
+                              context: context,
+                              builder: (_) => Dialog(
+                                insetPadding: const EdgeInsets.all(16),
+                                child: Stack(
+                                  children: [
+                                    InteractiveViewer(
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: Image.network(
+                                          photoUrl!,
+                                          fit: BoxFit.contain,
+                                        ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      top: 8,
+                                      right: 8,
+                                      child: CircleAvatar(
+                                        backgroundColor: Colors.black54,
+                                        radius: 18,
+                                        child: IconButton(
+                                          icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white),
+                                          onPressed: () => Navigator.pop(context),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                          child: Stack(
+                            alignment: Alignment.bottomRight,
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: Container(
+                                  height: 180,
+                                  width: double.infinity,
+                                  color: AppColors.cardSurfaceSecondary,
+                                  child: Image.network(
+                                    photoUrl!,
+                                    height: 180,
+                                    width: double.infinity,
+                                    fit: BoxFit.cover,
+                                    loadingBuilder: (_, child, progress) {
+                                      if (progress == null) return child;
+                                      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+                                    },
+                                    errorBuilder: (_, _, _) => const Center(
+                                      child: Icon(Icons.broken_image_rounded, size: 40, color: Colors.grey),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                margin: const EdgeInsets.all(8),
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.65),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.zoom_in_rounded, size: 14, color: Colors.white),
+                                    SizedBox(width: 4),
+                                    Text('Tap to zoom', style: TextStyle(color: Colors.white, fontSize: 10)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   _buildDialogRow('Purpose', vPurpose),
                   if (phone != null && phone.isNotEmpty) ...[
