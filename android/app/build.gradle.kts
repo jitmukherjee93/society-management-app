@@ -39,6 +39,29 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    flavorDimensions += "app"
+    productFlavors {
+        create("unified") {
+            dimension = "app"
+            manifestPlaceholders["appName"] = "Ramkrishnapuram RWA"
+        }
+        create("resident") {
+            dimension = "app"
+            applicationIdSuffix = ".resident"
+            manifestPlaceholders["appName"] = "Ramkrishnapuram Resident"
+        }
+        create("guard") {
+            dimension = "app"
+            applicationIdSuffix = ".guard"
+            manifestPlaceholders["appName"] = "Gate Security Kiosk"
+        }
+        create("admin") {
+            dimension = "app"
+            applicationIdSuffix = ".admin"
+            manifestPlaceholders["appName"] = "Ramkrishnapuram Admin"
+        }
+    }
 }
 
 kotlin {
