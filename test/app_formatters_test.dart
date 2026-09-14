@@ -1,4 +1,4 @@
-﻿import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:society_management/utils/app_formatters.dart';
 
 void main() {
@@ -34,6 +34,12 @@ void main() {
       expect(AppFormatters.shortMonthYear(dt), 'Sep 2026');
       expect(AppFormatters.monthYear(null), '');
       expect(AppFormatters.shortMonthYear(null), '');
+    });
+
+    test('guardTime formats DateTime to hh:mm a, dd MMM and handles null', () {
+      final dt = DateTime(2026, 9, 14, 10, 30);
+      expect(AppFormatters.guardTime(dt), '10:30 AM, 14 Sep');
+      expect(AppFormatters.guardTime(null), '');
     });
   });
 }

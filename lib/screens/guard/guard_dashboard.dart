@@ -6,10 +6,43 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/visitor_pass_service.dart';
+import '../../services/notification_service.dart';
+import '../../services/push_notification_manager.dart';
+import '../../utils/flat_utils.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/app_feedback.dart';
 
+// ============================================================================
+// SECURITY GUARD GATE TERMINAL DASHBOARD
+// ============================================================================
+// This is the primary touchscreen tablet / mobile UI for security personnel at
+// the society gate.
+//
+// Key Tabs & Operational Capabilities:
+// 1. Gate Passcode Verification (Tab 0):
+//    - 6-digit numeric OTP keypad & text input.
+//    - Instant validation of pre-approved resident guest passes.
+//    - Real-time single-use enforcement and 8-hour expiry checks.
+//
+// 2. Walk-In & Delivery Entry Logging (Tab 0 Modal):
+//    - Captures visitor name, mobile number, host flat, purpose, and delivery app.
+//    - Camera photo capture uploaded to Firebase Storage.
+//    - Automatic push notification to resident with 1-tap Approve / Deny buttons.
+//
+// 3. Live Inside Campus Monitoring (Tab 1):
+//    - Real-time list of all visitors currently inside society grounds.
+//    - One-tap visitor check-out logging on gate exit.
+//
+// 4. Gate Parcels / Courier Management (Tab 2):
+//    - Logs parcels left at security gate (`gate_parcels` collection).
+//    - Notifies resident and marks parcels as collected upon handover.
+//
+// 5. Emergency SOS Broadcast (Tab 3):
+//    - Instant broadcast triggers for Fire, Medical, Intrusion, or Lift Trapped.
+// ============================================================================
+
+/// Touchscreen gate operations terminal for society security guards.
 class GuardDashboard extends StatefulWidget {
   const GuardDashboard({super.key});
 
@@ -26,6 +59,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
   bool _isCheckingIn = false;
   Map<String, dynamic>? _verifiedVisitorData;
   String? _verifiedVisitorDocId;
+  PassVerificationResult? _passVerificationResult;
 
   // Walk-in visitor state
   final _walkInNameCtrl = TextEditingController();
@@ -80,12 +114,31 @@ class _GuardDashboardState extends State<GuardDashboard> {
   String _parcelProvider = 'Amazon';
   bool _isLoggingParcel = false;
 
+  // Parcel log search & status filter state
+  // Filter values: 'ALL', 'HELD_AT_GATE', 'COLLECTED', 'CONFIRMED', 'DISPUTED'
+  String _parcelSearchQuery = '';
+  final _parcelSearchCtrl = TextEditingController();
+  String _parcelStatusFilter = 'ALL';
+
   // Directory search
   String _directorySearchQuery = '';
   final _directorySearchCtrl = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    // Register Push Notification Click Delegate for instant gate clearance dialog / tab routing
+    PushNotificationManager.instance.onNotificationClick = (ctx, payload) {
+      _handleNotificationClick(ctx, payload.extraData, payload.id);
+    };
+  }
+
+  @override
   void dispose() {
+    // Clean up push notification delegate on screen unmount
+    if (PushNotificationManager.instance.onNotificationClick != null) {
+      PushNotificationManager.instance.onNotificationClick = null;
+    }
     _codeController.dispose();
     _walkInNameCtrl.dispose();
     _walkInPhoneCtrl.dispose();
@@ -96,6 +149,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
     _parcelFlatCtrl.dispose();
     _parcelCountCtrl.dispose();
     _parcelRemarksCtrl.dispose();
+    _parcelSearchCtrl.dispose();
     _directorySearchCtrl.dispose();
     super.dispose();
   }
@@ -117,21 +171,24 @@ class _GuardDashboardState extends State<GuardDashboard> {
       _isVerifyingPass = true;
       _verifiedVisitorData = null;
       _verifiedVisitorDocId = null;
+      _passVerificationResult = null;
     });
 
     try {
-      final doc = await VisitorPassService.verifyPassCode(code);
-      if (doc == null) {
-        if (mounted) {
-          AppFeedback.showError(context, 'Invalid code or pass already checked in.');
-        }
-      } else {
-        if (mounted) {
-          setState(() {
-            _verifiedVisitorDocId = doc.id;
-            _verifiedVisitorData = doc.data();
-          });
-          AppFeedback.showSuccess(context, 'Valid pass verified! Review details below.');
+      final result = await VisitorPassService.verifyPassCode(code);
+      if (mounted) {
+        setState(() {
+          _passVerificationResult = result;
+          if (result.isValid) {
+            _verifiedVisitorDocId = result.document?.id;
+            _verifiedVisitorData = result.data;
+          }
+        });
+
+        if (result.isValid) {
+          AppFeedback.showSuccess(context, result.message);
+        } else {
+          AppFeedback.showError(context, result.message);
         }
       }
     } catch (e) {
@@ -153,6 +210,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
         guardUid: _currentGuardUid,
         guardName: guardName,
         gateName: gateName,
+        visitorData: _verifiedVisitorData,
       );
 
       if (mounted) {
@@ -160,6 +218,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
         setState(() {
           _verifiedVisitorData = null;
           _verifiedVisitorDocId = null;
+          _passVerificationResult = null;
           _codeController.clear();
         });
       }
@@ -295,18 +354,35 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                // Emergency Nature Dropdown with isExpanded: true to prevent horizontal overflow on compact screens
                 DropdownButtonFormField<String>(
+                  isExpanded: true,
                   initialValue: selectedType,
                   decoration: const InputDecoration(
                     labelText: 'Emergency Nature *',
                     prefixIcon: Icon(Icons.emergency_rounded, color: AppColors.error),
                   ),
                   items: const [
-                    DropdownMenuItem(value: 'Fire Emergency', child: Text('🔥 Fire Emergency')),
-                    DropdownMenuItem(value: 'Medical Emergency', child: Text('🚑 Medical Emergency')),
-                    DropdownMenuItem(value: 'Security Disturbance', child: Text('🚨 Security Disturbance / Intrusion')),
-                    DropdownMenuItem(value: 'Lift Entrapment', child: Text('🛗 Lift Entrapment / Power Failure')),
-                    DropdownMenuItem(value: 'Water / Infrastructure', child: Text('💧 Water Pipeline / Structural Leak')),
+                    DropdownMenuItem(
+                      value: 'Fire Emergency',
+                      child: Text('🔥 Fire Emergency', overflow: TextOverflow.ellipsis),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Medical Emergency',
+                      child: Text('🚑 Medical Emergency', overflow: TextOverflow.ellipsis),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Security Disturbance',
+                      child: Text('🚨 Security Disturbance / Intrusion', overflow: TextOverflow.ellipsis),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Lift Entrapment',
+                      child: Text('🛗 Lift Entrapment / Power Failure', overflow: TextOverflow.ellipsis),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Water / Infrastructure',
+                      child: Text('💧 Water Pipeline / Structural Leak', overflow: TextOverflow.ellipsis),
+                    ),
                   ],
                   onChanged: (v) {
                     if (v != null) setDialogState(() => selectedType = v);
@@ -405,20 +481,22 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter flat number' : null,
                 ),
                 const SizedBox(height: 12),
+                // Delivery Provider Dropdown with isExpanded: true to prevent horizontal overflow on compact screens
                 DropdownButtonFormField<String>(
+                  isExpanded: true,
                   initialValue: _parcelProvider,
                   decoration: const InputDecoration(
                     labelText: 'Delivery Provider *',
                     prefixIcon: Icon(Icons.local_shipping_outlined),
                   ),
                   items: const [
-                    DropdownMenuItem(value: 'Amazon', child: Text('Amazon')),
-                    DropdownMenuItem(value: 'Flipkart', child: Text('Flipkart')),
-                    DropdownMenuItem(value: 'Swiggy Instamart', child: Text('Swiggy Instamart')),
-                    DropdownMenuItem(value: 'Zomato / Blinkit', child: Text('Zomato / Blinkit')),
-                    DropdownMenuItem(value: 'Blue Dart / Courier', child: Text('Blue Dart / Courier')),
-                    DropdownMenuItem(value: 'India Post', child: Text('India Post')),
-                    DropdownMenuItem(value: 'Other Delivery', child: Text('Other Delivery')),
+                    DropdownMenuItem(value: 'Amazon', child: Text('Amazon', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Flipkart', child: Text('Flipkart', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Swiggy Instamart', child: Text('Swiggy Instamart', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Zomato / Blinkit', child: Text('Zomato / Blinkit', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Blue Dart / Courier', child: Text('Blue Dart / Courier', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'India Post', child: Text('India Post', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Other Delivery', child: Text('Other Delivery', overflow: TextOverflow.ellipsis)),
                   ],
                   onChanged: (v) {
                     if (v != null) setDialogState(() => _parcelProvider = v);
@@ -667,6 +745,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   stream: FirebaseFirestore.instance
                       .collection('notifications')
                       .where('targetRole', isEqualTo: 'GUARD')
+                      .limit(50)
                       .snapshots(),
                   builder: (context, snap) {
                     if (snap.connectionState == ConnectionState.waiting) {
@@ -687,73 +766,130 @@ class _GuardDashboardState extends State<GuardDashboard> {
                         return bT.compareTo(aT);
                       });
 
-                    return ListView.separated(
-                      controller: scrollController,
-                      padding: const EdgeInsets.all(16),
-                      itemCount: sortedDocs.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 10),
-                      itemBuilder: (context, idx) {
-                        final data = sortedDocs[idx].data() as Map<String, dynamic>;
-                        final title = data['title']?.toString() ?? 'Alert';
-                        final msg = data['message']?.toString() ?? '';
-                        final isDenied = title.contains('DENIED');
-                        final isApproved = title.contains('Approved');
-                        final ts = (data['createdAt'] as Timestamp?)?.toDate();
-                        final timeStr = ts != null ? DateFormat('hh:mm a, dd MMM').format(ts) : 'Just now';
+                    final unreadDocs = sortedDocs.where((d) => (d.data() as Map)['isRead'] != true).toList();
 
-                        return Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: isDenied
-                                ? Colors.red.shade50
-                                : (isApproved ? Colors.green.shade50 : AppColors.cardSurfaceSecondary),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: isDenied
-                                  ? Colors.red.shade300
-                                  : (isApproved ? Colors.green.shade300 : AppColors.border),
+                    return Column(
+                      children: [
+                        if (unreadDocs.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  '${unreadDocs.length} unread alert${unreadDocs.length > 1 ? 's' : ''}',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primary),
+                                ),
+                                TextButton.icon(
+                                  onPressed: () async {
+                                    await NotificationService.markAllAsRead(unreadDocs.map((d) => d.id).toList());
+                                  },
+                                  icon: const Icon(Icons.done_all_rounded, size: 16, color: AppColors.primary),
+                                  label: const Text('Mark all read', style: TextStyle(fontSize: 12, color: AppColors.primary)),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(
-                                isDenied
-                                    ? Icons.cancel_rounded
-                                    : (isApproved ? Icons.check_circle_rounded : Icons.info_rounded),
-                                color: isDenied ? Colors.red : (isApproved ? Colors.green : AppColors.primary),
-                                size: 22,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            title,
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 13,
-                                              color: isDenied ? Colors.red.shade900 : (isApproved ? Colors.green.shade900 : AppColors.textPrimary),
-                                            ),
-                                          ),
-                                        ),
-                                        Text(timeStr, style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                                      ],
+                        Expanded(
+                          child: ListView.separated(
+                            controller: scrollController,
+                            padding: const EdgeInsets.all(16),
+                            itemCount: sortedDocs.length,
+                            separatorBuilder: (_, _) => const SizedBox(height: 10),
+                            itemBuilder: (context, idx) {
+                              final data = sortedDocs[idx].data() as Map<String, dynamic>;
+                              final isRead = data['isRead'] == true;
+                              final title = data['title']?.toString() ?? 'Alert';
+                              final msg = data['message']?.toString() ?? '';
+                              final isDenied = title.contains('DENIED');
+                              final isApproved = title.contains('Approved');
+                              final ts = (data['createdAt'] as Timestamp?)?.toDate();
+                              final timeStr = ts != null ? DateFormat('hh:mm a, dd MMM').format(ts) : 'Just now';
+
+                              return InkWell(
+                                onTap: () {
+                                  // Mark notification as read and show clearance status dialog
+                                  _handleNotificationClick(context, data, sortedDocs[idx].id);
+                                },
+                                borderRadius: BorderRadius.circular(10),
+                                child: Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: isDenied
+                                        ? Colors.red.shade50
+                                        : (isApproved ? Colors.green.shade50 : AppColors.cardSurfaceSecondary),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: isDenied
+                                          ? Colors.red.shade300
+                                          : (isApproved ? Colors.green.shade300 : AppColors.border),
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(msg, style: const TextStyle(fontSize: 12, height: 1.3, color: AppColors.textPrimary)),
-                                  ],
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        isDenied
+                                            ? Icons.cancel_rounded
+                                            : (isApproved ? Icons.check_circle_rounded : Icons.info_rounded),
+                                        color: isDenied ? Colors.red : (isApproved ? Colors.green : AppColors.primary),
+                                        size: 22,
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                              children: [
+                                                Expanded(
+                                                  child: Row(
+                                                    children: [
+                                                      Expanded(
+                                                        child: Text(
+                                                          title,
+                                                          style: TextStyle(
+                                                            fontWeight: isRead ? FontWeight.w600 : FontWeight.bold,
+                                                            fontSize: 13,
+                                                            color: isDenied ? Colors.red.shade900 : (isApproved ? Colors.green.shade900 : AppColors.textPrimary),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      if (!isRead)
+                                                        Container(
+                                                          margin: const EdgeInsets.only(left: 6, right: 6),
+                                                          width: 8,
+                                                          height: 8,
+                                                          decoration: const BoxDecoration(
+                                                            color: AppColors.primary,
+                                                            shape: BoxShape.circle,
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                Text(timeStr, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(msg, style: const TextStyle(fontSize: 12, height: 1.3, color: AppColors.textPrimary)),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ],
+                              );
+                            },
                           ),
-                        );
-                      },
+                        ),
+                      ],
                     );
                   },
                 ),
@@ -761,6 +897,189 @@ class _GuardDashboardState extends State<GuardDashboard> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Handles routing and dialog presentation when a notification is clicked on the guard screen.
+  void _handleNotificationClick(BuildContext context, Map<String, dynamic> notif, String docId) {
+    // Auto-mark notification as read
+    if (notif['isRead'] != true) {
+      NotificationService.markAsRead(docId);
+    }
+
+    final type = (notif['type'] ?? '').toString().toUpperCase();
+    final title = (notif['title'] ?? '').toString();
+
+    // 1. Visitor clearance responses (Approved or Denied by resident)
+    if (type == 'VISITOR_APPROVAL_RESPONSE' ||
+        title.contains('Approved') ||
+        title.contains('DENIED') ||
+        type.startsWith('VISITOR')) {
+      _showVisitorApprovalStatusDialog(context, notif);
+    }
+    // 2. Gate parcel alerts -> switch to Parcels tab
+    else if (type.contains('PARCEL') || title.toLowerCase().contains('parcel')) {
+      setState(() => _currentTab = 2);
+    }
+    // 3. Emergency SOS broadcast alerts
+    else if (type == 'EMERGENCY' || title.toLowerCase().contains('emergency') || title.toLowerCase().contains('sos')) {
+      _showEmergencyAlertDialog(context, notif);
+    }
+    // 4. Passcode / guest pre-approval alerts -> switch to verification tab
+    else if (type == 'PASSCODE' || title.toLowerCase().contains('passcode') || title.toLowerCase().contains('guest')) {
+      setState(() => _currentTab = 0);
+    }
+  }
+
+  /// Displays the official gate clearance dialog showing Approved or Denied status for security action.
+  void _showVisitorApprovalStatusDialog(BuildContext context, Map<String, dynamic> notif) {
+    final title = notif['title']?.toString() ?? 'Visitor Clearance';
+    final msg = notif['message']?.toString() ?? '';
+    final isDenied = title.contains('DENIED') || (notif['approvalStatus'] == 'DENIED');
+    final isApproved = title.contains('Approved') || (notif['approvalStatus'] == 'APPROVED');
+    final visitorName = notif['visitorName']?.toString() ?? 'Visitor';
+    final flatNumber = notif['flatNumber']?.toString() ?? '';
+    final ts = (notif['createdAt'] as Timestamp?)?.toDate();
+    final timeStr = ts != null ? DateFormat('hh:mm a, dd MMM').format(ts) : 'Just now';
+
+    // Use global navigatorKey context if available to guarantee Navigator ancestor exists
+    final targetCtx = PushNotificationManager.navigatorKey.currentContext ?? context;
+    if (!targetCtx.mounted) return;
+
+    showDialog(
+      context: targetCtx,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isDenied ? Colors.red.shade50 : (isApproved ? Colors.green.shade50 : AppColors.primarySurface),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                isDenied ? Icons.cancel_rounded : (isApproved ? Icons.check_circle_rounded : Icons.info_rounded),
+                color: isDenied ? Colors.red : (isApproved ? Colors.green : AppColors.primary),
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    isDenied ? 'Entry Denied' : (isApproved ? 'Entry Approved' : 'Clearance Update'),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: isDenied ? Colors.red.shade900 : (isApproved ? Colors.green.shade900 : AppColors.textPrimary),
+                    ),
+                  ),
+                  Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDenied ? Colors.red.shade50 : (isApproved ? Colors.green.shade50 : AppColors.cardSurfaceSecondary),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isDenied ? Colors.red.shade300 : (isApproved ? Colors.green.shade300 : AppColors.border),
+                ),
+              ),
+              child: Text(
+                isDenied
+                    ? '⛔ ACTION REQUIRED: Turn visitor away immediately. Resident of flat $flatNumber has DENIED gate clearance for $visitorName.'
+                    : '✅ CLEARANCE GRANTED: Resident of flat $flatNumber has APPROVED entry for $visitorName. Allow entry.',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: isDenied ? Colors.red.shade900 : (isApproved ? Colors.green.shade900 : AppColors.textPrimary),
+                  height: 1.3,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(msg, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isDenied ? Colors.red.shade700 : AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Acknowledge'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Displays the emergency security alert dialog on the gate terminal.
+  void _showEmergencyAlertDialog(BuildContext context, Map<String, dynamic> notif) {
+    final title = notif['title']?.toString() ?? 'Emergency Alert';
+    final msg = notif['message']?.toString() ?? '';
+    final ts = (notif['createdAt'] as Timestamp?)?.toDate();
+    final timeStr = ts != null ? DateFormat('hh:mm a, dd MMM').format(ts) : 'Just now';
+
+    // Use global navigatorKey context if available to guarantee Navigator ancestor exists
+    final targetCtx = PushNotificationManager.navigatorKey.currentContext ?? context;
+    if (!targetCtx.mounted) return;
+
+    showDialog(
+      context: targetCtx,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.warning_rounded, color: Colors.red, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.red)),
+                  Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        content: Text(msg, style: const TextStyle(fontSize: 13, height: 1.4)),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Acknowledge'),
+          ),
+        ],
       ),
     );
   }
@@ -867,6 +1186,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 stream: FirebaseFirestore.instance
                     .collection('notifications')
                     .where('targetRole', isEqualTo: 'GUARD')
+                    .limit(50)
                     .snapshots(),
                 builder: (context, alertSnap) {
                   final unreadCount = alertSnap.data?.docs.where((d) => (d.data() as Map)['isRead'] != true).length ?? 0;
@@ -948,7 +1268,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
             children: [
               _buildVerifyPassTab(guardName, gateName),
               _buildWalkInTab(guardName, gateName),
-              _buildInCampusTab(),
+              _buildInCampusTab(guardName, gateName),
               _buildParcelsTab(guardName, gateName),
               _buildDirectoryTab(),
             ],
@@ -1043,6 +1363,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.border)),
                       ),
                       onChanged: (v) {
+                        if (_passVerificationResult != null && v.trim().length != 6) {
+                          setState(() {
+                            _passVerificationResult = null;
+                            _verifiedVisitorData = null;
+                            _verifiedVisitorDocId = null;
+                          });
+                        }
                         if (v.trim().length == 6) {
                           _verifyPass();
                         }
@@ -1068,6 +1395,82 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   ],
                 ),
               ),
+              if (_passVerificationResult != null && !_passVerificationResult!.isValid) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: _passVerificationResult!.isExpired
+                        ? Colors.amber.shade50
+                        : Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: _passVerificationResult!.isExpired
+                          ? Colors.amber.shade400
+                          : Colors.red.shade300,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: _passVerificationResult!.isExpired
+                              ? Colors.amber.shade100
+                              : Colors.red.shade100,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          _passVerificationResult!.isAlreadyUsed
+                              ? Icons.block_rounded
+                              : (_passVerificationResult!.isExpired
+                                  ? Icons.timer_off_outlined
+                                  : Icons.error_outline_rounded),
+                          color: _passVerificationResult!.isExpired
+                              ? Colors.amber.shade900
+                              : Colors.red.shade800,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _passVerificationResult!.isAlreadyUsed
+                                  ? 'Passcode Already Used (Single-Use Only)'
+                                  : (_passVerificationResult!.isExpired
+                                      ? 'Passcode Expired (8-Hour Limit)'
+                                      : 'Invalid Passcode'),
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: _passVerificationResult!.isExpired
+                                    ? Colors.amber.shade900
+                                    : Colors.red.shade900,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _passVerificationResult!.message,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _passVerificationResult!.isExpired
+                                    ? Colors.brown.shade800
+                                    : Colors.red.shade900,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               if (_verifiedVisitorData != null) ...[
                 const SizedBox(height: 20),
                 Container(
@@ -1083,11 +1486,19 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Row(
+                      Row(
                         children: [
-                          Icon(Icons.verified_rounded, color: AppColors.success, size: 22),
-                          SizedBox(width: 8),
-                          Text('Passcode Verified • Ready for Entry', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.success, fontSize: 14)),
+                          const Icon(Icons.verified_rounded, color: AppColors.success, size: 22),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Passcode Verified • Ready for Entry', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.success, fontSize: 14)),
+                                Text('Single-use gate pass active (valid for 8 hours)', style: TextStyle(fontSize: 11, color: Colors.green.shade800)),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                       const Divider(height: 24),
@@ -1096,6 +1507,10 @@ class _GuardDashboardState extends State<GuardDashboard> {
                       _buildDetailRow('Purpose', _verifiedVisitorData!['purpose']?.toString() ?? 'Visit'),
                       if ((_verifiedVisitorData!['phone']?.toString() ?? '').isNotEmpty)
                         _buildDetailRow('Mobile', _verifiedVisitorData!['phone'].toString()),
+                      if ((_verifiedVisitorData!['vehicleNumber']?.toString() ?? '').isNotEmpty)
+                        _buildDetailRow('Vehicle', _verifiedVisitorData!['vehicleNumber'].toString())
+                      else if (_verifiedVisitorData!['isComingByCar'] == true)
+                        _buildDetailRow('Vehicle', 'Arriving by Car (No reg entered)'),
                       const SizedBox(height: 20),
                       SizedBox(
                         width: double.infinity,
@@ -1194,6 +1609,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
 
                 // Purpose Selection Dropdown
                 DropdownButtonFormField<String>(
+                  isExpanded: true,
                   initialValue: _walkInPurpose,
                   decoration: const InputDecoration(
                     labelText: 'Purpose of Visit *',
@@ -1201,12 +1617,12 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     isDense: true,
                   ),
                   items: const [
-                    DropdownMenuItem(value: 'Delivery / Courier', child: Text('Delivery / Courier')),
-                    DropdownMenuItem(value: 'Guest / Personal', child: Text('Guest / Personal')),
-                    DropdownMenuItem(value: 'Cab / Taxi', child: Text('Cab / Taxi')),
-                    DropdownMenuItem(value: 'Maid / Domestic Helper', child: Text('Maid / Domestic Helper')),
-                    DropdownMenuItem(value: 'Maintenance / Repair', child: Text('Maintenance / Repair')),
-                    DropdownMenuItem(value: 'Other', child: Text('Other')),
+                    DropdownMenuItem(value: 'Delivery / Courier', child: Text('Delivery / Courier', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Guest / Personal', child: Text('Guest / Personal', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Cab / Taxi', child: Text('Cab / Taxi', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Maid / Domestic Helper', child: Text('Maid / Domestic Helper', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Maintenance / Repair', child: Text('Maintenance / Repair', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Other', child: Text('Other', overflow: TextOverflow.ellipsis)),
                   ],
                   onChanged: (val) {
                     if (val != null) setState(() => _walkInPurpose = val);
@@ -1217,6 +1633,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 // Delivery App Selection (Mandatory for Delivery / Courier)
                 if (_walkInPurpose == 'Delivery / Courier') ...[
                   DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: _deliveryApp,
                     decoration: const InputDecoration(
                       labelText: 'Delivery App / Company *',
@@ -1224,16 +1641,16 @@ class _GuardDashboardState extends State<GuardDashboard> {
                       isDense: true,
                     ),
                     items: const [
-                      DropdownMenuItem(value: 'Blinkit', child: Text('Blinkit')),
-                      DropdownMenuItem(value: 'Swiggy / Instamart', child: Text('Swiggy / Instamart')),
-                      DropdownMenuItem(value: 'Zomato', child: Text('Zomato')),
-                      DropdownMenuItem(value: 'Zepto', child: Text('Zepto')),
-                      DropdownMenuItem(value: 'Amazon', child: Text('Amazon')),
-                      DropdownMenuItem(value: 'Flipkart', child: Text('Flipkart')),
-                      DropdownMenuItem(value: 'BigBasket', child: Text('BigBasket')),
-                      DropdownMenuItem(value: 'Blue Dart / Courier', child: Text('Blue Dart / Courier')),
-                      DropdownMenuItem(value: 'India Post', child: Text('India Post')),
-                      DropdownMenuItem(value: 'Other Delivery', child: Text('Other Delivery (Custom)')),
+                      DropdownMenuItem(value: 'Blinkit', child: Text('Blinkit', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Swiggy / Instamart', child: Text('Swiggy / Instamart', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Zomato', child: Text('Zomato', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Zepto', child: Text('Zepto', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Amazon', child: Text('Amazon', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Flipkart', child: Text('Flipkart', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'BigBasket', child: Text('BigBasket', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Blue Dart / Courier', child: Text('Blue Dart / Courier', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'India Post', child: Text('India Post', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Other Delivery', child: Text('Other Delivery (Custom)', overflow: TextOverflow.ellipsis)),
                     ],
                     onChanged: (val) {
                       if (val != null) setState(() => _deliveryApp = val);
@@ -1427,7 +1844,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
 
   // ─── TAB 2: In-Campus Active Visitors Log ──────────────────────────────────
 
-  Widget _buildInCampusTab() {
+  Widget _buildInCampusTab(String guardName, String gateName) {
     return Column(
       children: [
         // Search & Count Bar
@@ -1614,9 +2031,12 @@ class _GuardDashboardState extends State<GuardDashboard> {
                             await VisitorPassService.checkOutVisitor(
                               visitorDocId: doc.id,
                               guardUid: _currentGuardUid,
+                              guardName: guardName,
+                              gateName: gateName,
+                              visitorData: data,
                             );
                             if (context.mounted) {
-                              AppFeedback.showSuccess(context, '$name checked out.');
+                              AppFeedback.showSuccess(context, '$name checked out and resident notified.');
                             }
                           },
                         ),
@@ -1701,157 +2121,563 @@ class _GuardDashboardState extends State<GuardDashboard> {
   Widget _buildParcelsTab(String guardName, String gateName) {
     return Column(
       children: [
-        // Action Bar
+        // ─── Header & Action Bar ─────────────────────────────────────────────
         Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
           color: Colors.white,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Gate Parcel Holding', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppColors.textPrimary)),
-                  Text('Parcels received and waiting for resident pickup', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
-                ],
+              // Title and descriptive subtitle with overflow safety
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Gate Parcel Log & Holding',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.textPrimary),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Search, filter, and track all incoming, held, and delivered packages',
+                      style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
               ),
+              const SizedBox(width: 8),
+              // Button to log incoming parcels held at gate security
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
-                icon: const Icon(Icons.add_box_rounded, size: 18),
-                label: const Text('Log Parcel', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                icon: const Icon(Icons.add_box_rounded, size: 16),
+                label: const Text('Log Parcel', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                 onPressed: () => _showLogParcelDialog(guardName, gateName),
               ),
             ],
           ),
         ),
-        const Divider(height: 1, color: AppColors.border),
 
-        // Live Stream of Parcels
+        // ─── Search by Flat Number Field ─────────────────────────────────────
+        Container(
+          color: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: TextField(
+            controller: _parcelSearchCtrl,
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'Search by Flat Number (e.g. C-102, 102, B-301)...',
+              hintStyle: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+              prefixIcon: const Icon(Icons.search_rounded, size: 20, color: AppColors.textSecondary),
+              suffixIcon: _parcelSearchQuery.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      tooltip: 'Clear search',
+                      onPressed: () {
+                        setState(() {
+                          _parcelSearchCtrl.clear();
+                          _parcelSearchQuery = '';
+                        });
+                      },
+                    )
+                  : null,
+              filled: true,
+              fillColor: AppColors.cardSurfaceSecondary,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+              ),
+            ),
+            onChanged: (val) {
+              setState(() {
+                _parcelSearchQuery = val.trim();
+              });
+            },
+          ),
+        ),
+
+        // ─── Live Stream & Filter Engine ─────────────────────────────────────
         Expanded(
           child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: VisitorPassService.getPendingParcelsStream(),
+            stream: VisitorPassService.getAllParcelsStream(),
             builder: (context, snap) {
               if (snap.hasError) {
-                return Center(child: Text('Error loading parcels: ${snap.error}', style: const TextStyle(color: AppColors.error)));
+                return Center(
+                  child: Text('Error loading parcels: ${snap.error}', style: const TextStyle(color: AppColors.error)),
+                );
               }
               if (snap.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              final docs = snap.data?.docs ?? [];
-              if (docs.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.inventory_2_outlined, size: 48, color: AppColors.textMuted.withValues(alpha: 0.5)),
-                      const SizedBox(height: 12),
-                      const Text('No parcels currently held at the gate', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.textSecondary)),
-                      const SizedBox(height: 4),
-                      const Text('When couriers leave packages at security, log them here.', style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
-                    ],
-                  ),
-                );
+              final allDocs = snap.data?.docs ?? [];
+
+              // Compute aggregate counts across all status categories
+              int heldCount = 0;
+              int deliveredCount = 0;
+              int confirmedCount = 0;
+              int disputedCount = 0;
+
+              for (final doc in allDocs) {
+                final d = doc.data();
+                final st = (d['status'] ?? '').toString();
+                final isAck = d['residentAcknowledged'] == true;
+                final isDisp = d['disputed'] == true || d['receiptStatus'] == 'NOT_RECEIVED';
+
+                if (st == 'HELD_AT_GATE') {
+                  heldCount++;
+                } else if (isDisp) {
+                  disputedCount++;
+                } else if (isAck) {
+                  confirmedCount++;
+                } else if (st == 'COLLECTED') {
+                  deliveredCount++;
+                }
               }
 
-              return ListView.separated(
-                padding: const EdgeInsets.all(16),
-                itemCount: docs.length,
-                separatorBuilder: (context, index) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final doc = docs[index];
-                  final data = doc.data();
-                  final flat = data['flatNumber'] ?? 'Unknown';
-                  final provider = data['deliveryProvider'] ?? 'Courier';
-                  final count = data['packetCount'] ?? 1;
-                  final remarks = data['remarks'] ?? '';
-                  final time = (data['receivedAt'] as Timestamp?)?.toDate();
-                  final timeStr = time != null ? DateFormat('dd MMM, hh:mm a').format(time) : 'Recent';
+              // Apply Search & Status Filters to the parcel stream
+              final filteredDocs = allDocs.where((doc) {
+                final d = doc.data();
+                final rawFlat = (d['flatNumber'] ?? '').toString();
+                final normFlat = FlatUtils.normalize(rawFlat).toLowerCase();
+                final st = (d['status'] ?? '').toString();
+                final isAck = d['residentAcknowledged'] == true;
+                final isDisp = d['disputed'] == true || d['receiptStatus'] == 'NOT_RECEIVED';
 
-                  return Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppColors.border),
+                // 1. Flat Number Search filter (matches raw flat or normalized format)
+                if (_parcelSearchQuery.isNotEmpty) {
+                  final q = _parcelSearchQuery.toLowerCase().replaceAll('flat', '').trim();
+                  final cleanRaw = rawFlat.toLowerCase().replaceAll('flat', '').trim();
+                  if (!cleanRaw.contains(q) && !normFlat.contains(q)) {
+                    return false;
+                  }
+                }
+
+                // 2. Status Category filter
+                switch (_parcelStatusFilter) {
+                  case 'HELD_AT_GATE':
+                    return st == 'HELD_AT_GATE';
+                  case 'COLLECTED':
+                    return st == 'COLLECTED' && !isAck && !isDisp;
+                  case 'CONFIRMED':
+                    return isAck;
+                  case 'DISPUTED':
+                    return isDisp;
+                  case 'ALL':
+                  default:
+                    return true;
+                }
+              }).toList();
+
+              return Column(
+                children: [
+                  // ─── Status Filter Horizontal Scroll Bar ───────────────────
+                  Container(
+                    color: Colors.white,
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _buildStatusFilterChip('ALL', 'All', allDocs.length, Colors.blueGrey),
+                          const SizedBox(width: 8),
+                          _buildStatusFilterChip('HELD_AT_GATE', 'Held at Gate', heldCount, Colors.amber.shade800),
+                          const SizedBox(width: 8),
+                          _buildStatusFilterChip('COLLECTED', 'Handed Over', deliveredCount, AppColors.primary),
+                          const SizedBox(width: 8),
+                          _buildStatusFilterChip('CONFIRMED', 'Receipt Confirmed', confirmedCount, AppColors.success),
+                          const SizedBox(width: 8),
+                          _buildStatusFilterChip('DISPUTED', 'Disputed', disputedCount, AppColors.error),
+                        ],
+                      ),
                     ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryLight,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(Icons.local_shipping_rounded, color: AppColors.primary, size: 22),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                  ),
+                  const Divider(height: 1, color: AppColors.border),
+
+                  // ─── Filtered Parcels List View ────────────────────────────
+                  Expanded(
+                    child: filteredDocs.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primarySurface,
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(color: AppColors.primaryBorder),
-                                    ),
-                                    child: Text(
-                                      'Flat $flat',
-                                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
+                                  Icon(Icons.inventory_2_outlined, size: 48, color: AppColors.textMuted.withValues(alpha: 0.5)),
+                                  const SizedBox(height: 12),
                                   Text(
-                                    '$count Packet(s) • $provider',
-                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                                    _parcelSearchQuery.isNotEmpty
+                                        ? 'No parcels found for Flat "$_parcelSearchQuery"'
+                                        : 'No parcels found under selected filter',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textSecondary),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _parcelSearchQuery.isNotEmpty
+                                        ? 'Check the flat number format or clear the search.'
+                                        : 'Parcels logged or delivered will appear here.',
+                                    style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+                                    textAlign: TextAlign.center,
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 4),
-                              Text('Received at $timeStr', style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
-                              if (remarks.isNotEmpty)
-                                Text('Note: $remarks', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontStyle: FontStyle.italic)),
-                            ],
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(14),
+                            itemCount: filteredDocs.length,
+                            separatorBuilder: (context, index) => const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final doc = filteredDocs[index];
+                              final data = doc.data();
+                              final flat = data['flatNumber'] ?? 'Unknown';
+                              final provider = data['deliveryProvider'] ?? 'Courier';
+                              final count = data['packetCount'] ?? 1;
+                              final remarks = data['remarks'] ?? '';
+                              final status = (data['status'] ?? '').toString();
+                              final isAck = data['residentAcknowledged'] == true;
+                              final isDisputed = data['disputed'] == true || data['receiptStatus'] == 'NOT_RECEIVED';
+
+                              // Timestamps
+                              final recvTime = (data['receivedAt'] as Timestamp?)?.toDate();
+                              final recvTimeStr = recvTime != null ? DateFormat('dd MMM, hh:mm a').format(recvTime) : 'Recent';
+                              final colTime = (data['collectedAt'] as Timestamp?)?.toDate();
+                              final colTimeStr = colTime != null ? DateFormat('dd MMM, hh:mm a').format(colTime) : null;
+                              final ackTime = (data['acknowledgedAt'] as Timestamp?)?.toDate();
+                              final ackTimeStr = ackTime != null ? DateFormat('dd MMM, hh:mm a').format(ackTime) : null;
+
+                              return Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: isDisputed
+                                        ? Colors.red.shade300
+                                        : (isAck
+                                            ? Colors.green.shade200
+                                            : (status == 'HELD_AT_GATE' ? Colors.amber.shade300 : AppColors.border)),
+                                    width: (isDisputed || isAck) ? 1.2 : 1,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.02),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // Card Top Header: Flat badge, Provider, and Status badge
+                                    Row(
+                                      crossAxisAlignment: CrossAxisAlignment.center,
+                                      children: [
+                                        // Flat Number Badge
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primarySurface,
+                                            borderRadius: BorderRadius.circular(6),
+                                            border: Border.all(color: AppColors.primaryBorder),
+                                          ),
+                                          child: Text(
+                                            'Flat $flat',
+                                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        // Package Count & Provider
+                                        Expanded(
+                                          child: Text(
+                                            '$count Packet(s) • $provider',
+                                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                                            overflow: TextOverflow.ellipsis,
+                                            maxLines: 1,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        // Status Badge Pill
+                                        _buildParcelCardStatusBadge(status: status, isAck: isAck, isDisputed: isDisputed),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 10),
+
+                                    // Reception details
+                                    Row(
+                                      children: [
+                                        const Icon(Icons.door_sliding_outlined, size: 14, color: AppColors.textMuted),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            'Received: $recvTimeStr at ${data['gateName'] ?? 'Main Gate'} (${data['guardName'] ?? 'Security'})',
+                                            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+
+                                    // Handover / Delivery details (if collected)
+                                    if (colTimeStr != null) ...[
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.outbox_rounded, size: 14, color: AppColors.textMuted),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              'Handed over: $colTimeStr to ${data['collectedBy'] ?? 'Resident'}',
+                                              style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+
+                                    // Resident Acknowledgment details (if confirmed)
+                                    if (isAck) ...[
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        children: [
+                                          Icon(Icons.verified_rounded, size: 14, color: Colors.green.shade700),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              ackTimeStr != null
+                                                  ? 'Confirmed by resident on $ackTimeStr'
+                                                  : 'Receipt confirmed by resident',
+                                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.green.shade800),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+
+                                    // Dispute details (if reported not received)
+                                    if (isDisputed) ...[
+                                      const SizedBox(height: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.shade50,
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: Colors.red.shade200),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.warning_amber_rounded, size: 14, color: Colors.red.shade700),
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                              child: Text(
+                                                data['disputeReason']?.toString() ?? 'Resident reported package NOT received',
+                                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.red.shade800),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+
+                                    // Remarks if provided
+                                    if (remarks.isNotEmpty) ...[
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Note: $remarks',
+                                        style: const TextStyle(fontSize: 11, color: AppColors.textMuted, fontStyle: FontStyle.italic),
+                                      ),
+                                    ],
+
+                                    // Hand Over Action Button (only if parcel is still held at gate)
+                                    if (status == 'HELD_AT_GATE') ...[
+                                      const SizedBox(height: 10),
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: ElevatedButton.icon(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: AppColors.success,
+                                            foregroundColor: Colors.white,
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                            elevation: 0,
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                          ),
+                                          icon: const Icon(Icons.check_rounded, size: 16),
+                                          label: const Text('Hand Over to Resident', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                          onPressed: () async {
+                                            final parsedCount = count is int ? count : (int.tryParse(count.toString()) ?? 1);
+                                            await VisitorPassService.markParcelCollected(
+                                              parcelDocId: doc.id,
+                                              guardUid: _currentGuardUid,
+                                              guardName: guardName,
+                                              gateName: gateName,
+                                              flatNumber: flat,
+                                              deliveryProvider: provider,
+                                              packetCount: parsedCount,
+                                            );
+                                            if (context.mounted) {
+                                              AppFeedback.showSuccess(context, 'Parcel handed over to resident of $flat.');
+                                            }
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              );
+                            },
                           ),
-                        ),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.success,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            elevation: 0,
-                          ),
-                          icon: const Icon(Icons.check_rounded, size: 16),
-                          label: const Text('Hand Over', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          onPressed: () async {
-                            await VisitorPassService.markParcelCollected(
-                              parcelDocId: doc.id,
-                              guardUid: _currentGuardUid,
-                            );
-                            if (context.mounted) {
-                              AppFeedback.showSuccess(context, 'Parcel handed over to resident of $flat.');
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                  );
-                },
+                  ),
+                ],
               );
             },
           ),
         ),
       ],
     );
+  }
+
+  /// Helper widget to build selectable status filter chips with live counts
+  Widget _buildStatusFilterChip(String filterKey, String label, int count, Color activeColor) {
+    final isSelected = _parcelStatusFilter == filterKey;
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _parcelStatusFilter = filterKey;
+        });
+      },
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? activeColor : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? activeColor : AppColors.border,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected ? Colors.white : AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.white.withValues(alpha: 0.25) : AppColors.cardSurfaceSecondary,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: isSelected ? Colors.white : AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Helper widget to render status pill on each parcel card
+  Widget _buildParcelCardStatusBadge({
+    required String status,
+    required bool isAck,
+    required bool isDisputed,
+  }) {
+    if (status == 'HELD_AT_GATE') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.amber.shade50,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.amber.shade300),
+        ),
+        child: Text(
+          'HELD AT GATE',
+          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.brown.shade800),
+        ),
+      );
+    } else if (isDisputed) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.red.shade300),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.warning_amber_rounded, size: 11, color: Colors.red.shade800),
+            const SizedBox(width: 3),
+            Text(
+              'DISPUTED',
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.red.shade900),
+            ),
+          ],
+        ),
+      );
+    } else if (isAck) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.green.shade50,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.green.shade300),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.check_circle_rounded, size: 11, color: Colors.green.shade800),
+            const SizedBox(width: 3),
+            Text(
+              'CONFIRMED',
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green.shade900),
+            ),
+          ],
+        ),
+      );
+    } else {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.blue.shade50,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.blue.shade300),
+        ),
+        child: Text(
+          'DELIVERED',
+          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.blue.shade900),
+        ),
+      );
+    }
   }
 
   // ─── TAB 4: Intercom Directory & Emergency Contacts ────────────────────────

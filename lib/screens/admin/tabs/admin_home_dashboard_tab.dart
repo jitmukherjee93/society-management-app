@@ -191,9 +191,10 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                         .collection('notifications')
                         .where('targetRole', isEqualTo: 'ADMIN')
                         .where('type', isEqualTo: 'VEHICLE_UPDATE_REQUEST')
+                        .limit(50)
                         .snapshots(),
                     builder: (context, snap) {
-                      final count = snap.data?.docs.length ?? 0;
+                      final count = snap.data?.docs.where((d) => (d.data() as Map)['isRead'] != true).length ?? 0;
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Member / Vehicle Reqs',
@@ -215,14 +216,11 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                   StreamBuilder<QuerySnapshot>(
                     stream: FirebaseFirestore.instance
                         .collection('complaints')
+                        .where('status', whereIn: ['OPEN', 'PENDING', 'IN_PROGRESS', 'ESCALATED'])
+                        .limit(50)
                         .snapshots(),
                     builder: (context, snap) {
-                      final docs = snap.data?.docs ?? [];
-                      final openCount = docs.where((d) {
-                        final data = d.data() as Map<String, dynamic>;
-                        final status = (data['status'] ?? '').toString().toUpperCase();
-                        return status != 'RESOLVED' && status != 'CLOSED';
-                      }).length;
+                      final openCount = snap.data?.docs.length ?? 0;
 
                       return _buildActionTile(
                         width: itemWidth,
@@ -402,6 +400,25 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                         badgeText: '$percent%',
                         badgeColor: paidCount == 11 ? Colors.green : Colors.indigo,
                         onTap: () => widget.onNavigateToTab(2), // Accounts Tab
+                      );
+                    },
+                  ),
+
+                  // 5. Visitors Currently In-Campus
+                  StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('visitors')
+                        .where('status', isEqualTo: 'CHECKED_IN')
+                        .snapshots(),
+                    builder: (context, snap) {
+                      final count = snap.data?.docs.length ?? 0;
+                      return _buildActionTile(
+                        width: itemWidth,
+                        title: 'Visitors In-Campus',
+                        count: count,
+                        highlight: count > 0,
+                        highlightColor: const Color(0xFF0D9488),
+                        onTap: () => widget.onNavigateToTab(6), // Visitors Tab
                       );
                     },
                   ),

@@ -18,6 +18,7 @@ class AppFormatters {
   static final DateFormat _dateTimeFmt = DateFormat('dd MMM yyyy, hh:mm a');
   static final DateFormat _monthYearFmt = DateFormat('MMMM yyyy');
   static final DateFormat _shortMonthYearFmt = DateFormat('MMM yyyy');
+  static final DateFormat _guardTimeFmt = DateFormat('hh:mm a, dd MMM');
 
   /// Direct helper: AppFormatters.currency(1500) -> ₹1,500
   static String currency(num? amount) => _currencyFmt.format(amount ?? 0);
@@ -31,6 +32,9 @@ class AppFormatters {
   /// Direct helper: AppFormatters.dateTime(dateTime) -> 07 Sep 2026, 03:45 PM
   static String dateTime(DateTime? dt) => dt != null ? _dateTimeFmt.format(dt) : '';
 
+  /// Direct helper: AppFormatters.guardTime(dateTime) -> 10:30 AM, 14 Sep
+  static String guardTime(DateTime? dt) => dt != null ? _guardTimeFmt.format(dt) : '';
+
   /// Direct helper: AppFormatters.monthYear(dateTime) -> September 2026
   static String monthYear(DateTime? dt) => dt != null ? _monthYearFmt.format(dt) : '';
 
@@ -41,5 +45,6 @@ class AppFormatters {
   static NumberFormat get currencyFormat => _currencyFmt;
   static DateFormat get dateFormat => _dateFmt;
   static DateFormat get dateTimeFormat => _dateTimeFmt;
+  static DateFormat get guardTimeFormat => _guardTimeFmt;
 }
 

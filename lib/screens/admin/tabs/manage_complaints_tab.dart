@@ -145,9 +145,15 @@ class _ManageComplaintsTabState extends State<ManageComplaintsTab> {
                                   if (normFlat != 'Unknown') {
                                     await NotificationService.notifyResident(
                                       flatNumber: normFlat,
-                                      title: 'Complaint Status: $newStatus',
-                                      message: 'Your ticket "$title" status has been updated to $newStatus by Management.',
+                                      title: '🛠️ Ticket Update: $title',
+                                      message: 'Your helpdesk ticket "$title" has been updated to $newStatus by Society Management.',
                                       type: 'COMPLAINT_UPDATE',
+                                      extraData: {
+                                        'complaintId': docs[index].id,
+                                        'title': title,
+                                        'status': newStatus,
+                                        'flatNumber': normFlat,
+                                      },
                                     );
                                   }
 

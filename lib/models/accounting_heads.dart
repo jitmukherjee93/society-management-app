@@ -1,23 +1,75 @@
 import 'package:intl/intl.dart';
 
-// Ramkrishnapuram Residents' Welfare Association
-// Official Budget 2026-27 Accounting Heads and Configuration
-// Updated strictly as per "Updated RKP Budget.pdf"
+// ============================================================================
+// RAMKRISHNAPURAM RESIDENTS' WELFARE ASSOCIATION (RKP RWA)
+// OFFICIAL ACCOUNTING CONFIGURATION & BUDGET HEADS (FY 2026-27)
+// ============================================================================
+// This file serves as the single source of financial truth for the society:
+//
+// 1. Budget Heads:
+//    - Official Approved Annual Outlay: ₹17,75,558.00 (~₹1,47,965.00/month)
+//    - Projected Annual Inflow: ₹17,78,220.00 (~₹1,48,185.00/month)
+//    - Projected Monthly Net Surplus: +₹222.00/month
+//
+// 2. Progressive Late Fine Rules:
+//    - ₹10 per month of delay for overdue maintenance bills.
+//    - Progressive Accumulation: 1 month late = ₹10, 2 months late = ₹20, etc.
+//    - Strict Society Policy: Late fine is imposed ONLY on flat maintenance and
+//      NEVER on vehicle parking charges.
+//
+// 3. Maintenance Rates (Per Block):
+//    - Block A (50 flats): ₹450 / month
+//    - Block B (60 flats): ₹420 / month
+//    - Block C (60 flats): ₹390 / month
+//    - Block D (50 flats): ₹490 / month
+//
+// 4. Vehicle Parking Monthly Rates:
+//    - Four-Wheelers (Car): ₹430 / month (1 car limit per flat)
+//    - Two-Wheelers (Bike): ₹100 / month (max 2 bikes per flat)
+// ============================================================================
 
+/// Represents an approved society budget head (income or expenditure line item).
 class BudgetHead {
+  /// Canonical name of the budget head.
   final String name;
+
+  /// High-level category (e.g. 'Utilities', 'Repairs & Maintenance', 'Staff & Security').
   final String category;
+
+  /// Total AGM-approved yearly budget allocation in INR.
   final double yearlyBudget;
+
   final double? _explicitMonthlyBudget;
+
+  /// Whether vouchers under this head require an uploaded invoice/bill receipt.
+  /// Note: Sundry / Misc is exempted.
   final bool isDocRequired;
+
+  /// Explanatory description of what expenses fall under this head.
   final String description;
+
+  /// Whether this budget head has been formally revised during the FY.
   final bool isRevised;
+
+  /// URL of the Minutes of Meeting (MOM) authorizing the revision.
   final String? momDocumentUrl;
+
+  /// Original filename of the uploaded MOM document.
   final String? momFileName;
+
+  /// Type of meeting where revision was approved (e.g. AGM, EGM, MC Meeting).
   final String? meetingType;
+
+  /// Date when the revision resolution was passed.
   final DateTime? meetingDate;
+
+  /// Justification rationale for the budget reallocation.
   final String? revisionReason;
+
+  /// Committee member or admin who recorded the revision.
   final String? revisedBy;
+
+  /// Timestamp when revision was recorded.
   final DateTime? revisedAt;
 
   const BudgetHead({
@@ -37,6 +89,7 @@ class BudgetHead {
     this.revisedAt,
   }) : _explicitMonthlyBudget = monthlyBudget;
 
+  /// Effective monthly budget allocation (explicit or yearly / 12).
   double get monthlyBudget => _explicitMonthlyBudget ?? (yearlyBudget / 12);
 
   BudgetHead copyWith({
@@ -74,6 +127,7 @@ class BudgetHead {
   }
 }
 
+/// Central configuration for accounting rules, financial year timelines, and fee formulas.
 class AccountingConfig {
   /// Simulated date for testing. Set to null for normal operation (uses DateTime.now()).
   static DateTime? simulatedDate;
@@ -585,7 +639,13 @@ class AccountingConfig {
     'Demand Draft',
   ];
 
-  /// Calculate itemized maintenance breakdown for active FY strictly as per approved budget
+  /// Calculates the itemized monthly maintenance breakdown for a flat.
+  ///
+  /// Incorporates:
+  /// - Base maintenance rate for the flat's block (A=₹450, B=₹420, C=₹390, D=₹490).
+  /// - Four-wheeler parking: `carCount * ₹430` (capped at 1 car per flat).
+  /// - Two-wheeler parking: `bikeCount * ₹100` (max 2 bikes per flat).
+  /// - Progressive late fine: [fine] (applied strictly to maintenance, never parking).
   static FlatMaintenanceBreakdown calculateMaintenanceBreakdown({
     required String flatNumber,
     int carCount = 0,
@@ -617,7 +677,12 @@ class AccountingConfig {
     );
   }
 
-  /// Calculate maintenance breakdown from user profile document data
+  /// Calculates the monthly maintenance breakdown directly from a resident's Firestore user document.
+  ///
+  /// Extracts approved vehicle registrations:
+  /// - `isCarOwner == true` with non-empty `carReg` -> 1 car
+  /// - `isBikeOwner == true` with non-empty `bikeReg` -> 1 bike
+  /// - `hasBike2 == true` with non-empty `bike2Reg` -> +1 bike
   static FlatMaintenanceBreakdown calculateFromUserData(Map<String, dynamic> userData, {double fine = 0.0}) {
     final flatNumber = (userData['flatNumber'] ?? 'A-101').toString();
     final block = (userData['block'] ?? '').toString().trim().toUpperCase();

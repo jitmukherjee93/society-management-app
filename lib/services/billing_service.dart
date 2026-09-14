@@ -16,11 +16,20 @@ class BillingService {
 
   /// Verifies an online/offline payment submission, marks due as PAID_VERIFIED,
   /// posts an income transaction to the society ledger, and notifies the resident.
+  ///
+  /// **Workflow & Rules:**
+  /// 1. Resolves flat number and accounting head (e.g. "Maintenance - Block A").
+  /// 2. If [data] is a multi-month payment, queries all sibling due records sharing the same UTR or parent ID.
+  /// 3. Executes an atomic [runTransaction] to verify that the bill is still unpaid, mark all linked
+  ///    dues as `PAID_VERIFIED`, and insert a corresponding entry into `society_transactions`.
+  /// 4. Dispatches an in-app confirmation notification to the resident with receipt details.
+  /// 5. Automatically detects parking gap conditions (if resident paid maintenance without parking).
   static Future<String> verifyPayment({
     required String dueId,
     required Map<String, dynamic> data,
     String verifiedBy = 'Admin',
   }) async {
+    // Step 1: Extract and normalize flat, month, payment mode, and reference information
     final rawFlat = (data['flatNumber'] ?? 'Unknown').toString();
     final normFlat = FlatUtils.normalize(rawFlat);
     final month = (data['month'] ?? 'Current Month').toString();
@@ -28,10 +37,11 @@ class BillingService {
     final paymentCategory = (data['paymentCategory'] ?? 'ONLINE').toString();
     final paymentMode = (data['paymentMode'] ?? 'Online Payment').toString();
 
-    // Determine budget block head via FlatUtils
+    // Determine the appropriate accounting head based on block (e.g. "Maintenance Collection - Block B")
     final head = FlatUtils.getMaintenanceHead(normFlat);
     final voucherCode = generateVoucherCode();
 
+    // Check if this payment covers multiple months in advance
     final isMultiMonth = data['isMultiMonthPayment'] == true || data['multiMonthTotalAmount'] != null;
     final double effectiveAmount = CurrencyMath.roundPaise(
       isMultiMonth
@@ -54,7 +64,7 @@ class BillingService {
     final dueRef = _fs.collection('maintenance_dues').doc(dueId);
     final parentId = (data['multiMonthParentDueId'] ?? dueId).toString();
 
-    // Pre-query sibling dues if multi-month payment to update inside the atomic transaction
+    // Step 2: Pre-fetch sibling dues if multi-month payment to include inside the atomic transaction
     List<DocumentSnapshot> siblingDocs = [];
     if (isMultiMonth) {
       Query<Map<String, dynamic>> siblingQuery = _fs
@@ -71,7 +81,7 @@ class BillingService {
       siblingDocs = siblingSnap.docs.where((d) => d.id != dueId).toList();
     }
 
-    // 1. Atomically verify payment, sibling dues, and post ledger income in one transaction
+    // Step 3: Run atomic transaction (preventing double-verification & posting ledger income)
     await _fs.runTransaction((transaction) async {
       final freshSnap = await transaction.get(dueRef);
       if (!freshSnap.exists) {
@@ -90,7 +100,7 @@ class BillingService {
         await transaction.get(sDoc.reference);
       }
 
-      // Update primary maintenance due document
+      // Update primary maintenance due document with verification metadata
       transaction.update(dueRef, {
         'status': 'PAID_VERIFIED',
         'receiptNumber': voucherCode,
@@ -126,7 +136,7 @@ class BillingService {
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // Update all sibling dues within the SAME transaction
+      // Update all sibling advance dues within the SAME transaction
       for (final sDoc in siblingDocs) {
         transaction.update(sDoc.reference, {
           'status': 'PAID_VERIFIED',
@@ -266,6 +276,9 @@ class BillingService {
     final normFlat = FlatUtils.normalize(flatNumber);
 
     final dueDoc = await _fs.collection('maintenance_dues').doc(dueId).get();
+    if (!dueDoc.exists) {
+      throw Exception('Due document ($dueId) does not exist.');
+    }
     final data = dueDoc.data() ?? {};
     final isMultiMonth = data['isMultiMonthPayment'] == true || data['multiMonthParentDueId'] != null;
     final parentId = (data['multiMonthParentDueId'] ?? dueId).toString();
@@ -330,6 +343,9 @@ class BillingService {
 
     // 1. Fetch the primary due doc to check parent / multi-month links
     final primaryDueDoc = await _fs.collection('maintenance_dues').doc(dueId).get();
+    if (!primaryDueDoc.exists) {
+      throw Exception('Due document ($dueId) does not exist.');
+    }
     final primaryData = primaryDueDoc.data() ?? {};
     final String parentId = (primaryData['multiMonthParentDueId'] ?? dueId).toString();
 

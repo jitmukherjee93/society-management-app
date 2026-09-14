@@ -16,6 +16,7 @@ import '../../../theme/app_decorations.dart';
 import '../../../widgets/app_dialog.dart';
 import '../../../widgets/app_feedback.dart';
 import '../../../widgets/app_error_boundary.dart';
+import '../../../services/notification_service.dart';
 import 'manage_guards_tab.dart';
 
 class ManageSocietyTab extends StatefulWidget {
@@ -1597,17 +1598,22 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
 
       await FirebaseFirestore.instance.collection('users').doc(userDocId).update(updateData);
 
-      // Notify resident
+      // Notify resident with clear push notification message
       final targetUid = userData['uid']?.toString();
+      final residentFlat = userData['flatNumber']?.toString() ?? '';
       if (targetUid != null && targetUid.isNotEmpty) {
-        await FirebaseFirestore.instance.collection('notifications').add({
-          'targetUid': targetUid,
-          'targetRole': 'RESIDENT',
-          'type': 'VEHICLE_APPROVED',
-          'title': '$vehicleType Number Approved',
-          'message': 'Your request to update $vehicleType number to $approvedReg has been approved by the Admin.',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+        await NotificationService.notifyResident(
+          flatNumber: residentFlat,
+          targetUid: targetUid,
+          title: '🚗 $vehicleType Registration Approved',
+          message: 'Your vehicle update request for $vehicleType ($approvedReg) has been approved by Society Management.',
+          type: 'VEHICLE_APPROVED',
+          extraData: {
+            'vehicleType': vehicleType,
+            'regNumber': approvedReg,
+            'flatNumber': residentFlat,
+          },
+        );
       }
 
       // Dismiss corresponding admin notification(s)
@@ -1726,17 +1732,22 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                         } catch (_) {}
                       }
 
-                      // Notify resident
+                      // Notify resident with clear push notification message
                       final targetUid = userData['uid']?.toString();
+                      final residentFlat = userData['flatNumber']?.toString() ?? '';
                       if (targetUid != null && targetUid.isNotEmpty) {
-                        await FirebaseFirestore.instance.collection('notifications').add({
-                          'targetUid': targetUid,
-                          'targetRole': 'RESIDENT',
-                          'type': 'VEHICLE_REJECTED',
-                          'title': '$vehicleType Number Update Rejected',
-                          'message': 'Your request to update $vehicleType number was rejected by Admin. Reason: $reason',
-                          'createdAt': FieldValue.serverTimestamp(),
-                        });
+                        await NotificationService.notifyResident(
+                          flatNumber: residentFlat,
+                          targetUid: targetUid,
+                          title: '⚠️ $vehicleType Registration Update Rejected',
+                          message: 'Your request to update $vehicleType registration was rejected: $reason. Please contact the society office if you need assistance.',
+                          type: 'VEHICLE_REJECTED',
+                          extraData: {
+                            'vehicleType': vehicleType,
+                            'rejectionReason': reason,
+                            'flatNumber': residentFlat,
+                          },
+                        );
                       }
 
                       // Dismiss corresponding admin notification(s)
@@ -2027,23 +2038,78 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                 );
               }
 
-              return GridView.builder(
-                padding: const EdgeInsets.all(16),
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 260,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  mainAxisExtent: 145,
-                ),
-                itemCount: docs.length,
-                itemBuilder: (context, index) {
-                  final doc = docs[index];
-                  final flatId = doc.id;
-                  final flatData = doc.data() as Map<String, dynamic>;
-                  return _FlatTile(
-                    flatId: flatId,
-                    flatData: flatData,
-                    onTap: () => _showFlatDetailsModal(context, flatId, flatData),
+              return StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance.collection('users').snapshots(),
+                builder: (context, usersSnapshot) {
+                  final allUserDocs = usersSnapshot.data?.docs ?? [];
+                  final Map<String, List<DocumentSnapshot>> usersByFlat = {};
+                  for (final uDoc in allUserDocs) {
+                    final uData = uDoc.data() as Map<String, dynamic>;
+                    final norm = FlatUtils.normalize((uData['flatNumber'] ?? '').toString());
+                    if (norm.isNotEmpty) {
+                      usersByFlat.putIfAbsent(norm, () => []).add(uDoc);
+                    }
+                  }
+
+                  return StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance.collection('maintenance_dues').snapshots(),
+                    builder: (context, duesSnapshot) {
+                      final allDuesDocs = duesSnapshot.data?.docs ?? [];
+                      final Map<String, List<DocumentSnapshot>> duesByFlat = {};
+                      for (final dDoc in allDuesDocs) {
+                        final dData = dDoc.data() as Map<String, dynamic>;
+                        final norm = FlatUtils.normalize((dData['flatNumber'] ?? '').toString());
+                        if (norm.isNotEmpty) {
+                          duesByFlat.putIfAbsent(norm, () => []).add(dDoc);
+                        }
+                      }
+
+                      return GridView.builder(
+                        padding: const EdgeInsets.all(16),
+                        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: 260,
+                          mainAxisSpacing: 12,
+                          crossAxisSpacing: 12,
+                          mainAxisExtent: 145,
+                        ),
+                        itemCount: docs.length,
+                        itemBuilder: (context, index) {
+                          final doc = docs[index];
+                          final flatId = doc.id;
+                          final flatData = doc.data() as Map<String, dynamic>;
+                          final normFlat = FlatUtils.normalize(flatId);
+                          final lookupKeys = FlatUtils.getLookupKeys(normFlat);
+
+                          final matchedUsers = <DocumentSnapshot>[];
+                          final matchedDues = <DocumentSnapshot>[];
+
+                          for (final key in lookupKeys) {
+                            if (usersByFlat.containsKey(key)) {
+                              for (final u in usersByFlat[key]!) {
+                                if (!matchedUsers.any((m) => m.id == u.id)) {
+                                  matchedUsers.add(u);
+                                }
+                              }
+                            }
+                            if (duesByFlat.containsKey(key)) {
+                              for (final d in duesByFlat[key]!) {
+                                if (!matchedDues.any((m) => m.id == d.id)) {
+                                  matchedDues.add(d);
+                                }
+                              }
+                            }
+                          }
+
+                          return _FlatTile(
+                            flatId: flatId,
+                            flatData: flatData,
+                            userDocs: matchedUsers,
+                            duesDocs: matchedDues,
+                            onTap: () => _showFlatDetailsModal(context, flatId, flatData),
+                          );
+                        },
+                      );
+                    },
                   );
                 },
               );
@@ -2099,11 +2165,15 @@ class _BulbLegendItem extends StatelessWidget {
 class _FlatTile extends StatelessWidget {
   final String flatId;
   final Map<String, dynamic> flatData;
+  final List<DocumentSnapshot> userDocs;
+  final List<DocumentSnapshot> duesDocs;
   final VoidCallback onTap;
 
   const _FlatTile({
     required this.flatId,
     required this.flatData,
+    required this.userDocs,
+    required this.duesDocs,
     required this.onTap,
   });
 
@@ -2113,246 +2183,225 @@ class _FlatTile extends StatelessWidget {
     final isRented = flatData['isRented'] == true;
     final flatNumber = flatData['flatNumber']?.toString() ?? flatId;
     final displayFlatNumber = flatNumber.contains('-') ? flatNumber.split('-').last : flatNumber;
-    final lookupKeys = FlatUtils.getLookupKeys(flatId).toList();
+    final bulbData = _MaintenanceBulbData.calculate(duesDocs);
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('maintenance_dues')
-          .where('flatNumber', whereIn: lookupKeys.isNotEmpty ? lookupKeys : [flatId])
-          .snapshots(),
-      builder: (context, duesSnapshot) {
-        final duesDocs = duesSnapshot.data?.docs ?? [];
-        final bulbData = _MaintenanceBulbData.calculate(duesDocs);
+    int cars = 0;
+    int bikes = 0;
+    final List<String> carRegs = [];
+    final List<String> bikeRegs = [];
+    bool hasPendingReq = false;
+    final List<String> pendingReqs = [];
+    String? primaryOccupantName;
 
-        return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('users')
-              .where('flatNumber', isEqualTo: flatId)
-              .snapshots(),
-          builder: (context, snapshot) {
-            final docs = snapshot.data?.docs ?? [];
-            
-            int cars = 0;
-            int bikes = 0;
-            final List<String> carRegs = [];
-            final List<String> bikeRegs = [];
-            bool hasPendingReq = false;
-            final List<String> pendingReqs = [];
-            String? primaryOccupantName;
+    for (final doc in userDocs) {
+      final data = doc.data() as Map<String, dynamic>;
+      if (primaryOccupantName == null && (data['name']?.toString().isNotEmpty ?? false)) {
+        primaryOccupantName = data['name'].toString();
+      }
+      if (data['isCarOwner'] == true && (data['carReg']?.toString().trim().isNotEmpty ?? false)) {
+        cars++;
+        final reg = data['carReg'].toString().trim();
+        if (!carRegs.contains(reg)) carRegs.add(reg);
+      }
+      if (data['isBikeOwner'] == true && (data['bikeReg']?.toString().trim().isNotEmpty ?? false)) {
+        bikes++;
+        final reg = data['bikeReg'].toString().trim();
+        if (!bikeRegs.contains(reg)) bikeRegs.add(reg);
+      }
+      if (data['hasBike2'] == true && (data['bike2Reg']?.toString().trim().isNotEmpty ?? false)) {
+        bikes++;
+        final reg = data['bike2Reg'].toString().trim();
+        if (!bikeRegs.contains(reg)) bikeRegs.add(reg);
+      }
+      if (data['pendingCarReg']?.toString().isNotEmpty ?? false) {
+        hasPendingReq = true;
+        pendingReqs.add('Car: ${data['pendingCarReg']}');
+      }
+      if (data['pendingBikeReg']?.toString().isNotEmpty ?? false) {
+        hasPendingReq = true;
+        pendingReqs.add('Bike 1: ${data['pendingBikeReg']}');
+      }
+      if (data['pendingBike2Reg']?.toString().isNotEmpty ?? false) {
+        hasPendingReq = true;
+        pendingReqs.add('Bike 2: ${data['pendingBike2Reg']}');
+      }
+    }
 
-            for (final doc in docs) {
-              final data = doc.data() as Map<String, dynamic>;
-              if (primaryOccupantName == null && (data['name']?.toString().isNotEmpty ?? false)) {
-                primaryOccupantName = data['name'].toString();
-              }
-              if (data['isCarOwner'] == true && (data['carReg']?.toString().trim().isNotEmpty ?? false)) {
-                cars++;
-                final reg = data['carReg'].toString().trim();
-                if (!carRegs.contains(reg)) carRegs.add(reg);
-              }
-              if (data['isBikeOwner'] == true && (data['bikeReg']?.toString().trim().isNotEmpty ?? false)) {
-                bikes++;
-                final reg = data['bikeReg'].toString().trim();
-                if (!bikeRegs.contains(reg)) bikeRegs.add(reg);
-              }
-              if (data['hasBike2'] == true && (data['bike2Reg']?.toString().trim().isNotEmpty ?? false)) {
-                bikes++;
-                final reg = data['bike2Reg'].toString().trim();
-                if (!bikeRegs.contains(reg)) bikeRegs.add(reg);
-              }
-              if (data['pendingCarReg']?.toString().isNotEmpty ?? false) {
-                hasPendingReq = true;
-                pendingReqs.add('Car: ${data['pendingCarReg']}');
-              }
-              if (data['pendingBikeReg']?.toString().isNotEmpty ?? false) {
-                hasPendingReq = true;
-                pendingReqs.add('Bike 1: ${data['pendingBikeReg']}');
-              }
-              if (data['pendingBike2Reg']?.toString().isNotEmpty ?? false) {
-                hasPendingReq = true;
-                pendingReqs.add('Bike 2: ${data['pendingBike2Reg']}');
-              }
-            }
+    final isVacant = userDocs.isEmpty;
 
-            final isVacant = docs.isEmpty;
-
-            return Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: onTap,
-                borderRadius: BorderRadius.circular(12),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.cardSurface,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: hasPendingReq ? AppColors.warningBorder : AppColors.border,
-                      width: hasPendingReq ? 1.4 : 0.9,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.03),
-                        blurRadius: 6,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppColors.cardSurface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: hasPendingReq ? AppColors.warningBorder : AppColors.border,
+              width: hasPendingReq ? 1.4 : 0.9,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Top Row: Maintenance Bulb + Block & Flat No + Occupancy Status
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
                     children: [
-                      // Top Row: Maintenance Bulb + Block & Flat No + Occupancy Status
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
-                            children: [
-                              _MaintenanceBulbIcon(data: bulbData, size: 13),
-                              const SizedBox(width: 6),
-                              if (block.isNotEmpty) ...[
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primarySurface,
-                                    borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(color: AppColors.primaryBorder, width: 0.8),
-                                  ),
-                                  child: Text(
-                                    block,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 11,
-                                      color: AppColors.primary,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 5),
-                              ],
-                              Text(
-                                displayFlatNumber,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                            ],
+                      _MaintenanceBulbIcon(data: bulbData, size: 13),
+                      const SizedBox(width: 6),
+                      if (block.isNotEmpty) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.primarySurface,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: AppColors.primaryBorder, width: 0.8),
                           ),
-                          if (isVacant)
-                            const AppBadge(
-                              label: 'Vacant',
-                              textColor: AppColors.textMuted,
-                              backgroundColor: AppColors.cardSurfaceSecondary,
-                              borderColor: AppColors.border,
-                            )
-                          else if (isRented)
-                            AppBadge.info('Rented')
-                          else
-                            AppBadge.success('Owner'),
-                        ],
-                      ),
-
-                      // Middle Row: Primary occupant name
-                      Row(
-                        children: [
-                          Icon(
-                            isVacant ? Icons.person_off_outlined : Icons.person_outline,
-                            size: 14,
-                            color: isVacant ? AppColors.textMuted : AppColors.textSecondary,
-                          ),
-                          const SizedBox(width: 5),
-                          Expanded(
-                            child: Text(
-                              isVacant
-                                  ? 'No occupant'
-                                  : (docs.length > 1
-                                      ? '$primaryOccupantName (+${docs.length - 1})'
-                                      : (primaryOccupantName ?? 'Occupant')),
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: isVacant ? AppColors.textMuted : AppColors.textPrimary,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                          child: Text(
+                            block,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                              color: AppColors.primary,
                             ),
                           ),
-                        ],
-                      ),
-
-                      // Bottom Row: Vehicles + Pending request indicator
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
-                            children: [
-                              if (cars > 0) ...[
-                                Tooltip(
-                                  message: carRegs.length == 1
-                                      ? 'Car Reg: ${carRegs.first}'
-                                      : 'Car Regs (${carRegs.length}):\n${carRegs.map((r) => '• $r').join('\n')}',
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.cardSurfaceSecondary,
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(color: AppColors.border, width: 0.7),
-                                    ),
-                                    child: Text('🚗 $cars', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                              ],
-                              if (bikes > 0) ...[
-                                Tooltip(
-                                  message: bikeRegs.length == 1
-                                      ? 'Bike Reg: ${bikeRegs.first}'
-                                      : 'Bike Regs (${bikeRegs.length}):\n${bikeRegs.map((r) => '• $r').join('\n')}',
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.cardSurfaceSecondary,
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(color: AppColors.border, width: 0.7),
-                                    ),
-                                    child: Text('🏍️ $bikes', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                              ],
-                              if (cars == 0 && bikes == 0)
-                                const Text(
-                                  'No vehicles',
-                                  style: TextStyle(fontSize: 10, color: AppColors.textMuted),
-                                ),
-                            ],
-                          ),
-                          if (hasPendingReq)
-                            Tooltip(
-                              message: 'Pending Approval:\n${pendingReqs.join('\n')}',
-                              child: const AppBadge(
-                                label: 'Pending Req',
-                                icon: Icons.pending_actions,
-                                textColor: AppColors.warning,
-                                backgroundColor: AppColors.warningSurface,
-                                borderColor: AppColors.warningBorder,
-                                fontSize: 10,
-                                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              ),
-                            )
-                          else
-                            const Icon(Icons.arrow_forward_ios, size: 11, color: AppColors.textMuted),
-                        ],
+                        ),
+                        const SizedBox(width: 5),
+                      ],
+                      Text(
+                        displayFlatNumber,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                          color: AppColors.textPrimary,
+                        ),
                       ),
                     ],
                   ),
-                ),
+                  if (isVacant)
+                    const AppBadge(
+                      label: 'Vacant',
+                      textColor: AppColors.textMuted,
+                      backgroundColor: AppColors.cardSurfaceSecondary,
+                      borderColor: AppColors.border,
+                    )
+                  else if (isRented)
+                    AppBadge.info('Rented')
+                  else
+                    AppBadge.success('Owner'),
+                ],
               ),
-            );
-          },
-        );
-      },
+
+              // Middle Row: Primary occupant name
+              Row(
+                children: [
+                  Icon(
+                    isVacant ? Icons.person_off_outlined : Icons.person_outline,
+                    size: 14,
+                    color: isVacant ? AppColors.textMuted : AppColors.textSecondary,
+                  ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      isVacant
+                          ? 'No occupant'
+                          : (userDocs.length > 1
+                              ? '$primaryOccupantName (+${userDocs.length - 1})'
+                              : (primaryOccupantName ?? 'Occupant')),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: isVacant ? AppColors.textMuted : AppColors.textPrimary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+
+              // Bottom Row: Vehicles + Pending request indicator
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      if (cars > 0) ...[
+                        Tooltip(
+                          message: carRegs.length == 1
+                              ? 'Car Reg: ${carRegs.first}'
+                              : 'Car Regs (${carRegs.length}):\n${carRegs.map((r) => '• $r').join('\n')}',
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.cardSurfaceSecondary,
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: AppColors.border, width: 0.7),
+                            ),
+                            child: Text('🚗 $cars', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      if (bikes > 0) ...[
+                        Tooltip(
+                          message: bikeRegs.length == 1
+                              ? 'Bike Reg: ${bikeRegs.first}'
+                              : 'Bike Regs (${bikeRegs.length}):\n${bikeRegs.map((r) => '• $r').join('\n')}',
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.cardSurfaceSecondary,
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: AppColors.border, width: 0.7),
+                            ),
+                            child: Text('🏍️ $bikes', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      if (cars == 0 && bikes == 0)
+                        const Text(
+                          'No vehicles',
+                          style: TextStyle(fontSize: 10, color: AppColors.textMuted),
+                        ),
+                    ],
+                  ),
+                  if (hasPendingReq)
+                    Tooltip(
+                      message: 'Pending Approval:\n${pendingReqs.join('\n')}',
+                      child: const AppBadge(
+                        label: 'Pending Req',
+                        icon: Icons.pending_actions,
+                        textColor: AppColors.warning,
+                        backgroundColor: AppColors.warningSurface,
+                        borderColor: AppColors.warningBorder,
+                        fontSize: 10,
+                        padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      ),
+                    )
+                  else
+                    const Icon(Icons.arrow_forward_ios, size: 11, color: AppColors.textMuted),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -2378,7 +2427,7 @@ class _MaintenanceBulbData {
     this.isGlowing = true,
   });
 
-  static _MaintenanceBulbData calculate(List<QueryDocumentSnapshot> duesDocs) {
+  static _MaintenanceBulbData calculate(List<DocumentSnapshot> duesDocs) {
     final now = DateTime.now();
     final currentMonthStr = DateFormat('MMMM yyyy').format(now);
 

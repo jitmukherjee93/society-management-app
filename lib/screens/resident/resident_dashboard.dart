@@ -10,7 +10,9 @@ import '../../services/billing_service.dart';
 import '../../utils/flat_utils.dart';
 import 'tabs/community_feed_tab.dart';
 import '../../utils/storage_utils.dart';
+import '../../services/notification_service.dart';
 import '../../services/visitor_pass_service.dart';
+import '../../services/push_notification_manager.dart';
 import '../../widgets/document_preview_dialog.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_decorations.dart';
@@ -21,6 +23,31 @@ import '../../models/notice_model.dart';
 import '../../widgets/notices/two_column_notice_list.dart';
 import '../../widgets/maintenance/maintenance_months_calendar.dart';
 
+// ============================================================================
+// RESIDENT PORTAL & SELF-SERVICE DASHBOARD
+// ============================================================================
+// This is the core resident experience for society members.
+//
+// Key Feature Modules:
+// 1. Dues & Multi-Month Payments (Home Tab):
+//    - Real-time monthly dues, progressive late fine calculation, and payment status.
+//    - Multi-month advance payments (up to 12 consecutive months).
+//    - UTR online submission and downloadable PDF maintenance receipts.
+//
+// 2. Security & Visitor Passes (Visitors Tab):
+//    - 6-digit gate passcode generation (valid for 8 hours, single-use).
+//    - 1-tap Approve / Deny actions for walk-in visitors and delivery agents at the gate.
+//    - Campus entry/exit real-time logs.
+//
+// 3. Society Helpdesk & Complaints (Helpdesk Tab):
+//    - Ticket creation for plumbing, electrical, civil, security, and cleanliness.
+//    - Ticket tracking with photo attachments and admin resolution comments.
+//
+// 4. Community Notices & Feeds (Notices & Community Tabs):
+//    - RWA circulars, AGM announcements, emergency notices, and community discussions.
+// ============================================================================
+
+/// Evaluates whether a given Firestore notification payload is addressed to the current logged-in resident.
 bool _isNotificationForResident(Map<String, dynamic> data, User? user, [String? userFlat, String? fullFlat]) {
   if (user == null) return false;
   final userUid = user.uid;
@@ -60,6 +87,7 @@ bool _isNotificationForResident(Map<String, dynamic> data, User? user, [String? 
   return false;
 }
 
+/// Primary resident self-service portal screen.
 class ResidentDashboard extends StatefulWidget {
   const ResidentDashboard({super.key});
 
@@ -71,6 +99,7 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
   int _currentIndex = 0;
   String? _selectedMaintenanceMonth;
   Future<DocumentReference?>? _userDocRefFuture;
+  bool _isWarningBannerCollapsed = false;
 
   @override
   void initState() {
@@ -83,6 +112,33 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           : null;
       _userDocRefFuture = _resolveUserDocRef(user.uid, userEmail, flatPrefix);
     }
+
+    // Register Push Notification Click Delegate for instant navigation/dialogs
+    // When resident taps an in-app heads-up push banner, route directly to the target modal or tab
+    PushNotificationManager.instance.onNotificationClick = (ctx, payload) {
+      NotificationsTab.handleNotificationClick(
+        context: ctx,
+        notif: payload.extraData,
+        docId: payload.id,
+        onNavigateTab: (idx, [monthPayload]) {
+          setState(() {
+            _currentIndex = idx;
+            if (monthPayload != null && idx == 4) {
+              _selectedMaintenanceMonth = monthPayload;
+            }
+          });
+        },
+      );
+    };
+  }
+
+  @override
+  void dispose() {
+    // Clean up push notification callback when dashboard is unmounted
+    if (PushNotificationManager.instance.onNotificationClick != null) {
+      PushNotificationManager.instance.onNotificationClick = null;
+    }
+    super.dispose();
   }
 
   @override
@@ -181,13 +237,18 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('notifications')
+          .where('targetRole', whereIn: ['RESIDENT', 'ALL'])
+          .limit(100)
           .snapshots(),
       builder: (context, notifSnap) {
         final docs = (notifSnap.data?.docs ?? []).where((doc) {
           final data = doc.data() as Map<String, dynamic>;
           return _isNotificationForResident(data, user, userFlat, fullFlat);
         }).toList();
-        final notifCount = docs.length;
+        final notifCount = docs.where((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          return data['isRead'] != true;
+        }).length;
 
         return Scaffold(
           appBar: AppBar(
@@ -380,131 +441,171 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
   ) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: const Color(0xFFFEF2F2),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFF87171), width: 1.5),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFF87171), width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: Colors.red.withValues(alpha: 0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+            color: Colors.red.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: const BoxDecoration(
-                  color: Color(0xFFFEE2E2),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
+      child: _isWarningBannerCollapsed
+          ? Row(
+              children: [
+                const Icon(
                   Icons.warning_amber_rounded,
                   color: Color(0xFFDC2626),
-                  size: 24,
+                  size: 16,
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Action Required: Update email address ($defaultLoginId)',
+                    style: const TextStyle(
+                      color: Color(0xFF991B1B),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => _showUpdateEmailDialog(
+                    context,
+                    user,
+                    userDocRef,
+                    userData,
+                    defaultLoginId,
+                  ),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFDC2626),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    minimumSize: const Size(0, 26),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text(
+                    'Update',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: Color(0xFF991B1B)),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Expand details',
+                  onPressed: () => setState(() => _isWarningBannerCollapsed = false),
+                ),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    const Text(
-                      'Action Required: Update Your Email Address',
-                      style: TextStyle(
-                        color: Color(0xFF991B1B),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFEE2E2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xFFDC2626),
+                        size: 15,
                       ),
                     ),
-                    const SizedBox(height: 6),
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          const TextSpan(
-                            text: '* ',
-                            style: TextStyle(
-                              color: Color(0xFFDC2626),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                          ),
-                          TextSpan(
-                            text:
-                                'Please update your email id with a valid email address. Post that you will be able to reset your password and your login user id will be updated to your email id from ',
-                            style: const TextStyle(
-                              color: Color(0xFF7F1D1D),
-                              fontSize: 12.5,
-                              height: 1.4,
-                            ),
-                          ),
-                          TextSpan(
-                            text: defaultLoginId,
-                            style: const TextStyle(
-                              color: Color(0xFF991B1B),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12.5,
-                            ),
-                          ),
-                          const TextSpan(
-                            text: '.',
-                            style: TextStyle(
-                              color: Color(0xFF7F1D1D),
-                              fontSize: 12.5,
-                            ),
-                          ),
-                        ],
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Action Required: Update Email Address',
+                        style: TextStyle(
+                          color: Color(0xFF991B1B),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Notice: Your account is currently using the initial default password (Password@123). Updating your personal email enables you to revoke this default password and secure your account.',
-                      style: TextStyle(
-                        color: Color(0xFFB91C1C),
-                        fontSize: 11.5,
-                        fontStyle: FontStyle.italic,
-                      ),
+                    IconButton(
+                      icon: const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: Color(0xFF991B1B)),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Collapse banner',
+                      onPressed: () => setState(() => _isWarningBannerCollapsed = true),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerRight,
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.mark_email_read_outlined, size: 16),
-              label: const Text(
-                'Update Email & Secure Account',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFDC2626),
-                foregroundColor: Colors.white,
-                elevation: 0,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: () => _showUpdateEmailDialog(
-                context,
-                user,
-                userDocRef,
-                userData,
-                defaultLoginId,
-              ),
+                const SizedBox(height: 3),
+                Padding(
+                  padding: const EdgeInsets.only(left: 27),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text.rich(
+                        TextSpan(
+                          style: const TextStyle(
+                            color: Color(0xFF7F1D1D),
+                            fontSize: 11,
+                            height: 1.3,
+                          ),
+                          children: [
+                            const TextSpan(
+                              text: 'Update your email to secure your account and revoke default password (Password@123). Login ID will update from ',
+                            ),
+                            TextSpan(
+                              text: defaultLoginId,
+                              style: const TextStyle(
+                                color: Color(0xFF991B1B),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const TextSpan(text: '.'),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.mark_email_read_outlined, size: 13),
+                          label: const Text(
+                            'Update Email & Secure Account',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFDC2626),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            minimumSize: const Size(0, 26),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                          onPressed: () => _showUpdateEmailDialog(
+                            context,
+                            user,
+                            userDocRef,
+                            userData,
+                            defaultLoginId,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -517,92 +618,157 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
   ) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: const Color(0xFFFFFBEB),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFCD34D), width: 1.5),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFFCD34D), width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: Colors.amber.withValues(alpha: 0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+            color: Colors.amber.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: const BoxDecoration(
-                  color: Color(0xFFFEF3C7),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
+      child: _isWarningBannerCollapsed
+          ? Row(
+              children: [
+                const Icon(
                   Icons.shield_outlined,
                   color: Color(0xFFD97706),
-                  size: 24,
+                  size: 16,
                 ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Security Alert: Default password active',
+                    style: TextStyle(
+                      color: Color(0xFF92400E),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => _showUpdateEmailDialog(
+                    context,
+                    user,
+                    userDocRef,
+                    userData,
+                    defaultLoginId,
+                  ),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFD97706),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    minimumSize: const Size(0, 26),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text(
+                    'Secure',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: Color(0xFF92400E)),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Expand details',
+                  onPressed: () => setState(() => _isWarningBannerCollapsed = false),
+                ),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Text(
-                      'Security Alert: Default Password Active',
-                      style: TextStyle(
-                        color: Color(0xFF92400E),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFEF3C7),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.shield_outlined,
+                        color: Color(0xFFD97706),
+                        size: 15,
                       ),
                     ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Your account is currently using the initial default password (Password@123). Please set a private password or request a password reset email to secure your account.',
-                      style: TextStyle(
-                        color: Color(0xFF78350F),
-                        fontSize: 12.5,
-                        height: 1.35,
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Security Alert: Default Password Active',
+                        style: TextStyle(
+                          color: Color(0xFF92400E),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: Color(0xFF92400E)),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Collapse banner',
+                      onPressed: () => setState(() => _isWarningBannerCollapsed = true),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerRight,
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.lock_reset_rounded, size: 16),
-              label: const Text(
-                'Change Password & Security',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFD97706),
-                foregroundColor: Colors.white,
-                elevation: 0,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: () => _showUpdateEmailDialog(
-                context,
-                user,
-                userDocRef,
-                userData,
-                defaultLoginId,
-              ),
+                const SizedBox(height: 3),
+                Padding(
+                  padding: const EdgeInsets.only(left: 27),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Your account is using default password (Password@123). Set a private password or request a reset email to secure your account.',
+                        style: TextStyle(
+                          color: Color(0xFF78350F),
+                          fontSize: 11,
+                          height: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.lock_reset_rounded, size: 13),
+                          label: const Text(
+                            'Change Password & Secure',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFD97706),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            minimumSize: const Size(0, 26),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                          onPressed: () => _showUpdateEmailDialog(
+                            context,
+                            user,
+                            userDocRef,
+                            userData,
+                            defaultLoginId,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1574,18 +1740,19 @@ class _HomeTabState extends State<HomeTab> {
                           }
                           updatePayload['carRejectionReason'] = FieldValue.delete();
 
-                          // Notify admin
-                          await FirebaseFirestore.instance.collection('notifications').add({
-                            'targetRole': 'ADMIN',
-                            'type': 'VEHICLE_UPDATE_REQUEST',
-                            'title': 'Car Number Update Request',
-                            'message': '$residentName ($flatDisplay) requested to update Car number to $newCarReg with RC copy.',
-                            'flatNumber': flatDisplay,
-                            'userId': docId,
-                            'vehicleType': 'Car',
-                            'requestedReg': newCarReg,
-                            'createdAt': FieldValue.serverTimestamp(),
-                          });
+                          // Notify admin with clear push notification message
+                          await NotificationService.notifyAdmin(
+                            title: '🚗 Car Number Update Request',
+                            message: '$residentName ($flatDisplay) requested to update Car number to $newCarReg with RC copy.',
+                            type: 'VEHICLE_UPDATE_REQUEST',
+                            flatNumber: flatDisplay,
+                            extraData: {
+                              'userId': docId,
+                              'vehicleType': 'Car',
+                              'requestedReg': newCarReg,
+                              'flatNumber': flatDisplay,
+                            },
+                          );
                         }
 
                         if (!isBikeOwner) {
@@ -1615,18 +1782,19 @@ class _HomeTabState extends State<HomeTab> {
                             }
                             updatePayload['bikeRejectionReason'] = FieldValue.delete();
 
-                            // Notify admin
-                            await FirebaseFirestore.instance.collection('notifications').add({
-                              'targetRole': 'ADMIN',
-                              'type': 'VEHICLE_UPDATE_REQUEST',
-                              'title': 'Bike 1 Number Update Request',
-                              'message': '$residentName ($flatDisplay) requested to update Bike 1 number to $newBikeReg with RC copy.',
-                              'flatNumber': flatDisplay,
-                              'userId': docId,
-                              'vehicleType': 'Bike 1',
-                              'requestedReg': newBikeReg,
-                              'createdAt': FieldValue.serverTimestamp(),
-                            });
+                            // Notify admin with clear push notification message
+                            await NotificationService.notifyAdmin(
+                              title: '🏍️ Bike 1 Number Update Request',
+                              message: '$residentName ($flatDisplay) requested to update Bike 1 number to $newBikeReg with RC copy.',
+                              type: 'VEHICLE_UPDATE_REQUEST',
+                              flatNumber: flatDisplay,
+                              extraData: {
+                                'userId': docId,
+                                'vehicleType': 'Bike 1',
+                                'requestedReg': newBikeReg,
+                                'flatNumber': flatDisplay,
+                              },
+                            );
                           }
 
                           if (!hasBike2) {
@@ -1649,18 +1817,19 @@ class _HomeTabState extends State<HomeTab> {
                             }
                             updatePayload['bike2RejectionReason'] = FieldValue.delete();
 
-                            // Notify admin
-                            await FirebaseFirestore.instance.collection('notifications').add({
-                              'targetRole': 'ADMIN',
-                              'type': 'VEHICLE_UPDATE_REQUEST',
-                              'title': 'Bike 2 Number Update Request',
-                              'message': '$residentName ($flatDisplay) requested to update Bike 2 number to $newBike2Reg with RC copy.',
-                              'flatNumber': flatDisplay,
-                              'userId': docId,
-                              'vehicleType': 'Bike 2',
-                              'requestedReg': newBike2Reg,
-                              'createdAt': FieldValue.serverTimestamp(),
-                            });
+                            // Notify admin with clear push notification message
+                            await NotificationService.notifyAdmin(
+                              title: '🏍️ Bike 2 Number Update Request',
+                              message: '$residentName ($flatDisplay) requested to update Bike 2 number to $newBike2Reg with RC copy.',
+                              type: 'VEHICLE_UPDATE_REQUEST',
+                              flatNumber: flatDisplay,
+                              extraData: {
+                                'userId': docId,
+                                'vehicleType': 'Bike 2',
+                                'requestedReg': newBike2Reg,
+                                'flatNumber': flatDisplay,
+                              },
+                            );
                           }
                         }
 
@@ -2290,13 +2459,16 @@ class NotificationsTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
+    // Provide bottom padding so notification cards at the bottom are not hidden behind NavigationBar
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
       children: [
         if (user != null) ...[
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('notifications')
+                .where('targetRole', whereIn: ['RESIDENT', 'ALL'])
+                .limit(100)
                 .snapshots(),
             builder: (context, snap) {
               if (snap.hasError) {
@@ -2320,6 +2492,8 @@ class NotificationsTab extends StatelessWidget {
 
               if (docs.isEmpty) return const SizedBox.shrink();
 
+              final unreadDocs = docs.where((d) => (d.data() as Map)['isRead'] != true).toList();
+
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2335,11 +2509,29 @@ class NotificationsTab extends StatelessWidget {
                             fontWeight: FontWeight.bold,
                             color: Colors.teal),
                       ),
+                      if (unreadDocs.isNotEmpty) ...[
+                        const Spacer(),
+                        TextButton.icon(
+                          onPressed: () async {
+                            await NotificationService.markAllAsRead(
+                              unreadDocs.map((d) => d.id).toList(),
+                            );
+                          },
+                          icon: const Icon(Icons.done_all, size: 16, color: Colors.teal),
+                          label: const Text('Mark all read', style: TextStyle(fontSize: 12, color: Colors.teal)),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 8),
                   ...docs.map((doc) {
                     final notif = doc.data() as Map<String, dynamic>;
+                    final isRead = notif['isRead'] == true;
                     final title = notif['title'] ?? 'Notification';
                     final msg = notif['message'] ?? '';
                     final type =
@@ -2405,17 +2597,20 @@ class NotificationsTab extends StatelessWidget {
                                         ? Colors.red.shade800
                                         : Colors.teal.shade800;
 
+                    final isCheckOut = type == 'VISITOR_CHECK_OUT';
                     final iconData = isEmergency
                         ? Icons.warning_rounded
-                        : isVisitor
-                            ? Icons.person_pin_circle_rounded
-                            : isParcel
-                                ? Icons.inventory_2_rounded
-                                : isApproved
-                                    ? Icons.check_circle
-                                    : isRejected
-                                        ? Icons.cancel
-                                        : Icons.info;
+                        : isCheckOut
+                            ? Icons.logout_rounded
+                            : isVisitor
+                                ? Icons.person_pin_circle_rounded
+                                : isParcel
+                                    ? Icons.inventory_2_rounded
+                                    : isApproved
+                                        ? Icons.check_circle
+                                        : isRejected
+                                            ? Icons.cancel
+                                            : Icons.info;
 
                     return Card(
                       elevation: 2,
@@ -2430,9 +2625,29 @@ class NotificationsTab extends StatelessWidget {
                           backgroundColor: iconBgColor,
                           child: Icon(iconData, color: iconColor),
                         ),
-                        title: Text(title,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 14)),
+                        title: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: TextStyle(
+                                  fontWeight: isRead ? FontWeight.w600 : FontWeight.bold,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                            if (!isRead)
+                              Container(
+                                margin: const EdgeInsets.only(left: 6),
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Colors.teal,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                          ],
+                        ),
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -2463,12 +2678,139 @@ class NotificationsTab extends StatelessWidget {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
+                            // Quick Action Buttons & Status Badges for Parcel Notifications
+                            if (isParcel) ...[
+                              if (notif['acknowledged'] == true || notif['residentAcknowledged'] == true) ...[
+                                // Status badge when parcel receipt is already confirmed
+                                Container(
+                                  margin: const EdgeInsets.only(top: 6),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.shade100,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: Colors.green.shade300),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.check_circle_rounded, size: 13, color: Colors.green.shade800),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Receipt Confirmed',
+                                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.green.shade900),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ] else if (notif['disputed'] == true || notif['receiptStatus'] == 'NOT_RECEIVED') ...[
+                                // Status badge when resident has reported parcel not received
+                                Container(
+                                  margin: const EdgeInsets.only(top: 6),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red.shade100,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: Colors.red.shade300),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.warning_amber_rounded, size: 13, color: Colors.red.shade800),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Reported Not Received',
+                                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.red.shade900),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ] else ...[
+                                // 1-Tap Action buttons: Received & Not Received for easy resident confirmation.
+                                // We use a Wrap widget with compact button padding so that buttons fit side-by-side
+                                // on normal screens, and wrap gracefully without ANY RenderFlex overflow on narrow screens.
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Wrap(
+                                    spacing: 8,
+                                    runSpacing: 6,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
+                                    children: [
+                                      // "Received" confirmation button
+                                      ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppColors.success,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                          elevation: 0,
+                                        ),
+                                        icon: const Icon(Icons.check_circle_rounded, size: 13),
+                                        label: const Text('Received', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                        onPressed: () async {
+                                          final pDocId = notif['parcelDocId']?.toString() ?? '';
+                                          final fNum = notif['flatNumber']?.toString() ?? userFlat ?? fullFlat ?? '';
+                                          final prov = notif['deliveryProvider']?.toString() ?? 'Courier';
+                                          final pCount = int.tryParse(notif['packetCount']?.toString() ?? '1') ?? 1;
+
+                                          await VisitorPassService.acknowledgeParcelReceipt(
+                                            parcelDocId: pDocId,
+                                            flatNumber: fNum,
+                                            deliveryProvider: prov,
+                                            packetCount: pCount,
+                                            notifDocId: doc.id,
+                                          );
+                                          if (context.mounted) {
+                                            AppFeedback.showSuccess(context, 'Receipt confirmed! Gate security notified.');
+                                          }
+                                        },
+                                      ),
+                                      // "Not Received" dispute button
+                                      OutlinedButton.icon(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.red.shade700,
+                                          side: BorderSide(color: Colors.red.shade400),
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                        ),
+                                        icon: const Icon(Icons.cancel_outlined, size: 13),
+                                        label: const Text('Not Received', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                        onPressed: () async {
+                                          final pDocId = notif['parcelDocId']?.toString() ?? '';
+                                          final fNum = notif['flatNumber']?.toString() ?? userFlat ?? fullFlat ?? '';
+                                          final prov = notif['deliveryProvider']?.toString() ?? 'Courier';
+                                          final pCount = int.tryParse(notif['packetCount']?.toString() ?? '1') ?? 1;
+
+                                          await VisitorPassService.reportParcelNotReceived(
+                                            parcelDocId: pDocId,
+                                            flatNumber: fNum,
+                                            deliveryProvider: prov,
+                                            packetCount: pCount,
+                                            notifDocId: doc.id,
+                                          );
+                                          if (context.mounted) {
+                                            AppFeedback.showWarning(context, 'Alert sent to Gate Security.');
+                                          }
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
                           ],
                         ),
+                        // Trailing section with compact constraints to maximize horizontal room for subtitle
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
+                              visualDensity: VisualDensity.compact,
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                               icon: const Icon(Icons.close,
                                   size: 18, color: Colors.grey),
                               onPressed: () async {
@@ -2487,45 +2829,24 @@ class NotificationsTab extends StatelessWidget {
                               },
                               tooltip: 'Dismiss',
                             ),
-                            const Icon(Icons.chevron_right, color: Colors.grey),
+                            const SizedBox(width: 2),
+                            const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
                           ],
                         ),
                         onTap: () async {
-                          if (isPaymentApproved) {
-                            final dueId = notif['dueId']?.toString();
-                            final receiptNo = notif['receiptNumber']?.toString();
-                            if (dueId != null && dueId.isNotEmpty) {
-                              try {
-                                final dueDoc = await FirebaseFirestore.instance.collection('maintenance_dues').doc(dueId).get();
-                                if (dueDoc.exists && context.mounted) {
-                                  ReceiptPreviewDialog.show(
-                                    context: context,
-                                    dueData: dueDoc.data()!,
-                                    receiptNumber: receiptNo,
-                                  );
-                                  return;
-                                }
-                              } catch (_) {}
-                            }
-                            final month = notif['month']?.toString();
-                            onNavigateTab?.call(4, month); // Fallback to Maintenance tab
-                          } else if (isPaymentRejected) {
-                            final month = notif['month']?.toString();
-                            onNavigateTab?.call(4, month); // Maintenance tab
-                          } else if (isVehicle) {
-                            onNavigateTab?.call(0); // Home tab
-                          } else if (isComplaint) {
-                            onNavigateTab?.call(3); // Helpdesk tab
-                          } else if (isMaintenance) {
-                            final month = notif['month']?.toString();
-                            onNavigateTab?.call(4, month); // Maintenance tab with month payload
-                          } else if (isVisitor) {
-                            _showVisitorNotificationDialog(context, notif, doc.id);
-                          } else if (isParcel) {
-                            _showParcelNotificationDialog(context, notif);
-                          } else if (isEmergency) {
-                            _showEmergencyNotificationDialog(context, notif);
+                          // Mark notification as read when clicked in the tray
+                          if (!isRead) {
+                            NotificationService.markAsRead(doc.id);
                           }
+                          // Route click to the corresponding section / modal
+                          await handleNotificationClick(
+                            context: context,
+                            notif: notif,
+                            docId: doc.id,
+                            onNavigateTab: onNavigateTab,
+                            userFlat: userFlat,
+                            fullFlat: fullFlat,
+                          );
                         },
                       ),
                     );
@@ -2597,7 +2918,100 @@ class NotificationsTab extends StatelessWidget {
     );
   }
 
-  void _showVisitorNotificationDialog(BuildContext context, Map<String, dynamic> notif, [String? notifDocId]) {
+  /// Handles routing and modal presentation when a notification is clicked either from
+  /// the in-app heads-up push banner or from the notification drawer list.
+  static Future<void> handleNotificationClick({
+    required BuildContext context,
+    required Map<String, dynamic> notif,
+    required String docId,
+    Function(int, [String?])? onNavigateTab,
+    String? userFlat,
+    String? fullFlat,
+  }) async {
+    final type = (notif['type'] ?? '').toString().toUpperCase();
+    final title = (notif['title'] ?? '').toString().toLowerCase();
+    final message = (notif['message'] ?? '').toString().toLowerCase();
+
+    final isPaymentApproved = type == 'MAINTENANCE_PAYMENT_APPROVED' ||
+        (title.contains('payment') && title.contains('approved'));
+    final isPaymentRejected = type == 'MAINTENANCE_PAYMENT_REJECTED' ||
+        (title.contains('payment') && title.contains('rejected'));
+    final isMaintenance = type == 'MAINTENANCE' ||
+        type == 'MAINTENANCE_DUE' ||
+        title.contains('maintenance') ||
+        title.contains('bill') ||
+        title.contains('dues') ||
+        message.contains('maintenance');
+    final isVisitor = type.startsWith('VISITOR') ||
+        title.contains('visitor') ||
+        title.contains('guest') ||
+        message.contains('visitor') ||
+        message.contains('guest') ||
+        message.contains('arrived') ||
+        message.contains('checked in');
+    final isParcel = type.startsWith('PARCEL') ||
+        title.contains('parcel') ||
+        title.contains('courier') ||
+        message.contains('parcel') ||
+        message.contains('courier') ||
+        message.contains('delivery');
+    final isEmergency = type == 'EMERGENCY' ||
+        title.contains('emergency') ||
+        title.contains('sos') ||
+        title.contains('alert') ||
+        message.contains('emergency');
+    final isComplaint = type == 'COMPLAINT' ||
+        type == 'HELPDESK' ||
+        title.contains('complaint') ||
+        title.contains('ticket') ||
+        message.contains('complaint');
+    final isVehicle = type == 'VEHICLE' ||
+        type == 'VEHICLE_UPDATE_REQUEST' ||
+        title.contains('vehicle') ||
+        title.contains('car') ||
+        title.contains('bike');
+
+    if (isPaymentApproved) {
+      final dueId = notif['dueId']?.toString();
+      final receiptNo = notif['receiptNumber']?.toString();
+      if (dueId != null && dueId.isNotEmpty) {
+        try {
+          final dueDoc = await FirebaseFirestore.instance.collection('maintenance_dues').doc(dueId).get();
+          if (dueDoc.exists && context.mounted) {
+            ReceiptPreviewDialog.show(
+              context: context,
+              dueData: dueDoc.data()!,
+              receiptNumber: receiptNo,
+            );
+            return;
+          }
+        } catch (_) {}
+      }
+      final month = notif['month']?.toString();
+      onNavigateTab?.call(4, month); // Fallback to Maintenance tab
+    } else if (isPaymentRejected) {
+      final month = notif['month']?.toString();
+      onNavigateTab?.call(4, month); // Maintenance tab
+    } else if (isVehicle) {
+      onNavigateTab?.call(0); // Home tab
+    } else if (isComplaint) {
+      onNavigateTab?.call(3); // Helpdesk tab
+    } else if (isMaintenance) {
+      final month = notif['month']?.toString();
+      onNavigateTab?.call(4, month); // Maintenance tab with month payload
+    } else if (isVisitor) {
+      showVisitorNotificationDialog(context, notif, docId, userFlat, fullFlat);
+    } else if (isParcel) {
+      showParcelNotificationDialog(context, notif, docId, userFlat, fullFlat);
+    } else if (isEmergency) {
+      showEmergencyNotificationDialog(context, notif);
+    } else if (type == 'ANNOUNCEMENT' || title.contains('announcement') || message.contains('announcement')) {
+      onNavigateTab?.call(2); // Notifications & Announcements tab
+    }
+  }
+
+  /// Displays the interactive visitor clearance & photo verification dialog with Approve/Deny buttons.
+  static void showVisitorNotificationDialog(BuildContext context, Map<String, dynamic> notif, [String? notifDocId, String? userFlat, String? fullFlat]) {
     final title = notif['title']?.toString() ?? 'Visitor at Gate';
     final msg = notif['message']?.toString() ?? '';
 
@@ -2605,6 +3019,8 @@ class NotificationsTab extends StatelessWidget {
     if (vName.isEmpty) {
       if (title.startsWith('Visitor At Gate: ')) {
         vName = title.replaceFirst('Visitor At Gate: ', '').trim();
+      } else if (title.startsWith('Pre-approved Guest Arrived: ')) {
+        vName = title.replaceFirst('Pre-approved Guest Arrived: ', '').trim();
       } else {
         vName = 'Visitor';
       }
@@ -2618,19 +3034,22 @@ class NotificationsTab extends StatelessWidget {
 
     String vGate = notif['gateName']?.toString() ?? '';
     if (vGate.isEmpty) {
-      final match = RegExp(r'checked in at (.*?)\.').firstMatch(msg);
+      final match = RegExp(r'(?:checked in at|exited from)\s+([^\.]+?)(?:\.|\s+with|\s+\()').firstMatch(msg);
       vGate = match?.group(1) ?? 'Security Gate';
     }
 
     final guardName = notif['guardName']?.toString() ?? 'Security Guard';
-    final phone = notif['phone']?.toString();
-    final vehicle = notif['vehicleNumber']?.toString();
+    final phone = notif['phone']?.toString() ??
+        (notif['extraData'] is Map ? (notif['extraData'] as Map)['phone']?.toString() : null);
+    final vehicle = notif['vehicleNumber']?.toString() ??
+        (notif['extraData'] is Map ? (notif['extraData'] as Map)['vehicleNumber']?.toString() : null);
     final deliveryApp = notif['deliveryApp']?.toString() ??
         (notif['extraData'] is Map ? (notif['extraData'] as Map)['deliveryApp']?.toString() : null);
     final flatNumber = notif['flatNumber']?.toString() ?? userFlat ?? fullFlat ?? '';
     final createdAt = (notif['createdAt'] as Timestamp?)?.toDate();
     final timeStr = createdAt != null ? DateFormat('hh:mm a, dd MMM yyyy').format(createdAt) : 'Just now';
 
+    final isCheckedOut = notif['type'] == 'VISITOR_CHECK_OUT' || notif['status'] == 'CHECKED_OUT';
     String? currentApproval = notif['approvalStatus']?.toString();
     bool isActionLoading = false;
     String? visitorDocId = notif['visitorDocId']?.toString();
@@ -2695,18 +3114,24 @@ class NotificationsTab extends StatelessWidget {
                         Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: isApproved
-                                ? Colors.green.shade50
-                                : (isDenied ? Colors.red.shade50 : Colors.teal.shade50),
+                            color: isCheckedOut
+                                ? AppColors.primarySurface
+                                : isApproved
+                                    ? Colors.green.shade50
+                                    : (isDenied ? Colors.red.shade50 : Colors.teal.shade50),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Icon(
-                            isApproved
-                                ? Icons.check_circle_rounded
-                                : (isDenied ? Icons.cancel_rounded : Icons.person_pin_circle_rounded),
-                            color: isApproved
-                                ? Colors.green
-                                : (isDenied ? Colors.red : Colors.teal),
+                            isCheckedOut
+                                ? Icons.logout_rounded
+                                : isApproved
+                                    ? Icons.check_circle_rounded
+                                    : (isDenied ? Icons.cancel_rounded : Icons.person_pin_circle_rounded),
+                            color: isCheckedOut
+                                ? AppColors.primary
+                                : isApproved
+                                    ? Colors.green
+                                    : (isDenied ? Colors.red : Colors.teal),
                             size: 24,
                           ),
                         ),
@@ -2718,15 +3143,19 @@ class NotificationsTab extends StatelessWidget {
                             children: [
                               Text(vName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                               Text(
-                                isApproved
-                                    ? 'Entry Approved'
-                                    : (isDenied ? 'Entry Denied' : 'Visitor Gate Clearance'),
+                                isCheckedOut
+                                    ? 'Guest Checked Out'
+                                    : isApproved
+                                        ? (notif['isPreApproved'] == true ? 'Pre-Approved Guest Entry' : 'Entry Approved')
+                                        : (isDenied ? 'Entry Denied' : 'Visitor Gate Clearance'),
                                 style: TextStyle(
                                   fontSize: 11,
-                                  fontWeight: isApproved || isDenied ? FontWeight.bold : FontWeight.normal,
-                                  color: isApproved
-                                      ? Colors.green
-                                      : (isDenied ? Colors.red : Colors.grey),
+                                  fontWeight: isCheckedOut || isApproved || isDenied ? FontWeight.bold : FontWeight.normal,
+                                  color: isCheckedOut
+                                      ? AppColors.primary
+                                      : isApproved
+                                          ? Colors.green
+                                          : (isDenied ? Colors.red : Colors.grey),
                                 ),
                               ),
                             ],
@@ -2735,7 +3164,38 @@ class NotificationsTab extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    if (isApproved)
+                    if (isCheckedOut)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.primarySurface,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.logout_rounded, color: AppColors.primary, size: 22),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'GUEST CHECKED OUT',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Your guest $vName has checked out and departed campus from $vGate.',
+                                    style: const TextStyle(fontSize: 11, color: AppColors.primaryDark),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else if (isApproved)
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
@@ -2751,13 +3211,17 @@ class NotificationsTab extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Text(
-                                    'ENTRY APPROVED BY YOU',
-                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green),
+                                  Text(
+                                    notif['isPreApproved'] == true
+                                        ? 'PRE-APPROVED GUEST CHECKED IN'
+                                        : 'ENTRY APPROVED BY YOU',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green),
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    'Gate security has been notified that $vName is cleared to enter.',
+                                    notif['isPreApproved'] == true
+                                        ? 'Your pre-approved guest $vName has checked in at $vGate.'
+                                        : 'Gate security has been notified that $vName is cleared to enter.',
                                     style: TextStyle(fontSize: 11, color: Colors.green.shade900),
                                   ),
                                 ],
@@ -2964,7 +3428,7 @@ class NotificationsTab extends StatelessWidget {
                       ),
                     ],
                     const SizedBox(height: 20),
-                    if (isApproved || isDenied)
+                    if (isCheckedOut || isApproved || isDenied)
                       Align(
                         alignment: Alignment.centerRight,
                         child: ElevatedButton(
@@ -3064,116 +3528,355 @@ class NotificationsTab extends StatelessWidget {
     );
   }
 
-  void _showParcelNotificationDialog(BuildContext context, Map<String, dynamic> notif) {
+  /// Displays parcel & courier handover details when parcel notifications are tapped,
+  /// and provides a 1-tap "Acknowledge Receipt" action when parcels have been delivered.
+  static void showParcelNotificationDialog(
+    BuildContext context,
+    Map<String, dynamic> notif, [
+    String? notifDocId,
+    String? userFlat,
+    String? fullFlat,
+  ]) {
     final msg = notif['message']?.toString() ?? '';
     final deliveryProvider = notif['deliveryProvider']?.toString() ?? 'Courier';
     final packetCount = notif['packetCount']?.toString() ?? '1';
+    final parsedCount = int.tryParse(packetCount) ?? 1;
     final gateName = notif['gateName']?.toString() ?? 'Main Gate';
     final remarks = notif['remarks']?.toString();
+    final flatNumber = notif['flatNumber']?.toString() ?? userFlat ?? fullFlat ?? '';
+    final parcelDocId = notif['parcelDocId']?.toString() ?? '';
+    final type = (notif['type'] ?? '').toString().toUpperCase();
+    final isDelivered = type == 'PARCEL_DELIVERED' ||
+        notif['status'] == 'COLLECTED' ||
+        notif['requiresAcknowledgment'] == true;
     final createdAt = (notif['createdAt'] as Timestamp?)?.toDate();
     final timeStr = createdAt != null ? DateFormat('hh:mm a, dd MMM yyyy').format(createdAt) : 'Just now';
 
+    // Determine if the parcel receipt has already been acknowledged or disputed
+    bool isAcknowledged = notif['acknowledged'] == true || notif['residentAcknowledged'] == true;
+    bool isDisputed = notif['disputed'] == true || notif['receiptStatus'] == 'NOT_RECEIVED';
+    bool isProcessingAction = false;
+
+    // Use global navigatorKey to ensure ancestor Navigator exists
+    final targetCtx = PushNotificationManager.navigatorKey.currentContext ?? context;
+    if (!targetCtx.mounted) return;
+
     showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.amber.shade50,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.inventory_2_rounded, color: Colors.amber, size: 24),
+      context: targetCtx,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: isAcknowledged
+                        ? Colors.green.shade50
+                        : (isDisputed
+                            ? Colors.red.shade50
+                            : (isDelivered ? AppColors.primarySurface : Colors.amber.shade50)),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    isAcknowledged
+                        ? Icons.verified_rounded
+                        : (isDisputed
+                            ? Icons.report_problem_rounded
+                            : (isDelivered ? Icons.mark_email_read_rounded : Icons.inventory_2_rounded)),
+                    color: isAcknowledged
+                        ? Colors.green
+                        : (isDisputed
+                            ? Colors.red.shade800
+                            : (isDelivered ? AppColors.primary : Colors.amber.shade800)),
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('$deliveryProvider Delivery', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      Text(
+                        isAcknowledged
+                            ? 'Receipt Confirmed'
+                            : (isDisputed
+                                ? 'Reported Not Received'
+                                : (isDelivered
+                                    ? 'Delivered • Confirmation Required'
+                                    : 'At Gate • Confirmation Required')),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: (!isAcknowledged && !isDisputed) ? FontWeight.bold : FontWeight.normal,
+                          color: isAcknowledged
+                              ? Colors.green.shade800
+                              : (isDisputed
+                                  ? Colors.red.shade800
+                                  : (isDelivered ? AppColors.primary : Colors.amber.shade900)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
+            content: SingleChildScrollView(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('$deliveryProvider Delivery', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  const Text('Parcel at Security Gate', style: TextStyle(fontSize: 11, color: Colors.grey)),
-                ],
-              ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.amber.shade50,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.amber.shade300),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.door_sliding_rounded, color: Colors.amber, size: 22),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'HELD AT GATE FOR COLLECTION',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.brown),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Received at $gateName • $timeStr',
-                          style: TextStyle(fontSize: 11, color: Colors.brown.shade800),
-                        ),
-                      ],
+                  // Status Banner Container reflecting current acknowledgment / dispute state
+                  if (isAcknowledged)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.green.shade300),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.check_circle_rounded, color: Colors.green, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'RECEIPT CONFIRMED',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.green.shade900,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'You have confirmed receipt of this delivery. Gate security has been notified.',
+                                  style: TextStyle(fontSize: 11, color: Colors.green.shade800),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (isDisputed)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.red.shade300),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.report_problem_rounded, color: Colors.red.shade800, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'REPORTED NOT RECEIVED',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.red.shade900,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'You reported that you did not receive this parcel. Gate security has been alerted to verify with the courier.',
+                                  style: TextStyle(fontSize: 11, color: Colors.red.shade900),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: isDelivered ? AppColors.primarySurface : Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: isDelivered ? AppColors.primaryBorder : Colors.amber.shade300),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isDelivered ? Icons.mark_email_read_rounded : Icons.inventory_2_rounded,
+                            color: isDelivered ? AppColors.primary : Colors.amber.shade800,
+                            size: 22,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  isDelivered ? 'DELIVERED TO YOUR FLAT' : 'PARCEL AT SECURITY GATE',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: isDelivered ? AppColors.primaryDark : Colors.brown.shade900,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  isDelivered
+                                      ? 'Security has handed over $packetCount packet(s). Please confirm whether you received them.'
+                                      : 'Received at $gateName • $timeStr. Did you receive this parcel?',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isDelivered ? AppColors.primaryDark : Colors.brown.shade800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                  _buildDialogRow('Packages', '$packetCount packet(s)'),
+                  const SizedBox(height: 8),
+                  _buildDialogRow('Delivery Provider', deliveryProvider),
+                  const SizedBox(height: 8),
+                  _buildDialogRow('Gate / Security Point', gateName),
+                  if (flatNumber.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _buildDialogRow('Destination Flat', 'Flat $flatNumber'),
+                  ],
+                  if (remarks != null && remarks.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _buildDialogRow('Remarks', remarks),
+                  ],
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.cardSurfaceSecondary,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      msg,
+                      style: const TextStyle(fontSize: 12, color: AppColors.textPrimary, height: 1.3),
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            _buildDialogRow('Packages', '$packetCount packet(s)'),
-            const SizedBox(height: 8),
-            _buildDialogRow('Delivery Provider', deliveryProvider),
-            const SizedBox(height: 8),
-            _buildDialogRow('Holding Gate', gateName),
-            if (remarks != null && remarks.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              _buildDialogRow('Remarks', remarks),
+            actions: [
+              if (!isAcknowledged && !isDisputed) ...[
+                // Close/Later option
+                TextButton(
+                  onPressed: isProcessingAction ? null : () => Navigator.pop(ctx),
+                  child: const Text('Later', style: TextStyle(color: Colors.grey)),
+                ),
+                // "Not Received" Dispute button
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red.shade700,
+                    side: BorderSide(color: Colors.red.shade400),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  icon: isProcessingAction
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red))
+                      : const Icon(Icons.cancel_outlined, size: 16),
+                  label: const Text('Not Received'),
+                  onPressed: isProcessingAction
+                      ? null
+                      : () async {
+                          setDialogState(() => isProcessingAction = true);
+                          try {
+                            await VisitorPassService.reportParcelNotReceived(
+                              parcelDocId: parcelDocId,
+                              flatNumber: flatNumber,
+                              deliveryProvider: deliveryProvider,
+                              packetCount: parsedCount,
+                              notifDocId: notifDocId,
+                            );
+                            setDialogState(() {
+                              isDisputed = true;
+                              isProcessingAction = false;
+                            });
+                            if (targetCtx.mounted) {
+                              AppFeedback.showWarning(targetCtx, 'Alert sent to Gate Security.');
+                            }
+                          } catch (e) {
+                            setDialogState(() => isProcessingAction = false);
+                            if (targetCtx.mounted) {
+                              AppFeedback.showError(targetCtx, 'Failed to report: $e');
+                            }
+                          }
+                        },
+                ),
+                // "Received" Confirmation button
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  icon: isProcessingAction
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.check_circle_rounded, size: 16),
+                  label: const Text('Received'),
+                  onPressed: isProcessingAction
+                      ? null
+                      : () async {
+                          setDialogState(() => isProcessingAction = true);
+                          try {
+                            await VisitorPassService.acknowledgeParcelReceipt(
+                              parcelDocId: parcelDocId,
+                              flatNumber: flatNumber,
+                              deliveryProvider: deliveryProvider,
+                              packetCount: parsedCount,
+                              notifDocId: notifDocId,
+                            );
+
+                            setDialogState(() {
+                              isAcknowledged = true;
+                              isProcessingAction = false;
+                            });
+
+                            if (targetCtx.mounted) {
+                              AppFeedback.showSuccess(targetCtx, 'Parcel receipt acknowledged! Security notified.');
+                            }
+                          } catch (e) {
+                            setDialogState(() => isProcessingAction = false);
+                            if (targetCtx.mounted) {
+                              AppFeedback.showError(targetCtx, 'Failed to acknowledge receipt: $e');
+                            }
+                          }
+                        },
+                ),
+              ] else
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Close'),
+                ),
             ],
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppColors.cardSurfaceSecondary,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                msg,
-                style: const TextStyle(fontSize: 12, color: AppColors.textPrimary, height: 1.3),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
 
-  void _showEmergencyNotificationDialog(BuildContext context, Map<String, dynamic> notif) {
+  /// Displays urgent society-wide emergency broadcasts.
+  static void showEmergencyNotificationDialog(BuildContext context, Map<String, dynamic> notif) {
     final title = notif['title']?.toString() ?? 'Emergency Alert';
     final msg = notif['message']?.toString() ?? '';
     final createdAt = (notif['createdAt'] as Timestamp?)?.toDate();
@@ -4587,6 +5290,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
   }
 
   Future<void> _submitOnlinePayment() async {
+    if (_isProcessing) return;
     if (!_onlineFormKey.currentState!.validate()) return;
 
     final utr = _onlineUtrController.text.trim();
@@ -4652,6 +5356,7 @@ class _PaymentModalSheetState extends State<_PaymentModalSheet> {
   }
 
   Future<void> _submitOfflineCheque() async {
+    if (_isProcessing) return;
     if (!_offlineFormKey.currentState!.validate()) return;
 
     final chqNo = _chequeNoController.text.trim();
@@ -5584,8 +6289,22 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
   final _formKey = GlobalKey<FormState>();
   String _visitorName = '';
   String _purpose = 'Guest';
+  bool _isComingByCar = false;
+  late final TextEditingController _vehicleCtrl;
 
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _vehicleCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _vehicleCtrl.dispose();
+    super.dispose();
+  }
 
   Future<void> _generatePass() async {
     if (_formKey.currentState!.validate()) {
@@ -5605,12 +6324,16 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
           flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
         }
 
+        final vehicleNumber = _isComingByCar ? _vehicleCtrl.text.trim().toUpperCase() : '';
+
         final passResult = await VisitorPassService.createVisitorPass(
           residentUid: user.uid,
           flatNumber: flatNumber,
           visitorName: _visitorName,
           phone: '',
           purpose: _purpose,
+          isComingByCar: _isComingByCar,
+          vehicleNumber: vehicleNumber,
         );
 
         final passCode = passResult['passCode'] as String;
@@ -5620,7 +6343,7 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
         await AppDialog.show(
           context: context,
           title: 'Gate Pass Generated',
-          subtitle: 'Share code with $_visitorName for security clearance',
+          subtitle: 'Share code with $_visitorName (valid for 8 hours • single-use only)',
           icon: Icons.qr_code_2_rounded,
           iconColor: AppColors.primary,
           iconBgColor: AppColors.primarySurface,
@@ -5642,12 +6365,54 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
                       passCode,
                       style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 4, color: AppColors.primaryDark),
                     ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.amber.shade300),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.timer_outlined, size: 13, color: Colors.amber.shade900),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Active for 8 hours • Single-use only',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.amber.shade900),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (vehicleNumber.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.directions_car_rounded, size: 13, color: AppColors.primary),
+                            const SizedBox(width: 5),
+                            Text(
+                              'Vehicle: $vehicleNumber',
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
               const SizedBox(height: 12),
               Text(
-                'Visitor: $_visitorName • Purpose: $_purpose • Flat: $flatNumber',
+                'Visitor: $_visitorName • Purpose: $_purpose • Flat: $flatNumber${vehicleNumber.isNotEmpty ? ' • Vehicle: $vehicleNumber' : ''}',
                 style: const TextStyle(fontSize: 12, color: AppColors.slate600),
               ),
             ],
@@ -5700,12 +6465,14 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
                       size: 22,
                     ),
                     const SizedBox(width: 12),
-                    const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Pre-approve Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.slate900)),
-                        Text('Generate an instant gate pass code for the security gate', style: TextStyle(fontSize: 12, color: AppColors.slate500)),
-                      ],
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Pre-approve Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.slate900)),
+                          Text('Generate an instant gate pass code for the security gate', style: TextStyle(fontSize: 12, color: AppColors.slate500)),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -5720,20 +6487,82 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
                   validator: (val) => val == null || val.trim().isEmpty ? 'Please enter visitor name' : null,
                   onSaved: (val) => _visitorName = val!.trim(),
                 ),
-                const SizedBox(height: 14),
+                // Visit Purpose Dropdown with isExpanded to prevent horizontal overflow
                 DropdownButtonFormField<String>(
+                  isExpanded: true,
                   initialValue: _purpose,
                   decoration: const InputDecoration(
                     labelText: 'Purpose of Visit',
                     prefixIcon: Icon(Icons.work_outline_rounded, size: 20),
                   ),
                   items: const [
-                    DropdownMenuItem(value: 'Guest', child: Text('Guest / Family')),
-                    DropdownMenuItem(value: 'Delivery', child: Text('Delivery (Amazon/Swiggy/Zomato)')),
-                    DropdownMenuItem(value: 'Service', child: Text('Service / Repair / Electrician')),
+                    DropdownMenuItem(value: 'Guest', child: Text('Guest / Family', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Delivery', child: Text('Delivery (Amazon/Swiggy/Zomato)', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Service', child: Text('Service / Repair / Electrician', overflow: TextOverflow.ellipsis)),
                   ],
                   onChanged: (val) => setState(() => _purpose = val!),
                 ),
+                const SizedBox(height: 16),
+                Container(
+                  decoration: BoxDecoration(
+                    color: _isComingByCar ? AppColors.primarySurface.withValues(alpha: 0.5) : AppColors.slate50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: _isComingByCar ? AppColors.primary.withValues(alpha: 0.4) : AppColors.slate200,
+                    ),
+                  ),
+                  child: SwitchListTile.adaptive(
+                    title: const Text(
+                      'Arriving by car / vehicle?',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.slate800),
+                    ),
+                    subtitle: Text(
+                      _isComingByCar ? 'Vehicle details will be verified at gate' : 'Enable if your guest is driving a car or bike',
+                      style: const TextStyle(fontSize: 12, color: AppColors.slate500),
+                    ),
+                    secondary: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _isComingByCar ? AppColors.primarySurface : AppColors.slate100,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.directions_car_rounded,
+                        color: _isComingByCar ? AppColors.primary : AppColors.slate500,
+                        size: 22,
+                      ),
+                    ),
+                    value: _isComingByCar,
+                    activeTrackColor: AppColors.primary,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                    onChanged: (val) {
+                      setState(() {
+                        _isComingByCar = val;
+                        if (!_isComingByCar) {
+                          _vehicleCtrl.clear();
+                        }
+                      });
+                    },
+                  ),
+                ),
+                if (_isComingByCar) ...[
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _vehicleCtrl,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(
+                      labelText: 'Vehicle Number *',
+                      hintText: 'e.g. WB 06 A 1234',
+                      prefixIcon: Icon(Icons.pin_outlined, size: 20),
+                    ),
+                    validator: (val) {
+                      if (_isComingByCar && (val == null || val.trim().isEmpty)) {
+                        return 'Please enter vehicle registration number';
+                      }
+                      return null;
+                    },
+                  ),
+                ],
                 const SizedBox(height: 24),
                 SizedBox(
                   width: double.infinity,
@@ -5792,14 +6621,16 @@ class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Helpdesk Category Dropdown with isExpanded to prevent horizontal overflow
                   DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: category,
                     decoration: const InputDecoration(labelText: 'Category *'),
                     items: const [
-                      DropdownMenuItem(value: 'Maintenance', child: Text('Maintenance / Electrical / Plumbing')),
-                      DropdownMenuItem(value: 'Security', child: Text('Security & Gate')),
-                      DropdownMenuItem(value: 'Cleanliness', child: Text('Cleanliness & Waste Management')),
-                      DropdownMenuItem(value: 'Other', child: Text('Other / General Query')),
+                      DropdownMenuItem(value: 'Maintenance', child: Text('Maintenance / Electrical / Plumbing', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Security', child: Text('Security & Gate', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Cleanliness', child: Text('Cleanliness & Waste Management', overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(value: 'Other', child: Text('Other / General Query', overflow: TextOverflow.ellipsis)),
                     ],
                     onChanged: (val) => setDlgState(() => category = val!),
                   ),

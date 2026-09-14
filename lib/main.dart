@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide EmailAuthProvider, PhoneAuthProvider;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_ui_auth/firebase_ui_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'firebase_options.dart';
 import 'screens/resident/resident_dashboard.dart';
 import 'screens/guard/guard_dashboard.dart';
@@ -12,6 +13,7 @@ import 'theme/app_theme.dart';
 import 'theme/app_colors.dart';
 import 'widgets/app_feedback.dart';
 import 'widgets/app_error_boundary.dart';
+import 'services/push_notification_manager.dart';
 import 'constants/app_flavor.dart';
 
 void main() async {
@@ -37,6 +39,12 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   
+  // Register background message handler for when app is suspended or in background
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+  // Initialize native OS notification channels, status bar hooks, and system notification handlers
+  await PushNotificationManager.instance.initializeSystemNotifications();
+
   FirebaseUIAuth.configureProviders([
     EmailAuthProvider(),
     PhoneAuthProvider(),
@@ -62,12 +70,17 @@ class SocietyManagementApp extends StatelessWidget {
     final config = AppFlavorConfig.current;
 
     return MaterialApp(
+      // Attach global navigator key so notification taps from the Android system notification hood can route modals
+      navigatorKey: PushNotificationManager.navigatorKey,
       title: config.appTitle,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       builder: (context, child) {
+        // Wrap app tree in Global Error Boundary and In-App Heads-Up Push Notification Overlay
         return AppGlobalErrorBoundary(
-          child: child ?? const SizedBox.shrink(),
+          child: PushNotificationOverlay(
+            child: child ?? const SizedBox.shrink(),
+          ),
         );
       },
       home: const AuthWrapper(),
@@ -93,6 +106,8 @@ class AuthWrapper extends StatelessWidget {
           return const RoleRouter();
         }
         
+        // When logged out, cancel active push notification listeners
+        PushNotificationManager.instance.stopListening();
         return const CustomAuthScreen();
       },
     );
@@ -660,6 +675,14 @@ class _RoleRouterState extends State<RoleRouter> {
 
         final data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
         final role = data['role'] as String?;
+        final flatNumber = data['flatNumber'] as String?;
+
+        // Initialize real-time in-app push notifications for this authenticated session
+        PushNotificationManager.instance.startListening(
+          user: user,
+          role: role,
+          flatNumber: flatNumber,
+        );
 
         // Role authorization check for current app flavor
         if (!AppFlavorConfig.current.isRoleAllowed(role)) {

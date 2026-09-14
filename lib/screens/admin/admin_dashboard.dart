@@ -6,6 +6,8 @@ import '../../widgets/pdf_iframe.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_decorations.dart';
 import '../../widgets/app_dialog.dart';
+import '../../services/notification_service.dart';
+import '../../services/push_notification_manager.dart';
 import 'package:intl/intl.dart';
 import '../../models/accounting_heads.dart';
 import 'tabs/admin_home_dashboard_tab.dart';
@@ -14,6 +16,7 @@ import 'tabs/accounts_tab.dart';
 import 'tabs/generate_maintenance_tab.dart';
 import 'tabs/manage_announcements_tab.dart';
 import 'tabs/manage_complaints_tab.dart';
+import 'tabs/admin_visitors_tab.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -30,7 +33,21 @@ class _AdminDashboardState extends State<AdminDashboard> {
   final TextEditingController _searchController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    // Register Push Notification Click Delegate for instant admin tab navigation and modal review
+    PushNotificationManager.instance.onNotificationClick = (ctx, payload) {
+      final notifDocRef = FirebaseFirestore.instance.collection('notifications').doc(payload.id);
+      _handleNotificationClick(payload.extraData, notifDocRef);
+    };
+  }
+
+  @override
   void dispose() {
+    // Clean up delegate on screen unmount
+    if (PushNotificationManager.instance.onNotificationClick != null) {
+      PushNotificationManager.instance.onNotificationClick = null;
+    }
     _searchController.dispose();
     super.dispose();
   }
@@ -101,6 +118,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
               separatorBuilder: (context, index) => const Divider(height: 1),
               itemBuilder: (context, i) {
                 final notif = docs[i].data() as Map<String, dynamic>;
+                final isRead = notif['isRead'] == true;
                 final title = notif['title'] ?? 'Notification';
                 final msg = notif['message'] ?? '';
                 final type = (notif['type'] ?? '').toString().toUpperCase();
@@ -115,9 +133,28 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     size: 18,
                     padding: 8,
                   ),
-                  title: Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                  title: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: TextStyle(
+                            fontWeight: isRead ? FontWeight.w600 : FontWeight.w800,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      if (!isRead)
+                        Container(
+                          margin: const EdgeInsets.only(left: 6),
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: AppColors.primary,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                    ],
                   ),
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -147,6 +184,26 @@ class _AdminDashboardState extends State<AdminDashboard> {
         ),
       ),
       actions: [
+        StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('notifications')
+              .where('targetRole', isEqualTo: 'ADMIN')
+              .snapshots(),
+          builder: (context, snap) {
+            final unread = (snap.data?.docs ?? [])
+                .where((d) => (d.data() as Map)['isRead'] != true)
+                .map((d) => d.id)
+                .toList();
+            if (unread.isEmpty) return const SizedBox.shrink();
+            return TextButton.icon(
+              onPressed: () async {
+                await NotificationService.markAllAsRead(unread);
+              },
+              icon: const Icon(Icons.done_all_rounded, size: 16),
+              label: const Text('Mark all read'),
+            );
+          },
+        ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Close'),
@@ -157,6 +214,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   void _handleNotificationClick(
       Map<String, dynamic> notif, DocumentReference notifDocRef) {
+    if (notif['isRead'] != true) {
+      NotificationService.markAsRead(notifDocRef.id);
+    }
     final type = (notif['type'] ?? '').toString().toUpperCase();
     final title = (notif['title'] ?? '').toString().toLowerCase();
     final message = (notif['message'] ?? '').toString().toLowerCase();
@@ -195,6 +255,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
         title.contains('expense') ||
         title.contains('income')) {
       setState(() => _currentIndex = 2); // Accounts Tab
+    } else if (type.contains('VISITOR') ||
+        title.contains('visitor') ||
+        message.contains('visitor')) {
+      setState(() => _currentIndex = 6); // Visitors Tab
     } else if (notif['flatNumber'] != null) {
       setState(() {
         _selectedFlatQuery = notif['flatNumber']?.toString();
@@ -587,18 +651,22 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
       await FirebaseFirestore.instance.collection('users').doc(userId).update(updateData);
 
-      // Notify resident
+      // Notify resident with clear push notification message
       final targetUid = userData['uid']?.toString();
+      final residentFlat = userData['flatNumber']?.toString() ?? '';
       if (targetUid != null && targetUid.isNotEmpty) {
-        await FirebaseFirestore.instance.collection('notifications').add({
-          'targetUid': targetUid,
-          'targetRole': 'RESIDENT',
-          'type': 'VEHICLE_APPROVED',
-          'title': '$vehicleType Number Approved',
-          'message':
-              'Your request to update $vehicleType number to $approvedReg has been approved by the Admin.',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+        await NotificationService.notifyResident(
+          flatNumber: residentFlat,
+          targetUid: targetUid,
+          title: '🚗 $vehicleType Registration Approved',
+          message: 'Your vehicle update request for $vehicleType ($approvedReg) has been approved by Society Management.',
+          type: 'VEHICLE_APPROVED',
+          extraData: {
+            'vehicleType': vehicleType,
+            'regNumber': approvedReg,
+            'flatNumber': residentFlat,
+          },
+        );
       }
 
       // Dismiss admin notification
@@ -694,18 +762,22 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
       await FirebaseFirestore.instance.collection('users').doc(userId).update(updateData);
 
-      // Notify resident
+      // Notify resident with clear push notification message
       final targetUid = userData['uid']?.toString();
+      final residentFlat = userData['flatNumber']?.toString() ?? '';
       if (targetUid != null && targetUid.isNotEmpty) {
-        await FirebaseFirestore.instance.collection('notifications').add({
-          'targetUid': targetUid,
-          'targetRole': 'RESIDENT',
-          'type': 'VEHICLE_REJECTED',
-          'title': '$vehicleType Number Rejected',
-          'message': 'Your request to update $vehicleType number was rejected: $reason',
-          'rejectionReason': reason,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+        await NotificationService.notifyResident(
+          flatNumber: residentFlat,
+          targetUid: targetUid,
+          title: '⚠️ $vehicleType Registration Update Rejected',
+          message: 'Your request to update $vehicleType registration was rejected: $reason. Please contact the society office if you need assistance.',
+          type: 'VEHICLE_REJECTED',
+          extraData: {
+            'vehicleType': vehicleType,
+            'rejectionReason': reason,
+            'flatNumber': residentFlat,
+          },
+        );
       }
 
       // Dismiss admin notification
@@ -914,6 +986,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 _buildSidebarNavItem(3, 'Notices', Icons.campaign_outlined, Icons.campaign_rounded),
                 _buildSidebarNavItem(4, 'Helpdesk', Icons.support_agent_outlined, Icons.support_agent_rounded),
                 _buildSidebarNavItem(5, 'Maintenance', Icons.receipt_long_outlined, Icons.receipt_long_rounded),
+                _buildSidebarNavItem(6, 'Visitors', Icons.badge_outlined, Icons.badge_rounded),
               ],
             ),
           ),
@@ -1157,54 +1230,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ),
           ],
           const SizedBox(width: 10),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('notifications')
-                .where('targetRole', isEqualTo: 'ADMIN')
-                .snapshots(),
-            builder: (context, snap) {
-              final count = snap.data?.docs.length ?? 0;
-              return Stack(
-                alignment: Alignment.center,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.notifications_none_rounded, color: AppColors.textPrimary),
-                    tooltip: 'Admin Notifications',
-                    onPressed: () => _showNotificationsDialog(context),
-                  ),
-                  if (count > 0)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(
-                          color: AppColors.error,
-                          shape: BoxShape.circle,
-                        ),
-                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                        child: Text(
-                          '$count',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ),
-                ],
-              );
-            },
+          _AdminNotificationBadge(
+            onPressed: () => _showNotificationsDialog(context),
           ),
           const SizedBox(width: 8),
           PopupMenuButton<String>(
             tooltip: 'Admin Account',
             offset: const Offset(0, 48),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            onSelected: (value) {
-              if (value == 'logout') {
+            onSelected: (val) {
+              if (val == 'logout') {
                 FirebaseAuth.instance.signOut();
               }
             },
@@ -1282,6 +1317,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       const ManageAnnouncementsTab(),
       const ManageComplaintsTab(),
       const GenerateMaintenanceTab(),
+      const AdminVisitorsTab(),
     ];
 
     final isDesktop = MediaQuery.sizeOf(context).width >= 900;
@@ -1398,46 +1434,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       ],
                     ),
                   ),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('notifications')
-                .where('targetRole', isEqualTo: 'ADMIN')
-                .snapshots(),
-            builder: (context, snap) {
-              final count = snap.data?.docs.length ?? 0;
-              return Stack(
-                alignment: Alignment.center,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.notifications_none_rounded, color: AppColors.textPrimary),
-                    tooltip: 'Notifications',
-                    onPressed: () => _showNotificationsDialog(context),
-                  ),
-                  if (count > 0)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(
-                          color: AppColors.error,
-                          shape: BoxShape.circle,
-                        ),
-                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                        child: Text(
-                          '$count',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ),
-                ],
-              );
-            },
+          _AdminNotificationBadge(
+            onPressed: () => _showNotificationsDialog(context),
+            tooltip: 'Notifications',
           ),
           IconButton(
             icon: const Icon(Icons.logout_rounded, size: 20, color: AppColors.error),
@@ -1492,9 +1491,76 @@ class _AdminDashboardState extends State<AdminDashboard> {
               selectedIcon: Icon(Icons.receipt_long_rounded, size: 20, color: AppColors.primary),
               label: 'Bills',
             ),
+            NavigationDestination(
+              icon: Icon(Icons.badge_outlined, size: 20),
+              selectedIcon: Icon(Icons.badge_rounded, size: 20, color: AppColors.primary),
+              label: 'Visitors',
+            ),
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─── Reusable Admin Notification Bell & Badge ──────────────────────────────
+
+class _AdminNotificationBadge extends StatelessWidget {
+  final VoidCallback onPressed;
+  final String tooltip;
+
+  const _AdminNotificationBadge({
+    required this.onPressed,
+    this.tooltip = 'Admin Notifications',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('notifications')
+          .where('targetRole', isEqualTo: 'ADMIN')
+          .limit(50)
+          .snapshots(),
+      builder: (context, snap) {
+        final count = (snap.data?.docs ?? []).where((d) {
+          final data = d.data() as Map<String, dynamic>?;
+          return data?['isRead'] != true;
+        }).length;
+
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.notifications_none_rounded, color: AppColors.textPrimary),
+              tooltip: tooltip,
+              onPressed: onPressed,
+            ),
+            if (count > 0)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(
+                    color: AppColors.error,
+                    shape: BoxShape.circle,
+                  ),
+                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                  child: Text(
+                    '$count',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }

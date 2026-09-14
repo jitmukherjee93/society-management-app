@@ -13,6 +13,8 @@ android {
     ndkVersion = "28.2.13676358"
 
     compileOptions {
+        // Enable Java 8+ core library desugaring required by flutter_local_notifications plugin
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -72,4 +74,9 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Core library desugaring library required by flutter_local_notifications for Android API < 34
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

@@ -96,13 +96,29 @@ service cloud.firestore {
     }
 
     match /visitors/{visitorId} {
-      allow read, write: if isAdmin();
-      allow read, create, update: if isAuthenticated();
+      allow read, write: if isAdmin() || isGuard();
+      allow create: if isAuthenticated() && (
+        isAdmin() || isGuard() ||
+        request.resource.data.hostUid == request.auth.uid ||
+        request.resource.data.createdByUid == request.auth.uid
+      );
+      allow read, update: if isAuthenticated() && (
+        isAdmin() || isGuard() ||
+        (resource.data != null && (
+          resource.data.hostUid == request.auth.uid ||
+          resource.data.createdByUid == request.auth.uid
+        ))
+      );
+      allow delete: if isAdmin();
     }
 
     match /gate_parcels/{parcelId} {
       allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || isGuard();
+      allow create: if isAdmin() || isGuard();
+      allow update: if isAdmin() || isGuard() || (
+        isAuthenticated() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['residentAcknowledged', 'acknowledgedAt', 'acknowledgedByName'])
+      );
       allow delete: if isAdmin();
     }
 
@@ -122,8 +138,19 @@ service cloud.firestore {
     match /notifications/{notificationId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
-      allow update, delete: if isAuthenticated() && (
+      allow update: if isAuthenticated() && (
         isAdmin() ||
+        (isGuard() && resource.data.targetRole == 'GUARD') ||
+        (resource.data != null && (
+          resource.data.targetUid == request.auth.uid ||
+          (resource.data.targetUids != null && request.auth.uid in resource.data.targetUids) ||
+          (resource.data.targetRole == 'RESIDENT' && isResident())
+        )) ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt'])
+      );
+      allow delete: if isAuthenticated() && (
+        isAdmin() ||
+        (isGuard() && resource.data.targetRole == 'GUARD') ||
         (resource.data != null && (
           resource.data.targetUid == request.auth.uid ||
           (resource.data.targetUids != null && request.auth.uid in resource.data.targetUids)

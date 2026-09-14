@@ -13,6 +13,26 @@ import '../../../widgets/app_dialog.dart';
 import '../../../widgets/app_feedback.dart';
 import '../../../widgets/receipt_preview_dialog.dart';
 
+// ============================================================================
+// ADMIN MONTHLY MAINTENANCE BILL GENERATION & DUE AUDIT TAB
+// ============================================================================
+// This screen allows society administrators to:
+//
+// 1. Bulk Generate Monthly Maintenance Demands:
+//    - Iterates over all registered flats in the society.
+//    - Applies block-specific base maintenance rates (A=₹450, B=₹420, C=₹390, D=₹490).
+//    - Applies parking charges for registered four-wheelers (₹430) and two-wheelers (₹100).
+//    - Computes progressive late fines (₹10/mo) for overdue historical months.
+//    - Atomic batch write creates `maintenance_dues` documents and dispatches push notifications.
+//
+// 2. Audit and Manage Payment Statuses:
+//    - Verify online bank transfers/UPI payments with UTR verification.
+//    - Record offline cash collections at the society office.
+//    - Reject suspicious or duplicate payment submissions.
+//    - Reset payments to unpaid for accounting reconciliation.
+// ============================================================================
+
+/// Admin screen for issuing monthly maintenance bills and auditing flat dues.
 class GenerateMaintenanceTab extends StatefulWidget {
   const GenerateMaintenanceTab({super.key});
 
