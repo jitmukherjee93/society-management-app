@@ -4,6 +4,8 @@ import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
+import 'constants/app_flavor.dart';
+
 /// Default [FirebaseOptions] for use with your Firebase apps.
 ///
 /// Example:
@@ -40,6 +42,24 @@ class DefaultFirebaseOptions {
     }
   }
 
+  /// Flavor-aware FirebaseOptions resolver for dedicated flavor builds (Resident, Guard, Admin).
+  static FirebaseOptions currentPlatformForFlavor(AppFlavor flavor) {
+    if (kIsWeb) return web;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      switch (flavor) {
+        case AppFlavor.resident:
+          return androidResident;
+        case AppFlavor.guard:
+          return androidGuard;
+        case AppFlavor.admin:
+          return androidAdmin;
+        case AppFlavor.unified:
+          return android;
+      }
+    }
+    return currentPlatform;
+  }
+
   static const FirebaseOptions web = FirebaseOptions(
     apiKey: 'AIzaSyCv4BPWY9kEsGUk8j282Ch6jaI91vC9xOY',
     appId: '1:202094225926:web:8168541fb27059b414b187',
@@ -50,9 +70,37 @@ class DefaultFirebaseOptions {
     measurementId: 'G-FWGRL2LW4X',
   );
 
+  /// Default Android options for unified app (com.society.society_management)
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyDmFGRGQlbmFBtKRIev8XsrgYsBGTgSI_U',
     appId: '1:202094225926:android:3baa22da11eec4de14b187',
+    messagingSenderId: '202094225926',
+    projectId: 'society-management-app-a808b',
+    storageBucket: 'society-management-app-a808b.firebasestorage.app',
+  );
+
+  /// Resident App Android options (com.society.society_management.resident)
+  static const FirebaseOptions androidResident = FirebaseOptions(
+    apiKey: 'AIzaSyDmFGRGQlbmFBtKRIev8XsrgYsBGTgSI_U',
+    appId: '1:202094225926:android:f45eff1efac81c7a14b187',
+    messagingSenderId: '202094225926',
+    projectId: 'society-management-app-a808b',
+    storageBucket: 'society-management-app-a808b.firebasestorage.app',
+  );
+
+  /// Gate Guard App Android options (com.society.society_management.guard)
+  static const FirebaseOptions androidGuard = FirebaseOptions(
+    apiKey: 'AIzaSyDmFGRGQlbmFBtKRIev8XsrgYsBGTgSI_U',
+    appId: '1:202094225926:android:49de71832dd1d13e14b187',
+    messagingSenderId: '202094225926',
+    projectId: 'society-management-app-a808b',
+    storageBucket: 'society-management-app-a808b.firebasestorage.app',
+  );
+
+  /// Admin Portal Android options (com.society.society_management.admin)
+  static const FirebaseOptions androidAdmin = FirebaseOptions(
+    apiKey: 'AIzaSyDmFGRGQlbmFBtKRIev8XsrgYsBGTgSI_U',
+    appId: '1:202094225926:android:fa67cc0af55c87c714b187',
     messagingSenderId: '202094225926',
     projectId: 'society-management-app-a808b',
     storageBucket: 'society-management-app-a808b.firebasestorage.app',

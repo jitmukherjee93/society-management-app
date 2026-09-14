@@ -14,6 +14,7 @@ import 'theme/app_colors.dart';
 import 'widgets/app_feedback.dart';
 import 'widgets/app_error_boundary.dart';
 import 'services/push_notification_manager.dart';
+import 'services/app_permission_manager.dart';
 import 'constants/app_flavor.dart';
 
 void main() async {
@@ -88,8 +89,24 @@ class SocietyManagementApp extends StatelessWidget {
   }
 }
 
-class AuthWrapper extends StatelessWidget {
+// Top-level authentication wrapper that monitors user login state and triggers
+// runtime permissions (Camera & Notifications) upon initial app launch / install.
+class AuthWrapper extends StatefulWidget {
   const AuthWrapper({super.key});
+
+  @override
+  State<AuthWrapper> createState() => _AuthWrapperState();
+}
+
+class _AuthWrapperState extends State<AuthWrapper> {
+  @override
+  void initState() {
+    super.initState();
+    // Prompt the user for Camera and Notification permissions as soon as the first frame renders
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppPermissionManager.requestInitialPermissions();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
