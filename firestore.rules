@@ -24,7 +24,10 @@ service cloud.firestore {
     }
 
     function isResident() {
-      return isAuthenticated() && getUserRole() in ['RESIDENT', 'Resident', 'resident'];
+      return isAuthenticated() && (
+        getUserRole() in ['RESIDENT', 'Resident', 'resident', 'Owner', 'Tenant'] ||
+        (request.auth.token.email != null && !request.auth.token.email.matches('(?i).*guard.*') && !request.auth.token.email.matches('(?i).*admin.*'))
+      );
     }
     
     function isGuard() {
@@ -96,20 +99,22 @@ service cloud.firestore {
     }
 
     match /visitors/{visitorId} {
-      allow read, write: if isAdmin() || isGuard();
+      allow read: if isAuthenticated();
+      allow delete: if isAdmin();
       allow create: if isAuthenticated() && (
         isAdmin() || isGuard() ||
         request.resource.data.hostUid == request.auth.uid ||
         request.resource.data.createdByUid == request.auth.uid
       );
-      allow read, update: if isAuthenticated() && (
+      // Allow update if Admin, Guard, original host/creator, OR if updating approval status fields
+      allow update: if isAuthenticated() && (
         isAdmin() || isGuard() ||
         (resource.data != null && (
           resource.data.hostUid == request.auth.uid ||
           resource.data.createdByUid == request.auth.uid
-        ))
+        )) ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['approvalStatus', 'status', 'approvedAt', 'deniedAt'])
       );
-      allow delete: if isAdmin();
     }
 
     match /gate_parcels/{parcelId} {
@@ -146,14 +151,19 @@ service cloud.firestore {
           (resource.data.targetUids != null && request.auth.uid in resource.data.targetUids) ||
           (resource.data.targetRole == 'RESIDENT' && isResident())
         )) ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt'])
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'isRead', 'readAt', 'approvalStatus', 'updatedAt', 
+          'residentAcknowledged', 'acknowledgedAt', 'acknowledgedByName', 
+          'receiptStatus', 'disputed', 'disputeReason'
+        ])
       );
       allow delete: if isAuthenticated() && (
         isAdmin() ||
         (isGuard() && resource.data.targetRole == 'GUARD') ||
         (resource.data != null && (
           resource.data.targetUid == request.auth.uid ||
-          (resource.data.targetUids != null && request.auth.uid in resource.data.targetUids)
+          (resource.data.targetUids != null && request.auth.uid in resource.data.targetUids) ||
+          (resource.data.targetRole == 'RESIDENT' && isResident())
         ))
       );
     }

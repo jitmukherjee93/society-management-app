@@ -375,11 +375,29 @@ class VisitorPassService {
   }) async {
     final normFlat = FlatUtils.normalize(flatNumber);
 
+    // Look up resident account UID corresponding to the destination flat number
+    // This ensures both UID-based ownership checks and flat-based security rules pass cleanly.
+    String? residentUid;
+    try {
+      final userSnap = await _fs
+          .collection('users')
+          .where('flatNumber', isEqualTo: normFlat)
+          .limit(1)
+          .get();
+      if (userSnap.docs.isNotEmpty) {
+        residentUid = userSnap.docs.first.id;
+      }
+    } catch (_) {
+      // Fallback gracefully if lookup fails or lacks read access
+    }
+
     final docRef = await _fs.collection('visitors').add({
       'visitorName': visitorName.trim(),
       'phone': phone.trim(),
       'flatNumber': normFlat,
       'hostFlatNumber': normFlat,
+      'hostUid': residentUid,
+      'residentUid': residentUid,
       'purpose': purpose,
       'deliveryApp': deliveryApp?.trim(),
       'vehicleNumber': vehicleNumber?.trim().toUpperCase() ?? '',

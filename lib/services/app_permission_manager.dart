@@ -52,3 +52,4 @@ class AppPermissionManager {
     return await Permission.notification.isGranted;
   }
 }
+
