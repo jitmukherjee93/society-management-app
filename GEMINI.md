@@ -2,6 +2,8 @@
 
 ## Mandatory Local Execution & Hot Reload Rule
 - **Automatic Local Hot Reload / Refresh:** Whenever any local change or edit to Dart/Flutter code is completed, always trigger a **Hot Reload** (or **Hot Restart / Hot Refresh** if state or structural changes require it) to ensure the running application immediately reflects the modifications.
+- **Only Build APKs When Explicitly Asked:** Do NOT run `flutter build apk` or generate APK files automatically. Only compile APKs when the user explicitly asks for them.
+- **Always Test & Run Fixes in Emulator:** Always verify, debug, and run fixes locally using an Android emulator (or running development session) with Hot Reload / Hot Restart.
 - **Only Deploy When Explicitly Asked:** Do NOT perform remote builds or deployments (`firebase deploy`, `flutter build web --release`, etc.) automatically. Only deploy when the user explicitly requests deployment.
 - **Local Quality Verification:** For all features and bug fixes, verify locally with `dart analyze` (0 issues) and `flutter test`.
 
