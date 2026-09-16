@@ -71,6 +71,19 @@ exports.onNotificationCreated = functions
 
     const isEmergency = type === "EMERGENCY" || type === "SOS";
 
+    // Determine if this notification is for a visitor entry approval or gate pass request.
+    // Visitor approvals require immediate attention from the resident, so we route them
+    // to a dedicated channel with maximum priority and a custom doorbell ringtone.
+    const isVisitorRequest =
+      type === "VISITOR_CHECK_IN" ||
+      type === "VISITOR_APPROVAL" ||
+      type === "VISITOR" ||
+      type === "GUEST_ENTRY" ||
+      type === "PARKING_REQUEST" ||
+      notifData.isWalkIn === true ||
+      notifData.isWalkIn === "true" ||
+      notifData.approvalStatus === "PENDING";
+
     console.log(
       `[FCM Dispatcher] Processing notification ID: ${notifId}, Type: ${type}, Role: ${targetRole}, Flat: ${flatNumber}`
     );
@@ -250,12 +263,17 @@ exports.onNotificationCreated = functions
           android: {
             priority: "high",
             notification: {
+              // Route to emergency channel, visitor ring channel with custom doorbell audio, or general notification channel
               channelId: isEmergency
                 ? "society_emergency_channel"
+                : isVisitorRequest
+                ? "society_visitor_ring_channel"
                 : "society_general_channel",
-              priority: isEmergency ? "max" : "high",
-              sound: "default",
-              defaultSound: true,
+              // Visitor requests and emergencies are given MAX priority so they sound and head-up display even in DND/standby
+              priority: isEmergency || isVisitorRequest ? "max" : "high",
+              // Use the raw resource sound 'cell_phone_ring_std' located in android/app/src/main/res/raw/
+              sound: isVisitorRequest ? "cell_phone_ring_std" : "default",
+              defaultSound: !isVisitorRequest,
               defaultVibrateTimings: true,
               visibility: "public",
               tag: notifId,

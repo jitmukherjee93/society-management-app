@@ -89,24 +89,40 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
     final int notifId = id.hashCode & 0x7FFFFFFF;
     final bool isEmergency = type == 'EMERGENCY' || type == 'SOS';
+    final bool isVisitorApproval = type == 'VISITOR_CHECK_IN' &&
+        (data['approvalStatus'] == 'PENDING' || data['isWalkIn'] == 'true' || data['isWalkIn'] == true);
+
+    final String channelId = isEmergency
+        ? 'society_emergency_channel'
+        : (isVisitorApproval ? 'society_visitor_ring_channel' : 'society_general_channel');
+
+    final String channelName = isEmergency
+        ? 'Society Emergency Alerts'
+        : (isVisitorApproval ? 'Visitor Doorbell & Gate Approvals' : 'Society Notifications');
 
     final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      isEmergency ? 'society_emergency_channel' : 'society_general_channel',
-      isEmergency ? 'Society Emergency Alerts' : 'Society Notifications',
+      channelId,
+      channelName,
       channelDescription: isEmergency
           ? 'Critical emergency SOS alerts'
-          : 'Important society announcements, bills, visitor and parcel alerts',
-      importance: isEmergency ? Importance.max : Importance.high,
-      priority: isEmergency ? Priority.max : Priority.high,
+          : (isVisitorApproval
+              ? 'Urgent visitor gate clearance requests with custom doorbell ringtone'
+              : 'Important society announcements, bills, visitor and parcel alerts'),
+      importance: (isEmergency || isVisitorApproval) ? Importance.max : Importance.high,
+      priority: (isEmergency || isVisitorApproval) ? Priority.max : Priority.high,
       ticker: title,
       color: const Color(0xFF0F766E),
       visibility: NotificationVisibility.public,
       enableLights: true,
       enableVibration: true,
       playSound: true,
+      sound: isVisitorApproval ? const RawResourceAndroidNotificationSound('cell_phone_ring_std') : null,
+      audioAttributesUsage: isVisitorApproval ? AudioAttributesUsage.notificationRingtone : AudioAttributesUsage.notification,
       channelShowBadge: true,
-      fullScreenIntent: isEmergency,
-      category: isEmergency ? AndroidNotificationCategory.alarm : AndroidNotificationCategory.message,
+      fullScreenIntent: isEmergency || isVisitorApproval,
+      category: isEmergency
+          ? AndroidNotificationCategory.alarm
+          : (isVisitorApproval ? AndroidNotificationCategory.call : AndroidNotificationCategory.message),
       styleInformation: BigTextStyleInformation(
         body,
         contentTitle: title,
@@ -240,8 +256,22 @@ class PushNotificationManager with WidgetsBindingObserver {
         showBadge: true,
       );
 
+      // Dedicated channel for walk-in visitor clearance with custom doorbell ringtone
+      const AndroidNotificationChannel visitorRingChannel = AndroidNotificationChannel(
+        'society_visitor_ring_channel',
+        'Visitor Doorbell & Gate Approvals',
+        description: 'Urgent visitor gate clearance requests with custom doorbell ringtone',
+        importance: Importance.max,
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound('cell_phone_ring_std'),
+        enableVibration: true,
+        showBadge: true,
+        audioAttributesUsage: AudioAttributesUsage.notificationRingtone,
+      );
+
       await androidPlugin?.createNotificationChannel(generalChannel);
       await androidPlugin?.createNotificationChannel(emergencyChannel);
+      await androidPlugin?.createNotificationChannel(visitorRingChannel);
 
       // Initialize Firebase Cloud Messaging permissions and stream listeners
       try {
@@ -498,14 +528,23 @@ class PushNotificationManager with WidgetsBindingObserver {
 
       activeNotification.value = payload;
 
-      // Auto-dismiss in-app banner after 6 seconds unless it's an emergency alert
+      // Auto-dismiss in-app banner after 6 seconds unless it's an emergency or visitor approval request
       _dismissTimer?.cancel();
-      if (!payload.isEmergency) {
+      if (!payload.isEmergency && !payload.isVisitorApprovalRequest) {
         _dismissTimer = Timer(const Duration(seconds: 6), () {
           if (activeNotification.value?.id == payload.id) {
             activeNotification.value = null;
           }
         });
+      }
+
+      // If this is an urgent visitor approval request and the resident is actively using the app,
+      // directly pop up the approval modal on-screen with custom ringtone audio
+      if (payload.isVisitorApprovalRequest) {
+        final ctx = navigatorKey.currentContext;
+        if (ctx != null && ctx.mounted) {
+          onIncomingVisitorApproval?.call(ctx, payload);
+        }
       }
     }
   }
@@ -514,24 +553,39 @@ class PushNotificationManager with WidgetsBindingObserver {
   Future<void> _showSystemNotification(PushNotificationPayload payload) async {
     try {
       final int notifId = payload.id.hashCode & 0x7FFFFFFF;
+      final bool isVisitorApproval = payload.isVisitorApprovalRequest;
+
+      final String channelId = payload.isEmergency
+          ? 'society_emergency_channel'
+          : (isVisitorApproval ? 'society_visitor_ring_channel' : 'society_general_channel');
+
+      final String channelName = payload.isEmergency
+          ? 'Society Emergency Alerts'
+          : (isVisitorApproval ? 'Visitor Doorbell & Gate Approvals' : 'Society Notifications');
 
       final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-        payload.isEmergency ? 'society_emergency_channel' : 'society_general_channel',
-        payload.isEmergency ? 'Society Emergency Alerts' : 'Society Notifications',
+        channelId,
+        channelName,
         channelDescription: payload.isEmergency
             ? 'Critical emergency SOS alerts'
-            : 'Important society announcements, bills, visitor and parcel alerts',
-        importance: payload.isEmergency ? Importance.max : Importance.high,
-        priority: payload.isEmergency ? Priority.max : Priority.high,
+            : (isVisitorApproval
+                ? 'Urgent visitor gate clearance requests with custom doorbell ringtone'
+                : 'Important society announcements, bills, visitor and parcel alerts'),
+        importance: (payload.isEmergency || isVisitorApproval) ? Importance.max : Importance.high,
+        priority: (payload.isEmergency || isVisitorApproval) ? Priority.max : Priority.high,
         ticker: payload.title,
         color: const Color(0xFF0F766E), // Teal theme primary
         visibility: NotificationVisibility.public,
         enableLights: true,
         enableVibration: true,
         playSound: true,
+        sound: isVisitorApproval ? const RawResourceAndroidNotificationSound('cell_phone_ring_std') : null,
+        audioAttributesUsage: isVisitorApproval ? AudioAttributesUsage.notificationRingtone : AudioAttributesUsage.notification,
         channelShowBadge: true,
-        fullScreenIntent: payload.isEmergency,
-        category: payload.isEmergency ? AndroidNotificationCategory.alarm : AndroidNotificationCategory.message,
+        fullScreenIntent: payload.isEmergency || isVisitorApproval,
+        category: payload.isEmergency
+            ? AndroidNotificationCategory.alarm
+            : (isVisitorApproval ? AndroidNotificationCategory.call : AndroidNotificationCategory.message),
         styleInformation: BigTextStyleInformation(
           payload.message,
           contentTitle: payload.title,
@@ -632,6 +686,10 @@ class PushNotificationManager with WidgetsBindingObserver {
     }
   }
 
+  /// Callback triggered automatically when an incoming walk-in visitor approval request arrives while app is in foreground.
+  /// Allows the resident dashboard to directly present the full clearance modal with ringtone audio.
+  NotificationClickHandler? onIncomingVisitorApproval;
+
   /// Handles user tapping the banner body or native OS system notification.
   /// 1. Marks the notification as read in Firestore.
   /// 2. Dismisses the heads-up banner from screen.
@@ -661,6 +719,7 @@ class PushNotificationManager with WidgetsBindingObserver {
     _currentUserFlat = null;
     _dismissTimer?.cancel();
     activeNotification.value = null;
+    onIncomingVisitorApproval = null;
   }
 }
 

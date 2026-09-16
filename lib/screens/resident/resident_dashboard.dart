@@ -13,6 +13,7 @@ import '../../utils/storage_utils.dart';
 import '../../services/notification_service.dart';
 import '../../services/visitor_pass_service.dart';
 import '../../services/push_notification_manager.dart';
+import 'package:audioplayers/audioplayers.dart';
 import '../../widgets/document_preview_dialog.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_decorations.dart';
@@ -114,7 +115,7 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
     }
 
     // Register Push Notification Click Delegate for instant navigation/dialogs
-    // When resident taps an in-app heads-up push banner, route directly to the target modal or tab
+    // When resident taps an in-app heads-up push banner or system notification, route directly to the target modal or tab
     PushNotificationManager.instance.onNotificationClick = (ctx, payload) {
       NotificationsTab.handleNotificationClick(
         context: ctx,
@@ -130,13 +131,30 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
         },
       );
     };
+
+    // Register automatic incoming visitor approval modal trigger with custom ringtone
+    // When a guard checks in a walk-in visitor while resident is in-app, automatically present the modal with ringtone
+    PushNotificationManager.instance.onIncomingVisitorApproval = (ctx, payload) {
+      final targetContext = PushNotificationManager.navigatorKey.currentContext ?? ctx;
+      if (targetContext.mounted) {
+        NotificationsTab.showVisitorNotificationDialog(
+          targetContext,
+          payload.extraData,
+          notifDocId: payload.id,
+          playRingtone: true,
+        );
+      }
+    };
   }
 
   @override
   void dispose() {
-    // Clean up push notification callback when dashboard is unmounted
+    // Clean up push notification callbacks when dashboard is unmounted
     if (PushNotificationManager.instance.onNotificationClick != null) {
       PushNotificationManager.instance.onNotificationClick = null;
+    }
+    if (PushNotificationManager.instance.onIncomingVisitorApproval != null) {
+      PushNotificationManager.instance.onIncomingVisitorApproval = null;
     }
     super.dispose();
   }
@@ -3000,7 +3018,15 @@ class NotificationsTab extends StatelessWidget {
       final month = notif['month']?.toString();
       onNavigateTab?.call(4, month); // Maintenance tab with month payload
     } else if (isVisitor) {
-      showVisitorNotificationDialog(context, notif, docId, userFlat, fullFlat);
+      final isPending = notif['approvalStatus'] == 'PENDING' || notif['isWalkIn'] == true;
+      showVisitorNotificationDialog(
+        context,
+        notif,
+        notifDocId: docId,
+        userFlat: userFlat,
+        fullFlat: fullFlat,
+        playRingtone: isPending,
+      );
     } else if (isParcel) {
       showParcelNotificationDialog(context, notif, docId, userFlat, fullFlat);
     } else if (isEmergency) {
@@ -3010,8 +3036,18 @@ class NotificationsTab extends StatelessWidget {
     }
   }
 
-  /// Displays the interactive visitor clearance & photo verification dialog with Approve/Deny buttons.
-  static void showVisitorNotificationDialog(BuildContext context, Map<String, dynamic> notif, [String? notifDocId, String? userFlat, String? fullFlat]) {
+  static String? _activeVisitorDialogKey;
+
+  /// Displays the interactive visitor clearance & photo verification dialog with Approve/Deny buttons,
+  /// with automatic ringtone audio playback for incoming gate approval requests.
+  static void showVisitorNotificationDialog(
+    BuildContext context,
+    Map<String, dynamic> notif, {
+    String? notifDocId,
+    String? userFlat,
+    String? fullFlat,
+    bool playRingtone = false,
+  }) {
     final title = notif['title']?.toString() ?? 'Visitor at Gate';
     final msg = notif['message']?.toString() ?? '';
 
@@ -3025,6 +3061,14 @@ class NotificationsTab extends StatelessWidget {
         vName = 'Visitor';
       }
     }
+
+    // Deduplication key: prevent multiple stacked dialogs if stream fires repeatedly for the same visitor
+    final String dialogKey = notifDocId ?? notif['visitorDocId']?.toString() ?? vName;
+    if (_activeVisitorDialogKey == dialogKey) {
+      debugPrint('[ResidentDashboard] Visitor clearance dialog already active for $dialogKey');
+      return;
+    }
+    _activeVisitorDialogKey = dialogKey;
 
     String vPurpose = notif['purpose']?.toString() ?? '';
     if (vPurpose.isEmpty) {
@@ -3055,6 +3099,28 @@ class NotificationsTab extends StatelessWidget {
     String? visitorDocId = notif['visitorDocId']?.toString();
     String? photoUrl = notif['photoUrl']?.toString() ??
         (notif['extraData'] is Map ? (notif['extraData'] as Map)['photoUrl']?.toString() : null);
+
+    // Continuous doorbell ringtone audio player for incoming clearance requests
+    AudioPlayer? audioPlayer;
+    if (playRingtone && currentApproval == 'PENDING' && !isCheckedOut) {
+      try {
+        audioPlayer = AudioPlayer();
+        audioPlayer.setReleaseMode(ReleaseMode.loop);
+        audioPlayer.play(AssetSource('audio/cell_phone_ring_std.mp3')).catchError((err) {
+          debugPrint('[ResidentDashboard] AudioPlayer ringtone playback error: $err');
+        });
+      } catch (e) {
+        debugPrint('[ResidentDashboard] AudioPlayer initialization error: $e');
+      }
+    }
+
+    void stopRingtone() {
+      if (audioPlayer != null) {
+        audioPlayer!.stop().catchError((_) {});
+        audioPlayer!.dispose().catchError((_) {});
+        audioPlayer = null;
+      }
+    }
 
     Future<String?> resolveVisitorDocId() async {
       if (visitorDocId != null && visitorDocId!.isNotEmpty) return visitorDocId;
@@ -3437,7 +3503,10 @@ class NotificationsTab extends StatelessWidget {
                             foregroundColor: Colors.white,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                           ),
-                          onPressed: () => Navigator.pop(ctx),
+                          onPressed: () {
+                            stopRingtone();
+                            Navigator.pop(ctx);
+                          },
                           child: const Text('Close'),
                         ),
                       )
@@ -3445,7 +3514,12 @@ class NotificationsTab extends StatelessWidget {
                       Row(
                         children: [
                           TextButton(
-                            onPressed: isActionLoading ? null : () => Navigator.pop(ctx),
+                            onPressed: isActionLoading
+                                ? null
+                                : () {
+                                    stopRingtone();
+                                    Navigator.pop(ctx);
+                                  },
                             child: const Text('Dismiss', style: TextStyle(color: Colors.grey)),
                           ),
                           const Spacer(),
@@ -3461,6 +3535,7 @@ class NotificationsTab extends StatelessWidget {
                             onPressed: isActionLoading
                                 ? null
                                 : () async {
+                                    stopRingtone();
                                     setDialogState(() => isActionLoading = true);
                                     try {
                                       final docId = await resolveVisitorDocId();
@@ -3495,6 +3570,7 @@ class NotificationsTab extends StatelessWidget {
                             onPressed: isActionLoading
                                 ? null
                                 : () async {
+                                    stopRingtone();
                                     setDialogState(() => isActionLoading = true);
                                     try {
                                       final docId = await resolveVisitorDocId();
@@ -3525,7 +3601,10 @@ class NotificationsTab extends StatelessWidget {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      stopRingtone();
+      _activeVisitorDialogKey = null;
+    });
   }
 
   /// Displays parcel & courier handover details when parcel notifications are tapped,
