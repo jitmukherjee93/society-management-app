@@ -74,10 +74,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
   String? _walkInPhotoName;
   final ImagePicker _imagePicker = ImagePicker();
 
-  Future<void> _pickWalkInPhoto(ImageSource source) async {
+  /// Captures a walk-in visitor's photo strictly using the device camera.
+  /// Gallery upload is intentionally disallowed to ensure physical on-spot verification at the gate kiosk.
+  Future<void> _pickWalkInPhoto([ImageSource source = ImageSource.camera]) async {
     try {
+      // Strictly enforce ImageSource.camera for live visitor capture at security gate
       final XFile? file = await _imagePicker.pickImage(
-        source: source,
+        source: ImageSource.camera,
         maxWidth: 900,
         maxHeight: 900,
         imageQuality: 75,
@@ -91,7 +94,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
       }
     } catch (e) {
       if (mounted) {
-        AppFeedback.showError(context, 'Could not access camera/photo: $e');
+        AppFeedback.showError(context, 'Could not access camera: $e');
       }
     }
   }
@@ -1787,32 +1790,23 @@ class _GuardDashboardState extends State<GuardDashboard> {
                           ],
                         ),
                       ] else ...[
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.primaryDark,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
-                                icon: const Icon(Icons.camera_alt_rounded, size: 16),
-                                label: const Text('Take Photo', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                onPressed: () => _pickWalkInPhoto(ImageSource.camera),
-                              ),
+                        // Strictly Camera-Only option for gate kiosk walk-in visitors (gallery upload disabled)
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primaryDark,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                             ),
-                            const SizedBox(width: 10),
-                            OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                              ),
-                              icon: const Icon(Icons.photo_library_outlined, size: 16),
-                              label: const Text('Gallery', style: TextStyle(fontSize: 12)),
-                              onPressed: () => _pickWalkInPhoto(ImageSource.gallery),
+                            icon: const Icon(Icons.camera_alt_rounded, size: 18),
+                            label: const Text(
+                              'Take Photo (Camera Only)',
+                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                             ),
-                          ],
+                            onPressed: () => _pickWalkInPhoto(ImageSource.camera),
+                          ),
                         ),
                       ],
                     ],
