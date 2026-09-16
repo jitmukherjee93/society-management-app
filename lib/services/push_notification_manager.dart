@@ -387,6 +387,8 @@ class PushNotificationManager with WidgetsBindingObserver {
   }
 
   /// Syncs the device FCM token to the user document in Firestore.
+  /// Also sets up an active onTokenRefresh listener to update Firestore automatically
+  /// if the Android operating system or Firebase rotates the device registration token.
   Future<void> _syncFcmDeviceToken(String uid) async {
     try {
       final token = await FirebaseMessaging.instance.getToken();
@@ -399,6 +401,19 @@ class PushNotificationManager with WidgetsBindingObserver {
         }, SetOptions(merge: true));
         debugPrint('[PushNotificationManager] FCM Token synced for $uid: ${token.substring(0, 10)}...');
       }
+
+      // Automatically sync whenever Firebase Cloud Messaging rotates the device token
+      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+        if (newToken.isNotEmpty) {
+          FirebaseFirestore.instance.collection('users').doc(uid).set({
+            'fcmToken': newToken,
+            'fcmTokens': FieldValue.arrayUnion([newToken]),
+            'devicePlatform': 'android',
+            'lastTokenSync': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true)).catchError((_) {});
+          debugPrint('[PushNotificationManager] Refreshed FCM Token auto-synced for $uid');
+        }
+      });
     } catch (e) {
       debugPrint('[PushNotificationManager] Token sync note: $e');
     }
