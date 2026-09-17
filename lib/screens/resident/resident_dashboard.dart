@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
@@ -7,13 +9,11 @@ import '../../models/accounting_heads.dart';
 import '../../constants/society_config.dart';
 import '../../utils/app_formatters.dart';
 import '../../services/billing_service.dart';
-import '../../utils/flat_utils.dart';
 import 'tabs/community_feed_tab.dart';
 import '../../utils/storage_utils.dart';
 import '../../services/notification_service.dart';
 import '../../services/visitor_pass_service.dart';
 import '../../services/push_notification_manager.dart';
-import 'package:audioplayers/audioplayers.dart';
 import '../../widgets/document_preview_dialog.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_decorations.dart';
@@ -23,6 +23,7 @@ import '../../widgets/receipt_preview_dialog.dart';
 import '../../models/notice_model.dart';
 import '../../widgets/notices/two_column_notice_list.dart';
 import '../../widgets/maintenance/maintenance_months_calendar.dart';
+import '../../widgets/visitor_popout_dialog.dart';
 
 // ============================================================================
 // RESIDENT PORTAL & SELF-SERVICE DASHBOARD
@@ -142,6 +143,7 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           payload.extraData,
           notifDocId: payload.id,
           playRingtone: true,
+          force: true,
         );
       }
     };
@@ -2630,6 +2632,16 @@ class NotificationsTab extends StatelessWidget {
                                             ? Icons.cancel
                                             : Icons.info;
 
+                    final extra = notif['extraData'] is Map ? notif['extraData'] as Map : {};
+                    final photoUrl = notif['photoUrl']?.toString() ?? extra['photoUrl']?.toString();
+                    final deliveryApp = notif['deliveryApp']?.toString() ?? extra['deliveryApp']?.toString();
+                    final parcelOtp = notif['pickupOtp']?.toString() ?? extra['pickupOtp']?.toString();
+                    final parcelStatus = (notif['status'] ?? extra['status'] ?? '').toString().toUpperCase();
+                    final isDeliveredOrCollected = parcelStatus == 'COLLECTED' ||
+                        parcelStatus == 'DELIVERED' ||
+                        type == 'PARCEL_DELIVERED' ||
+                        notif['requiresAcknowledgment'] == true;
+
                     return Card(
                       elevation: 2,
                       shape: RoundedRectangleBorder(
@@ -2639,10 +2651,24 @@ class NotificationsTab extends StatelessWidget {
                       color: cardColor,
                       margin: const EdgeInsets.only(bottom: 10),
                       child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: iconBgColor,
-                          child: Icon(iconData, color: iconColor),
-                        ),
+                        leading: (photoUrl != null && photoUrl.isNotEmpty)
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(20),
+                                child: Image.network(
+                                  photoUrl,
+                                  width: 40,
+                                  height: 40,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => CircleAvatar(
+                                    backgroundColor: iconBgColor,
+                                    child: Icon(iconData, color: iconColor),
+                                  ),
+                                ),
+                              )
+                            : CircleAvatar(
+                                backgroundColor: iconBgColor,
+                                child: Icon(iconData, color: iconColor),
+                              ),
                         title: Row(
                           children: [
                             Expanded(
@@ -2669,6 +2695,32 @@ class NotificationsTab extends StatelessWidget {
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            if (deliveryApp != null && deliveryApp.isNotEmpty) ...[
+                              const SizedBox(height: 3),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade100,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: Colors.amber.shade300),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.local_shipping_rounded, size: 12, color: Colors.amber.shade900),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      deliveryApp,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.amber.shade900,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 2),
                             Text(msg, style: const TextStyle(fontSize: 12)),
                             const SizedBox(height: 4),
@@ -2698,6 +2750,50 @@ class NotificationsTab extends StatelessWidget {
                             ),
                             // Quick Action Buttons & Status Badges for Parcel Notifications
                             if (isParcel) ...[
+                              // If held at gate and pickup OTP is available, display prominent Pickup OTP chip with 1-tap copy
+                              if (parcelOtp != null && parcelOtp.isNotEmpty && !isDeliveredOrCollected) ...[
+                                Container(
+                                  margin: const EdgeInsets.only(top: 8),
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                  decoration: BoxDecoration(
+                                    color: Colors.amber.shade100,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.amber.shade400),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.vpn_key_rounded, size: 14, color: Colors.amber.shade900),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        'Pickup OTP: $parcelOtp',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w900,
+                                          letterSpacing: 2,
+                                          color: Colors.amber.shade900,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      InkWell(
+                                        onTap: () {
+                                          Clipboard.setData(ClipboardData(text: parcelOtp));
+                                          AppFeedback.showSuccess(context, 'Pickup OTP $parcelOtp copied!');
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.all(2),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white,
+                                            borderRadius: BorderRadius.circular(4),
+                                            border: Border.all(color: Colors.amber.shade300),
+                                          ),
+                                          child: Icon(Icons.copy_rounded, size: 13, color: Colors.amber.shade900),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                               if (notif['acknowledged'] == true || notif['residentAcknowledged'] == true) ...[
                                 // Status badge when parcel receipt is already confirmed
                                 Container(
@@ -2742,7 +2838,7 @@ class NotificationsTab extends StatelessWidget {
                                     ],
                                   ),
                                 ),
-                              ] else ...[
+                              ] else if (isDeliveredOrCollected) ...[
                                 // 1-Tap Action buttons: Received & Not Received for easy resident confirmation.
                                 // We use a Wrap widget with compact button padding so that buttons fit side-by-side
                                 // on normal screens, and wrap gracefully without ANY RenderFlex overflow on narrow screens.
@@ -2960,13 +3056,18 @@ class NotificationsTab extends StatelessWidget {
         title.contains('bill') ||
         title.contains('dues') ||
         message.contains('maintenance');
-    final isVisitor = type.startsWith('VISITOR') ||
+    final isStaff = type.startsWith('STAFF') ||
+        title.contains('staff') ||
+        title.contains('maid') ||
+        title.contains('cook') ||
+        title.contains('driver');
+    final isVisitor = !isStaff && (type.startsWith('VISITOR') ||
         title.contains('visitor') ||
         title.contains('guest') ||
         message.contains('visitor') ||
         message.contains('guest') ||
         message.contains('arrived') ||
-        message.contains('checked in');
+        message.contains('checked in'));
     final isParcel = type.startsWith('PARCEL') ||
         title.contains('parcel') ||
         title.contains('courier') ||
@@ -3017,8 +3118,12 @@ class NotificationsTab extends StatelessWidget {
     } else if (isMaintenance) {
       final month = notif['month']?.toString();
       onNavigateTab?.call(4, month); // Maintenance tab with month payload
+    } else if (isStaff) {
+      showStaffNotificationDialog(context, notif);
     } else if (isVisitor) {
-      final isPending = notif['approvalStatus'] == 'PENDING' || notif['isWalkIn'] == true;
+      // Only play ringtone and allow approval/denial if the visitor request is strictly PENDING.
+      // If it was already approved or denied, display the resolved status without ringing.
+      final isPending = (notif['approvalStatus'] ?? '').toString().toUpperCase() == 'PENDING';
       showVisitorNotificationDialog(
         context,
         notif,
@@ -3026,6 +3131,7 @@ class NotificationsTab extends StatelessWidget {
         userFlat: userFlat,
         fullFlat: fullFlat,
         playRingtone: isPending,
+        force: true, // User tapped notification explicitly, always display the popout screen
       );
     } else if (isParcel) {
       showParcelNotificationDialog(context, notif, docId, userFlat, fullFlat);
@@ -3036,10 +3142,140 @@ class NotificationsTab extends StatelessWidget {
     }
   }
 
-  static String? _activeVisitorDialogKey;
+  /// Displays non-intrusive staff and domestic helper check-in details.
+  /// Does not play ringtone or require approval (daily help is logged automatically).
+  static void showStaffNotificationDialog(
+    BuildContext context,
+    Map<String, dynamic> notif,
+  ) {
+    final title = notif['title']?.toString() ?? 'Daily Staff Check-In';
+    final message = notif['message']?.toString() ?? '';
+    final extra = notif['extraData'] is Map ? notif['extraData'] as Map : notif;
+    final staffName = (extra['visitorName'] ?? notif['visitorName'] ?? 'Domestic Helper').toString();
+    final purpose = (extra['purpose'] ?? notif['purpose'] ?? 'Staff / Maid').toString();
+    final gateName = (extra['gateName'] ?? notif['gateName'] ?? 'Main Gate').toString();
+    final photoUrl = (extra['photoUrl'] ?? notif['photoUrl'])?.toString();
+    final phone = (extra['phone'] ?? notif['phone'] ?? '').toString().trim();
 
-  /// Displays the interactive visitor clearance & photo verification dialog with Approve/Deny buttons,
-  /// with automatic ringtone audio playback for incoming gate approval requests.
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        actionsPadding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.teal.shade50,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.badge_rounded, color: Color(0xFF0D9488), size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                  ),
+                  Text(
+                    'Daily Domestic Staff Entry',
+                    style: TextStyle(fontSize: 12, color: Colors.teal.shade700, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (photoUrl != null && photoUrl.isNotEmpty) ...[
+              Center(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    photoUrl,
+                    width: 110,
+                    height: 110,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => CircleAvatar(
+                      radius: 36,
+                      backgroundColor: Colors.teal.shade100,
+                      child: const Icon(Icons.person_rounded, size: 36, color: Color(0xFF0D9488)),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.teal.shade50.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.teal.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    staffName,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppColors.textPrimary),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Role: $purpose',
+                    style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Gate: $gateName',
+                    style: const TextStyle(fontSize: 13, color: AppColors.textMuted),
+                  ),
+                  if (phone.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      'Contact: $phone',
+                      style: const TextStyle(fontSize: 13, color: AppColors.textMuted),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (message.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                message,
+                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0D9488),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Understood'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String? _activeVisitorDialogKey;
+  /// Displays the interactive MyGate-style full-screen visitor clearance popout dialog
+  /// with Deny, Leave at Gate, and Approve buttons, plus continuous doorbell ringtone audio.
   static void showVisitorNotificationDialog(
     BuildContext context,
     Map<String, dynamic> notif, {
@@ -3047,10 +3283,9 @@ class NotificationsTab extends StatelessWidget {
     String? userFlat,
     String? fullFlat,
     bool playRingtone = false,
+    bool force = false,
   }) {
     final title = notif['title']?.toString() ?? 'Visitor at Gate';
-    final msg = notif['message']?.toString() ?? '';
-
     String vName = notif['visitorName']?.toString() ?? '';
     if (vName.isEmpty) {
       if (title.startsWith('Visitor At Gate: ')) {
@@ -3064,546 +3299,27 @@ class NotificationsTab extends StatelessWidget {
 
     // Deduplication key: prevent multiple stacked dialogs if stream fires repeatedly for the same visitor
     final String dialogKey = notifDocId ?? notif['visitorDocId']?.toString() ?? vName;
-    if (_activeVisitorDialogKey == dialogKey) {
+    if (!force && _activeVisitorDialogKey == dialogKey) {
       debugPrint('[ResidentDashboard] Visitor clearance dialog already active for $dialogKey');
       return;
     }
     _activeVisitorDialogKey = dialogKey;
 
-    String vPurpose = notif['purpose']?.toString() ?? '';
-    if (vPurpose.isEmpty) {
-      final match = RegExp(r'\((.*?)\)').firstMatch(msg);
-      vPurpose = match?.group(1) ?? 'Guest / Personal';
-    }
-
-    String vGate = notif['gateName']?.toString() ?? '';
-    if (vGate.isEmpty) {
-      final match = RegExp(r'(?:checked in at|exited from)\s+([^\.]+?)(?:\.|\s+with|\s+\()').firstMatch(msg);
-      vGate = match?.group(1) ?? 'Security Gate';
-    }
-
-    final guardName = notif['guardName']?.toString() ?? 'Security Guard';
-    final phone = notif['phone']?.toString() ??
-        (notif['extraData'] is Map ? (notif['extraData'] as Map)['phone']?.toString() : null);
-    final vehicle = notif['vehicleNumber']?.toString() ??
-        (notif['extraData'] is Map ? (notif['extraData'] as Map)['vehicleNumber']?.toString() : null);
-    final deliveryApp = notif['deliveryApp']?.toString() ??
-        (notif['extraData'] is Map ? (notif['extraData'] as Map)['deliveryApp']?.toString() : null);
     final flatNumber = notif['flatNumber']?.toString() ?? userFlat ?? fullFlat ?? '';
-    final createdAt = (notif['createdAt'] as Timestamp?)?.toDate();
-    final timeStr = createdAt != null ? DateFormat('hh:mm a, dd MMM yyyy').format(createdAt) : 'Just now';
-
-    final isCheckedOut = notif['type'] == 'VISITOR_CHECK_OUT' || notif['status'] == 'CHECKED_OUT';
-    String? currentApproval = notif['approvalStatus']?.toString();
-    bool isActionLoading = false;
-    String? visitorDocId = notif['visitorDocId']?.toString();
-    String? photoUrl = notif['photoUrl']?.toString() ??
-        (notif['extraData'] is Map ? (notif['extraData'] as Map)['photoUrl']?.toString() : null);
-
-    // Continuous doorbell ringtone audio player for incoming clearance requests
-    AudioPlayer? audioPlayer;
-    if (playRingtone && currentApproval == 'PENDING' && !isCheckedOut) {
-      try {
-        audioPlayer = AudioPlayer();
-        audioPlayer.setReleaseMode(ReleaseMode.loop);
-        audioPlayer.play(AssetSource('audio/cell_phone_ring_std.mp3')).catchError((err) {
-          debugPrint('[ResidentDashboard] AudioPlayer ringtone playback error: $err');
-        });
-      } catch (e) {
-        debugPrint('[ResidentDashboard] AudioPlayer initialization error: $e');
-      }
+    final mutableNotif = Map<String, dynamic>.from(notif);
+    if (!mutableNotif.containsKey('flatNumber') || mutableNotif['flatNumber'] == null) {
+      mutableNotif['flatNumber'] = flatNumber;
     }
 
-    void stopRingtone() {
-      if (audioPlayer != null) {
-        audioPlayer!.stop().catchError((_) {});
-        audioPlayer!.dispose().catchError((_) {});
-        audioPlayer = null;
-      }
-    }
-
-    Future<String?> resolveVisitorDocId() async {
-      if (visitorDocId != null && visitorDocId!.isNotEmpty) return visitorDocId;
-      try {
-        final snap = await FirebaseFirestore.instance
-            .collection('visitors')
-            .where('flatNumber', isEqualTo: FlatUtils.normalize(flatNumber))
-            .get();
-        if (snap.docs.isNotEmpty) {
-          final matches = snap.docs.where((d) {
-            final data = d.data();
-            final vN = (data['visitorName'] ?? '').toString().trim().toLowerCase();
-            final vStatus = data['status']?.toString();
-            return vStatus == 'CHECKED_IN' &&
-                   (vN == vName.trim().toLowerCase() ||
-                    vN.contains(vName.trim().toLowerCase()) ||
-                    vName.trim().toLowerCase().contains(vN));
-          }).toList();
-          if (matches.isNotEmpty) {
-            visitorDocId = matches.first.id;
-            photoUrl ??= matches.first.data()['photoUrl']?.toString();
-            return visitorDocId;
-          }
-          final checkedIn = snap.docs.where((d) => d.data()['status'] == 'CHECKED_IN').toList();
-          if (checkedIn.isNotEmpty) {
-            visitorDocId = checkedIn.last.id;
-            photoUrl ??= checkedIn.last.data()['photoUrl']?.toString();
-            return visitorDocId;
-          }
-        }
-      } catch (e) {
-        // ignore
-      }
-      return null;
-    }
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final isApproved = currentApproval == 'APPROVED';
-          final isDenied = currentApproval == 'DENIED';
-
-          return Dialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 440),
-              padding: const EdgeInsets.all(20),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: isCheckedOut
-                                ? AppColors.primarySurface
-                                : isApproved
-                                    ? Colors.green.shade50
-                                    : (isDenied ? Colors.red.shade50 : Colors.teal.shade50),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Icon(
-                            isCheckedOut
-                                ? Icons.logout_rounded
-                                : isApproved
-                                    ? Icons.check_circle_rounded
-                                    : (isDenied ? Icons.cancel_rounded : Icons.person_pin_circle_rounded),
-                            color: isCheckedOut
-                                ? AppColors.primary
-                                : isApproved
-                                    ? Colors.green
-                                    : (isDenied ? Colors.red : Colors.teal),
-                            size: 24,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(vName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                              Text(
-                                isCheckedOut
-                                    ? 'Guest Checked Out'
-                                    : isApproved
-                                        ? (notif['isPreApproved'] == true ? 'Pre-Approved Guest Entry' : 'Entry Approved')
-                                        : (isDenied ? 'Entry Denied' : 'Visitor Gate Clearance'),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: isCheckedOut || isApproved || isDenied ? FontWeight.bold : FontWeight.normal,
-                                  color: isCheckedOut
-                                      ? AppColors.primary
-                                      : isApproved
-                                          ? Colors.green
-                                          : (isDenied ? Colors.red : Colors.grey),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    if (isCheckedOut)
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: AppColors.primarySurface,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.logout_rounded, color: AppColors.primary, size: 22),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'GUEST CHECKED OUT',
-                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryDark),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Your guest $vName has checked out and departed campus from $vGate.',
-                                    style: const TextStyle(fontSize: 11, color: AppColors.primaryDark),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    else if (isApproved)
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.green.shade300),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.verified_rounded, color: Colors.green, size: 22),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    notif['isPreApproved'] == true
-                                        ? 'PRE-APPROVED GUEST CHECKED IN'
-                                        : 'ENTRY APPROVED BY YOU',
-                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    notif['isPreApproved'] == true
-                                        ? 'Your pre-approved guest $vName has checked in at $vGate.'
-                                        : 'Gate security has been notified that $vName is cleared to enter.',
-                                    style: TextStyle(fontSize: 11, color: Colors.green.shade900),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    else if (isDenied)
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.red.shade300),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.block_rounded, color: Colors.red, size: 22),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'ENTRY DENIED BY YOU',
-                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Gate security has been instructed to turn $vName away.',
-                                    style: TextStyle(fontSize: 11, color: Colors.red.shade900),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    else
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.amber.shade300),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.security_rounded, color: Colors.brown, size: 22),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'CLEARANCE REQUIRED',
-                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.brown),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Visitor waiting at $vGate • $timeStr',
-                                    style: TextStyle(fontSize: 11, color: Colors.brown.shade800),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    if (photoUrl != null && photoUrl!.isNotEmpty) ...[
-                      const SizedBox(height: 14),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Row(
-                            children: [
-                              Icon(Icons.camera_alt_outlined, size: 14, color: AppColors.primary),
-                              SizedBox(width: 6),
-                              Text('Visitor Photo (Gate Verification)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textSecondary)),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          GestureDetector(
-                            onTap: () {
-                              showDialog(
-                                context: context,
-                                builder: (_) => Dialog(
-                                  insetPadding: const EdgeInsets.all(16),
-                                  child: Stack(
-                                    children: [
-                                      InteractiveViewer(
-                                        child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(12),
-                                          child: Image.network(
-                                            photoUrl!,
-                                            fit: BoxFit.contain,
-                                          ),
-                                        ),
-                                      ),
-                                      Positioned(
-                                        top: 8,
-                                        right: 8,
-                                        child: CircleAvatar(
-                                          backgroundColor: Colors.black54,
-                                          radius: 18,
-                                          child: IconButton(
-                                            icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white),
-                                            onPressed: () => Navigator.pop(context),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                            child: Stack(
-                              alignment: Alignment.bottomRight,
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(10),
-                                  child: Container(
-                                    height: 180,
-                                    width: double.infinity,
-                                    color: AppColors.cardSurfaceSecondary,
-                                    child: Image.network(
-                                      photoUrl!,
-                                      height: 180,
-                                      width: double.infinity,
-                                      fit: BoxFit.cover,
-                                      loadingBuilder: (_, child, progress) {
-                                        if (progress == null) return child;
-                                        return const Center(child: CircularProgressIndicator(strokeWidth: 2));
-                                      },
-                                      errorBuilder: (_, _, _) => const Center(
-                                        child: Icon(Icons.broken_image_rounded, size: 40, color: Colors.grey),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                Container(
-                                  margin: const EdgeInsets.all(8),
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black.withValues(alpha: 0.65),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: const Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.zoom_in_rounded, size: 14, color: Colors.white),
-                                      SizedBox(width: 4),
-                                      Text('Tap to zoom', style: TextStyle(color: Colors.white, fontSize: 10)),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    _buildDialogRow('Purpose', vPurpose),
-                    if (deliveryApp != null && deliveryApp.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      _buildDialogRow('Delivery App', deliveryApp),
-                    ],
-                    if (phone != null && phone.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      _buildDialogRow('Phone', phone),
-                    ],
-                    if (vehicle != null && vehicle.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      _buildDialogRow('Vehicle', vehicle),
-                    ],
-                    const SizedBox(height: 8),
-                    _buildDialogRow('Gate & Guard', '$vGate • $guardName'),
-                    const SizedBox(height: 12),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: AppColors.cardSurfaceSecondary,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        msg,
-                        style: const TextStyle(fontSize: 12, color: AppColors.textPrimary, height: 1.3),
-                      ),
-                    ),
-                    if (isActionLoading) ...[
-                      const SizedBox(height: 16),
-                      const Center(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-                            SizedBox(width: 10),
-                            Text('Notifying gate security...', style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
-                          ],
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 20),
-                    if (isCheckedOut || isApproved || isDenied)
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          onPressed: () {
-                            stopRingtone();
-                            Navigator.pop(ctx);
-                          },
-                          child: const Text('Close'),
-                        ),
-                      )
-                    else
-                      Row(
-                        children: [
-                          TextButton(
-                            onPressed: isActionLoading
-                                ? null
-                                : () {
-                                    stopRingtone();
-                                    Navigator.pop(ctx);
-                                  },
-                            child: const Text('Dismiss', style: TextStyle(color: Colors.grey)),
-                          ),
-                          const Spacer(),
-                          OutlinedButton.icon(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.red.shade700,
-                              side: BorderSide(color: Colors.red.shade400),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            ),
-                            icon: const Icon(Icons.cancel_outlined, size: 16),
-                            label: const Text('Deny Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                            onPressed: isActionLoading
-                                ? null
-                                : () async {
-                                    stopRingtone();
-                                    setDialogState(() => isActionLoading = true);
-                                    try {
-                                      final docId = await resolveVisitorDocId();
-                                      await VisitorPassService.denyVisitorEntry(
-                                        visitorDocId: docId,
-                                        flatNumber: flatNumber,
-                                        visitorName: vName,
-                                        notifDocId: notifDocId,
-                                      );
-                                      setDialogState(() {
-                                        currentApproval = 'DENIED';
-                                        isActionLoading = false;
-                                      });
-                                    } catch (e) {
-                                      setDialogState(() => isActionLoading = false);
-                                      if (context.mounted) {
-                                        AppFeedback.showError(context, 'Failed to deny entry: $e');
-                                      }
-                                    }
-                                  },
-                          ),
-                          const SizedBox(width: 8),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.green.shade600,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            ),
-                            icon: const Icon(Icons.check_circle_outline, size: 16),
-                            label: const Text('Approve Entry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                            onPressed: isActionLoading
-                                ? null
-                                : () async {
-                                    stopRingtone();
-                                    setDialogState(() => isActionLoading = true);
-                                    try {
-                                      final docId = await resolveVisitorDocId();
-                                      await VisitorPassService.approveVisitorEntry(
-                                        visitorDocId: docId,
-                                        flatNumber: flatNumber,
-                                        visitorName: vName,
-                                        notifDocId: notifDocId,
-                                      );
-                                      setDialogState(() {
-                                        currentApproval = 'APPROVED';
-                                        isActionLoading = false;
-                                      });
-                                    } catch (e) {
-                                      setDialogState(() => isActionLoading = false);
-                                      if (context.mounted) {
-                                        AppFeedback.showError(context, 'Failed to approve entry: $e');
-                                      }
-                                    }
-                                  },
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      ),
+    VisitorPopoutDialog.show(
+      context,
+      mutableNotif,
+      notifDocId: notifDocId,
+      playRingtone: playRingtone,
     ).whenComplete(() {
-      stopRingtone();
-      _activeVisitorDialogKey = null;
+      if (_activeVisitorDialogKey == dialogKey) {
+        _activeVisitorDialogKey = null;
+      }
     });
   }
 
@@ -3631,6 +3347,11 @@ class NotificationsTab extends StatelessWidget {
     final createdAt = (notif['createdAt'] as Timestamp?)?.toDate();
     final timeStr = createdAt != null ? DateFormat('hh:mm a, dd MMM yyyy').format(createdAt) : 'Just now';
 
+    // Extract 4-digit Pickup OTP from notification data or extraData
+    final inlineOtp = notif['pickupOtp']?.toString() ??
+        (notif['extraData'] is Map ? notif['extraData']['pickupOtp']?.toString() : null);
+    String? currentPickupOtp = inlineOtp;
+
     // Determine if the parcel receipt has already been acknowledged or disputed
     bool isAcknowledged = notif['acknowledged'] == true || notif['residentAcknowledged'] == true;
     bool isDisputed = notif['disputed'] == true || notif['receiptStatus'] == 'NOT_RECEIVED';
@@ -3644,6 +3365,32 @@ class NotificationsTab extends StatelessWidget {
       context: targetCtx,
       builder: (ctx) => StatefulBuilder(
         builder: (dialogCtx, setDialogState) {
+          // Lazily resolve pickupOtp from gate_parcels or visitors collection if not directly bundled in notification payload
+          if (currentPickupOtp == null && !isDelivered && !isAcknowledged) {
+            if (parcelDocId.isNotEmpty) {
+              FirebaseFirestore.instance.collection('gate_parcels').doc(parcelDocId).get().then((snap) {
+                if (snap.exists && dialogCtx.mounted) {
+                  final otp = snap.data()?['pickupOtp']?.toString();
+                  if (otp != null && otp.isNotEmpty && currentPickupOtp != otp) {
+                    setDialogState(() => currentPickupOtp = otp);
+                  }
+                }
+              }).catchError((_) {});
+            }
+            final vDocId = notif['visitorDocId']?.toString() ??
+                (notif['extraData'] is Map ? notif['extraData']['visitorDocId']?.toString() : null);
+            if (vDocId != null && vDocId.isNotEmpty) {
+              FirebaseFirestore.instance.collection('visitors').doc(vDocId).get().then((snap) {
+                if (snap.exists && dialogCtx.mounted) {
+                  final otp = snap.data()?['pickupOtp']?.toString();
+                  if (otp != null && otp.isNotEmpty && currentPickupOtp != otp) {
+                    setDialogState(() => currentPickupOtp = otp);
+                  }
+                }
+              }).catchError((_) {});
+            }
+          }
+
           return AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Row(
@@ -3686,7 +3433,7 @@ class NotificationsTab extends StatelessWidget {
                                 ? 'Reported Not Received'
                                 : (isDelivered
                                     ? 'Delivered • Confirmation Required'
-                                    : 'At Gate • Confirmation Required')),
+                                    : 'At Gate • Show OTP to Collect')),
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: (!isAcknowledged && !isDisputed) ? FontWeight.bold : FontWeight.normal,
@@ -3707,6 +3454,98 @@ class NotificationsTab extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // ─── High-Visibility Gate Pickup OTP Card ───────────────────
+                  if (currentPickupOtp != null && currentPickupOtp!.isNotEmpty && !isDelivered && !isAcknowledged) ...[
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 14),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Colors.amber.shade50, Colors.orange.shade50],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.amber.shade400, width: 1.5),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.amber.withValues(alpha: 0.12),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.vpn_key_rounded, size: 16, color: Colors.amber.shade900),
+                              const SizedBox(width: 6),
+                              Text(
+                                'GATE PICKUP OTP',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.2,
+                                  color: Colors.amber.shade900,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.amber.shade300),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.04),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  currentPickupOtp!,
+                                  style: TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 8,
+                                    color: Colors.amber.shade900,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  icon: const Icon(Icons.copy_rounded, size: 20),
+                                  color: Colors.amber.shade900,
+                                  tooltip: 'Copy OTP',
+                                  visualDensity: VisualDensity.compact,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () {
+                                    Clipboard.setData(ClipboardData(text: currentPickupOtp!));
+                                    AppFeedback.showSuccess(targetCtx, 'Pickup OTP $currentPickupOtp copied to clipboard!');
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Show this 4-digit code to gate security at $gateName to securely collect your delivery.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 11, color: Colors.brown.shade800, fontWeight: FontWeight.w500),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   // Status Banner Container reflecting current acknowledgment / dispute state
                   if (isAcknowledged)
                     Container(
@@ -3854,89 +3693,103 @@ class NotificationsTab extends StatelessWidget {
             ),
             actions: [
               if (!isAcknowledged && !isDisputed) ...[
-                // Close/Later option
-                TextButton(
-                  onPressed: isProcessingAction ? null : () => Navigator.pop(ctx),
-                  child: const Text('Later', style: TextStyle(color: Colors.grey)),
-                ),
-                // "Not Received" Dispute button
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red.shade700,
-                    side: BorderSide(color: Colors.red.shade400),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                if (!isDelivered) ...[
+                  // Parcel is still held at gate: provide clear action to show code at gate
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    icon: const Icon(Icons.check_rounded, size: 16),
+                    label: const Text('Understood • Show Code at Gate'),
+                    onPressed: () => Navigator.pop(ctx),
                   ),
-                  icon: isProcessingAction
-                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red))
-                      : const Icon(Icons.cancel_outlined, size: 16),
-                  label: const Text('Not Received'),
-                  onPressed: isProcessingAction
-                      ? null
-                      : () async {
-                          setDialogState(() => isProcessingAction = true);
-                          try {
-                            await VisitorPassService.reportParcelNotReceived(
-                              parcelDocId: parcelDocId,
-                              flatNumber: flatNumber,
-                              deliveryProvider: deliveryProvider,
-                              packetCount: parsedCount,
-                              notifDocId: notifDocId,
-                            );
-                            setDialogState(() {
-                              isDisputed = true;
-                              isProcessingAction = false;
-                            });
-                            if (targetCtx.mounted) {
-                              AppFeedback.showWarning(targetCtx, 'Alert sent to Gate Security.');
-                            }
-                          } catch (e) {
-                            setDialogState(() => isProcessingAction = false);
-                            if (targetCtx.mounted) {
-                              AppFeedback.showError(targetCtx, 'Failed to report: $e');
-                            }
-                          }
-                        },
-                ),
-                // "Received" Confirmation button
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.success,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ] else ...[
+                  // Parcel was handed over by security: require resident confirmation or dispute
+                  TextButton(
+                    onPressed: isProcessingAction ? null : () => Navigator.pop(ctx),
+                    child: const Text('Later', style: TextStyle(color: Colors.grey)),
                   ),
-                  icon: isProcessingAction
-                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Icon(Icons.check_circle_rounded, size: 16),
-                  label: const Text('Received'),
-                  onPressed: isProcessingAction
-                      ? null
-                      : () async {
-                          setDialogState(() => isProcessingAction = true);
-                          try {
-                            await VisitorPassService.acknowledgeParcelReceipt(
-                              parcelDocId: parcelDocId,
-                              flatNumber: flatNumber,
-                              deliveryProvider: deliveryProvider,
-                              packetCount: parsedCount,
-                              notifDocId: notifDocId,
-                            );
-
-                            setDialogState(() {
-                              isAcknowledged = true;
-                              isProcessingAction = false;
-                            });
-
-                            if (targetCtx.mounted) {
-                              AppFeedback.showSuccess(targetCtx, 'Parcel receipt acknowledged! Security notified.');
+                  // "Not Received" Dispute button
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red.shade700,
+                      side: BorderSide(color: Colors.red.shade400),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    icon: isProcessingAction
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red))
+                        : const Icon(Icons.cancel_outlined, size: 16),
+                    label: const Text('Not Received'),
+                    onPressed: isProcessingAction
+                        ? null
+                        : () async {
+                            setDialogState(() => isProcessingAction = true);
+                            try {
+                              await VisitorPassService.reportParcelNotReceived(
+                                parcelDocId: parcelDocId,
+                                flatNumber: flatNumber,
+                                deliveryProvider: deliveryProvider,
+                                packetCount: parsedCount,
+                                notifDocId: notifDocId,
+                              );
+                              setDialogState(() {
+                                isDisputed = true;
+                                isProcessingAction = false;
+                              });
+                              if (targetCtx.mounted) {
+                                AppFeedback.showWarning(targetCtx, 'Alert sent to Gate Security.');
+                              }
+                            } catch (e) {
+                              setDialogState(() => isProcessingAction = false);
+                              if (targetCtx.mounted) {
+                                AppFeedback.showError(targetCtx, 'Failed to report: $e');
+                              }
                             }
-                          } catch (e) {
-                            setDialogState(() => isProcessingAction = false);
-                            if (targetCtx.mounted) {
-                              AppFeedback.showError(targetCtx, 'Failed to acknowledge receipt: $e');
+                          },
+                  ),
+                  // "Received" Confirmation button
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.success,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    icon: isProcessingAction
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.check_circle_rounded, size: 16),
+                    label: const Text('Received'),
+                    onPressed: isProcessingAction
+                        ? null
+                        : () async {
+                            setDialogState(() => isProcessingAction = true);
+                            try {
+                              await VisitorPassService.acknowledgeParcelReceipt(
+                                parcelDocId: parcelDocId,
+                                flatNumber: flatNumber,
+                                deliveryProvider: deliveryProvider,
+                                packetCount: parsedCount,
+                                notifDocId: notifDocId,
+                              );
+
+                              setDialogState(() {
+                                isAcknowledged = true;
+                                isProcessingAction = false;
+                              });
+
+                              if (targetCtx.mounted) {
+                                AppFeedback.showSuccess(targetCtx, 'Parcel receipt acknowledged! Security notified.');
+                              }
+                            } catch (e) {
+                              setDialogState(() => isProcessingAction = false);
+                              if (targetCtx.mounted) {
+                                AppFeedback.showError(targetCtx, 'Failed to acknowledge receipt: $e');
+                              }
                             }
-                          }
-                        },
-                ),
+                          },
+                  ),
+                ],
               ] else
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(

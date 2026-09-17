@@ -53,3 +53,6 @@ app.*.map.json
 # Local APK binaries
 apks/
 *.apk
+
+# Root-level emulator screenshots
+/*.png

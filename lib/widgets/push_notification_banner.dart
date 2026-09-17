@@ -61,7 +61,7 @@ class PushNotificationPayload {
   /// Returns `true` if this is a gate visitor entry request requiring resident action.
   bool get isVisitorApprovalRequest =>
       type == 'VISITOR_CHECK_IN' &&
-      (extraData['approvalStatus'] == 'PENDING' || extraData['isWalkIn'] == true);
+      (extraData['approvalStatus'] == 'PENDING' || extraData['isWalkIn'] == true || extraData['isWalkIn'] == 'true');
 
   /// Returns `true` if this is a maintenance bill or payment confirmation.
   bool get isPaymentOrBill =>
@@ -75,6 +75,37 @@ class PushNotificationPayload {
 
   /// Returns `true` if this is a helpdesk complaint update.
   bool get isComplaint => type.startsWith('COMPLAINT_');
+
+  /// Returns `true` if this is a daily domestic staff or helper check-in event.
+  bool get isStaffEntry =>
+      type == 'STAFF_ENTRY' ||
+      type == 'STAFF_CHECK_IN' ||
+      (extraData['isStaff'] == true || extraData['isStaff'] == 'true');
+
+  /// Returns `true` if this visitor is a delivery executive / courier.
+  bool get isDelivery {
+    if (extraData['isDelivery'] == true || extraData['isDelivery'] == 'true') return true;
+    final purpose = (extraData['purpose'] ?? '').toString().toLowerCase();
+    if (purpose.contains('delivery') || purpose.contains('courier')) return true;
+    final deliveryApp = (extraData['deliveryApp'] ?? '').toString();
+    if (deliveryApp.isNotEmpty) return true;
+    return false;
+  }
+
+  /// Returns the delivery company / provider brand name (e.g. Blinkit, Swiggy, Amazon), if present.
+  String? get deliveryCompany {
+    final app = (extraData['deliveryApp'] ?? '').toString().trim();
+    if (app.isNotEmpty) return app;
+    final prov = (extraData['deliveryProvider'] ?? '').toString().trim();
+    if (prov.isNotEmpty) return prov;
+    return null;
+  }
+
+  /// Returns the visitor's live photo URL captured at the gate, if available.
+  String? get photoUrl {
+    final url = (extraData['photoUrl'] ?? '').toString().trim();
+    return url.isNotEmpty ? url : null;
+  }
 }
 
 /// Floating Heads-up Push Notification Banner Widget.
@@ -83,6 +114,7 @@ class PushNotificationBanner extends StatefulWidget {
   final VoidCallback onDismiss;
   final VoidCallback? onTap;
   final VoidCallback? onApprove;
+  final VoidCallback? onLeaveAtGate;
   final VoidCallback? onDeny;
 
   const PushNotificationBanner({
@@ -91,6 +123,7 @@ class PushNotificationBanner extends StatefulWidget {
     required this.onDismiss,
     this.onTap,
     this.onApprove,
+    this.onLeaveAtGate,
     this.onDeny,
   });
 
@@ -141,6 +174,7 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
     if (widget.payload.isEmergency) return const Color(0xFFDC2626); // Crimson Red
     if (widget.payload.isVisitorApprovalRequest) return const Color(0xFFD97706); // Amber Alert
     if (widget.payload.isPaymentOrBill) return const Color(0xFF059669); // Emerald Green
+    if (widget.payload.isStaffEntry) return const Color(0xFF0D9488); // Teal for Domestic Help / Staff
     if (widget.payload.isParcel) return const Color(0xFF4F46E5); // Indigo
     if (widget.payload.isComplaint) return const Color(0xFF2563EB); // Royal Blue
     return AppColors.primary; // Default Navy
@@ -151,6 +185,7 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
     if (widget.payload.isEmergency) return Icons.warning_amber_rounded;
     if (widget.payload.isVisitorApprovalRequest) return Icons.sensor_door_outlined;
     if (widget.payload.isPaymentOrBill) return Icons.account_balance_wallet_outlined;
+    if (widget.payload.isStaffEntry) return Icons.badge_outlined;
     if (widget.payload.isParcel) return Icons.inventory_2_outlined;
     if (widget.payload.isComplaint) return Icons.build_circle_outlined;
     return Icons.notifications_active_outlined;
@@ -205,19 +240,38 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Category Avatar Badge
-                          Container(
-                            padding: const EdgeInsets.all(8.0),
-                            decoration: BoxDecoration(
-                              color: headerColor.withValues(alpha: 0.12),
-                              shape: BoxShape.circle,
+                          // Category Avatar Badge or Live Visitor Photo
+                          if (widget.payload.photoUrl != null && widget.payload.photoUrl!.isNotEmpty)
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(20.0),
+                              child: Image.network(
+                                widget.payload.photoUrl!,
+                                width: 40.0,
+                                height: 40.0,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) => Container(
+                                  padding: const EdgeInsets.all(8.0),
+                                  decoration: BoxDecoration(
+                                    color: headerColor.withValues(alpha: 0.12),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(_getCategoryIcon(), color: headerColor, size: 20.0),
+                                ),
+                              ),
+                            )
+                          else
+                            Container(
+                              padding: const EdgeInsets.all(8.0),
+                              decoration: BoxDecoration(
+                                color: headerColor.withValues(alpha: 0.12),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                _getCategoryIcon(),
+                                color: headerColor,
+                                size: 20.0,
+                              ),
                             ),
-                            child: Icon(
-                              _getCategoryIcon(),
-                              color: headerColor,
-                              size: 20.0,
-                            ),
-                          ),
                           const SizedBox(width: 12.0),
                           // Title & Tag
                           Expanded(
@@ -257,6 +311,32 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
                                     ),
                                   ],
                                 ),
+                                if (widget.payload.isDelivery && widget.payload.deliveryCompany != null) ...[
+                                  const SizedBox(height: 3.0),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 1.5),
+                                    decoration: BoxDecoration(
+                                      color: Colors.amber.shade50,
+                                      borderRadius: BorderRadius.circular(4.0),
+                                      border: Border.all(color: Colors.amber.shade300),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.local_shipping_rounded, size: 11.0, color: Colors.amber.shade900),
+                                        const SizedBox(width: 3.0),
+                                        Text(
+                                          widget.payload.deliveryCompany!,
+                                          style: TextStyle(
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.amber.shade900,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 4.0),
                                 // Body Message Text
                                 Text(
@@ -297,11 +377,11 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
                               Expanded(
                                 child: OutlinedButton.icon(
                                   onPressed: widget.onDeny,
-                                  icon: const Icon(Icons.block, size: 15.0, color: Colors.red),
+                                  icon: const Icon(Icons.block, size: 14.0, color: Colors.red),
                                   label: const Text(
                                     'DENY',
                                     style: TextStyle(
-                                      fontSize: 12.0,
+                                      fontSize: 11.5,
                                       fontWeight: FontWeight.bold,
                                       color: Colors.red,
                                     ),
@@ -315,17 +395,40 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
                                   ),
                                 ),
                               ),
-                            if (widget.onDeny != null && widget.onApprove != null)
-                              const SizedBox(width: 10.0),
-                            if (widget.onApprove != null)
+                            if (widget.onLeaveAtGate != null && widget.payload.isDelivery) ...[
+                              const SizedBox(width: 6.0),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: widget.onLeaveAtGate,
+                                  icon: const Icon(Icons.inventory_2_outlined, size: 14.0, color: Color(0xFF0F172A)),
+                                  label: const Text(
+                                    'GATE',
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF0F172A),
+                                    ),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(color: Color(0xFF334155), width: 1.2),
+                                    padding: const EdgeInsets.symmetric(vertical: 8.0),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8.0),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                            if (widget.onApprove != null) ...[
+                              const SizedBox(width: 6.0),
                               Expanded(
                                 child: ElevatedButton.icon(
                                   onPressed: widget.onApprove,
-                                  icon: const Icon(Icons.check_circle_outline, size: 15.0, color: Colors.white),
+                                  icon: const Icon(Icons.check_circle_outline, size: 14.0, color: Colors.white),
                                   label: const Text(
                                     'APPROVE',
                                     style: TextStyle(
-                                      fontSize: 12.0,
+                                      fontSize: 11.5,
                                       fontWeight: FontWeight.bold,
                                       color: Colors.white,
                                     ),
@@ -341,6 +444,7 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
                                   ),
                                 ),
                               ),
+                            ],
                           ],
                         ),
                       ],

@@ -119,7 +119,11 @@ service cloud.firestore {
 
     match /gate_parcels/{parcelId} {
       allow read: if isAuthenticated();
-      allow create: if isAdmin() || isGuard();
+      // Allow creation by security guards, admins, or authenticated residents when leaving a delivery at the gate
+      allow create: if isAdmin() || isGuard() || (
+        isAuthenticated() &&
+        request.resource.data.status == 'HELD_AT_GATE'
+      );
       allow update: if isAdmin() || isGuard() || (
         isAuthenticated() &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['residentAcknowledged', 'acknowledgedAt', 'acknowledgedByName'])

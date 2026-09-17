@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -64,7 +65,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
   // Walk-in visitor state
   final _walkInNameCtrl = TextEditingController();
   final _walkInPhoneCtrl = TextEditingController();
-  final _walkInFlatCtrl = TextEditingController();
+  String _walkInBlock = 'A';
+  final _walkInFlatNoCtrl = TextEditingController();
   final _walkInVehicleCtrl = TextEditingController();
   String _walkInPurpose = 'Delivery / Courier';
   String _deliveryApp = 'Blinkit';
@@ -106,9 +108,10 @@ class _GuardDashboardState extends State<GuardDashboard> {
     });
   }
 
-  // Campus search
+  // Campus search & filter state
   String _campusSearchQuery = '';
   final _campusSearchCtrl = TextEditingController();
+  String _campusFilter = 'ALL'; // 'ALL' | 'OVERSTAY'
 
   // Parcel state
   final _parcelFlatCtrl = TextEditingController();
@@ -127,25 +130,102 @@ class _GuardDashboardState extends State<GuardDashboard> {
   String _directorySearchQuery = '';
   final _directorySearchCtrl = TextEditingController();
 
+  // Frequent visitor lookup state
+  Map<String, dynamic>? _frequentVisitorData;
+  bool _isLookingUpPhone = false;
+
+  void _onWalkInPhoneChanged() {
+    final phone = _walkInPhoneCtrl.text.trim();
+    if (phone.length == 10) {
+      _lookupFrequentVisitor(phone);
+    } else {
+      if (_frequentVisitorData != null) {
+        setState(() {
+          _frequentVisitorData = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _lookupFrequentVisitor(String phone) async {
+    setState(() => _isLookingUpPhone = true);
+    final data = await VisitorPassService.lookupRecentVisitorByPhone(phone);
+    if (mounted) {
+      setState(() {
+        _isLookingUpPhone = false;
+        _frequentVisitorData = data;
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    // Register phone change listener to auto-detect frequent/past visitors as soon as 10 digits are entered
+    _walkInPhoneCtrl.addListener(_onWalkInPhoneChanged);
+
     // Register Push Notification Click Delegate for instant gate clearance dialog / tab routing
     PushNotificationManager.instance.onNotificationClick = (ctx, payload) {
       _handleNotificationClick(ctx, payload.extraData, payload.id);
     };
+
+    // Reconcile and auto-log any parcels for visitors with LEAVE_AT_GATE status using guard authority
+    _syncLeaveAtGateParcels();
+  }
+
+  StreamSubscription? _leaveAtGateSubscription;
+
+  /// Automatically monitors and reconciles visitors whose delivery was instructed to be left at the gate.
+  /// Ensures every LEAVE_AT_GATE visitor is registered in `gate_parcels` with a secure pickup OTP
+  /// using the security guard's credentials.
+  void _syncLeaveAtGateParcels() {
+    _leaveAtGateSubscription = FirebaseFirestore.instance
+        .collection('visitors')
+        .where('approvalStatus', isEqualTo: 'LEAVE_AT_GATE')
+        .limit(30)
+        .snapshots()
+        .listen((snap) {
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final rawFlat = (data['flatNumber'] ?? data['hostFlatNumber'] ?? '').toString();
+        final name = (data['visitorName'] ?? 'Delivery').toString();
+        final provider = (data['deliveryApp'] ?? data['purpose'] ?? 'Delivery').toString();
+        final otp = data['pickupOtp']?.toString();
+        final photo = data['photoUrl']?.toString();
+        final gate = data['gateName']?.toString();
+        final guard = data['guardName']?.toString();
+
+        if (rawFlat.isNotEmpty) {
+          VisitorPassService.ensureLeaveAtGateParcelCreated(
+            visitorDocId: doc.id,
+            flatNumber: rawFlat,
+            visitorName: name,
+            deliveryProvider: provider,
+            pickupOtp: otp,
+            photoUrl: photo,
+            gateName: gate,
+            guardName: guard,
+            guardUid: _currentGuardUid,
+          );
+        }
+      }
+    }, onError: (e) {
+      debugPrint('[GuardDashboard] Note on leave-at-gate auto-reconciliation: $e');
+    });
   }
 
   @override
   void dispose() {
-    // Clean up push notification delegate on screen unmount
+    // Clean up phone listener, leave-at-gate listener, and push notification delegate on screen unmount
+    _walkInPhoneCtrl.removeListener(_onWalkInPhoneChanged);
+    _leaveAtGateSubscription?.cancel();
     if (PushNotificationManager.instance.onNotificationClick != null) {
       PushNotificationManager.instance.onNotificationClick = null;
     }
     _codeController.dispose();
     _walkInNameCtrl.dispose();
     _walkInPhoneCtrl.dispose();
-    _walkInFlatCtrl.dispose();
+    _walkInFlatNoCtrl.dispose();
     _walkInVehicleCtrl.dispose();
     _customDeliveryAppCtrl.dispose();
     _campusSearchCtrl.dispose();
@@ -239,23 +319,59 @@ class _GuardDashboardState extends State<GuardDashboard> {
   Future<void> _submitWalkIn(String guardName, String gateName) async {
     final name = _walkInNameCtrl.text.trim();
     final phone = _walkInPhoneCtrl.text.trim();
-    final flat = _walkInFlatCtrl.text.trim();
-    final vehicle = _walkInVehicleCtrl.text.trim();
+    final flatNo = _walkInFlatNoCtrl.text.trim();
+    final vehicle = _walkInVehicleCtrl.text.trim().toUpperCase();
     final isDelivery = _walkInPurpose == 'Delivery / Courier';
+    final isCab = _walkInPurpose == 'Cab / Taxi';
 
+    // 1. Visitor Full Name is always mandatory
     if (name.isEmpty) {
       AppFeedback.showError(context, 'Please enter visitor full name.');
       return;
     }
-    if (phone.length < 10) {
-      AppFeedback.showError(context, 'Please enter a valid 10-digit mobile number.');
+
+    // 2. Mobile Number Validation:
+    // - Mandatory 10-digit number for Delivery, Maid, Guest, Maintenance, and Other.
+    // - Optional for Cab / Taxi, but if entered, must be strictly 10 digits.
+    final bool isPhoneMandatory = !isCab;
+    if (isPhoneMandatory && phone.isEmpty) {
+      AppFeedback.showError(context, 'Please enter visitor 10-digit mobile number.');
       return;
     }
-    if (flat.isEmpty) {
-      AppFeedback.showError(context, 'Please enter or select visiting flat number.');
+    if (phone.isNotEmpty) {
+      if (phone.length != 10) {
+        AppFeedback.showError(context, 'Please enter a valid 10-digit mobile number.');
+        return;
+      }
+    }
+
+    // 3. Flat Number Validation:
+    // - Flat No is always mandatory and must be strictly 3 digits (e.g. 101, 312).
+    if (flatNo.isEmpty) {
+      AppFeedback.showError(context, 'Please enter flat number.');
+      return;
+    }
+    if (flatNo.length != 3) {
+      AppFeedback.showError(context, 'Flat number must be strictly 3 digits (e.g. 101, 312).');
       return;
     }
 
+    // Form concatenated canonical flat identifier: e.g. "B-312"
+    final flat = '$_walkInBlock-$flatNo';
+
+    // 4. Vehicle Number Validation:
+    // - Mandatory for Delivery Guy and Cab / Taxi.
+    // - Optional for Maid, Guest, Maintenance, Other.
+    if (isDelivery && vehicle.isEmpty) {
+      AppFeedback.showError(context, 'Vehicle number is mandatory for delivery personnel.');
+      return;
+    }
+    if (isCab && vehicle.isEmpty) {
+      AppFeedback.showError(context, 'Vehicle number is mandatory for cab / taxi.');
+      return;
+    }
+
+    // 5. Delivery App Validation:
     String? effectiveDeliveryApp;
     if (isDelivery) {
       effectiveDeliveryApp = _deliveryApp == 'Other Delivery'
@@ -266,19 +382,36 @@ class _GuardDashboardState extends State<GuardDashboard> {
         AppFeedback.showError(context, 'Please specify the delivery app name.');
         return;
       }
-      if (vehicle.isEmpty) {
-        AppFeedback.showError(context, 'Vehicle number is mandatory for delivery personnel.');
-        return;
-      }
-      if (_walkInPhotoBytes == null) {
-        AppFeedback.showError(context, 'Visitor photo is mandatory for delivery personnel. Please take a photo.');
-        return;
-      }
+    }
+
+    // 6. Mandatory Live Photo Verification:
+    // Security policy strictly mandates capturing a live photo of the visitor using the camera
+    // before sending a walk-in clearance notification to the resident flat.
+    if (_walkInPhotoBytes == null) {
+      AppFeedback.showError(
+        context,
+        'Visitor photo is strictly mandatory. Please capture a live photo of the visitor using the camera before notifying the resident.',
+      );
+      return;
     }
 
     setState(() => _isLoggingWalkIn = true);
 
     try {
+      // 7. Society Database Flat Existence Verification:
+      // Verify that the specified flat exists in the society records before logging and notifying.
+      // Throws a clear error to the guard if the flat does not exist.
+      final bool flatExists = await VisitorPassService.checkFlatExists(flat);
+      if (!flatExists) {
+        if (mounted) {
+          AppFeedback.showError(
+            context,
+            'Flat $flat does not exist in society database. Please verify the block and flat number.',
+          );
+        }
+        return;
+      }
+
       String? uploadedPhotoUrl;
       if (_walkInPhotoBytes != null) {
         uploadedPhotoUrl = await VisitorPassService.uploadVisitorPhoto(
@@ -306,11 +439,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
         AppFeedback.showSuccess(context, 'Walk-in visitor $label checked in at $flat.');
         _walkInNameCtrl.clear();
         _walkInPhoneCtrl.clear();
-        _walkInFlatCtrl.clear();
+        _walkInFlatNoCtrl.clear();
         _walkInVehicleCtrl.clear();
         _customDeliveryAppCtrl.clear();
+        _walkInBlock = 'A'; // Reset selected block back to default Block A
         _walkInPhotoBytes = null;
         _walkInPhotoName = null;
+        _frequentVisitorData = null; // Clear frequent visitor suggestion
         setState(() => _currentTab = 2); // Switch to In-Campus view
       }
     } catch (e) {
@@ -570,6 +705,147 @@ class _GuardDashboardState extends State<GuardDashboard> {
               child: _isLoggingParcel
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                   : const Text('Save & Alert Resident'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Displays a secure OTP verification modal requiring the security guard to enter
+  /// the 4-digit Pickup OTP shown on the resident's mobile app before handing over a parcel.
+  void _showHandoverOtpDialog({
+    required String parcelDocId,
+    required String flatNumber,
+    required String provider,
+    required int packetCount,
+    required String guardName,
+    required String gateName,
+  }) {
+    final otpCtrl = TextEditingController();
+    bool isVerifying = false;
+    String? errorMessage;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (sheetCtx, setDialogState) => AppDialog(
+          title: 'Verify Pickup OTP',
+          subtitle: 'Handing over $packetCount package(s) • $provider to Flat $flatNumber',
+          icon: Icons.security_rounded,
+          iconColor: AppColors.primary,
+          maxWidth: 420,
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.primarySurface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.primaryBorder),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline_rounded, size: 20, color: AppColors.primary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Ask the resident for their 4-digit Pickup OTP displayed in their app notification or Parcels tab.',
+                        style: const TextStyle(fontSize: 12, color: AppColors.primaryDark, height: 1.3),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                'Enter 4-Digit Pickup OTP',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: otpCtrl,
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                maxLength: 4,
+                autofocus: true,
+                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 8, color: AppColors.primary),
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
+                ],
+                decoration: InputDecoration(
+                  counterText: '',
+                  hintText: '• • • •',
+                  hintStyle: TextStyle(fontSize: 22, letterSpacing: 6, color: Colors.grey.shade400),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  errorText: errorMessage,
+                ),
+                onChanged: (_) {
+                  if (errorMessage != null) {
+                    setDialogState(() => errorMessage = null);
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isVerifying ? null : () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.success,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              ),
+              icon: isVerifying
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.verified_rounded, size: 18),
+              label: const Text('Verify & Hand Over', style: TextStyle(fontWeight: FontWeight.bold)),
+              onPressed: isVerifying
+                  ? null
+                  : () async {
+                      final entered = otpCtrl.text.trim();
+                      if (entered.length != 4) {
+                        setDialogState(() => errorMessage = 'Please enter a valid 4-digit OTP');
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isVerifying = true;
+                        errorMessage = null;
+                      });
+
+                      final success = await VisitorPassService.verifyAndCollectParcel(
+                        parcelDocId: parcelDocId,
+                        enteredOtp: entered,
+                        guardUid: _currentGuardUid,
+                        guardName: guardName,
+                        gateName: gateName,
+                        flatNumber: flatNumber,
+                        deliveryProvider: provider,
+                        packetCount: packetCount,
+                      );
+
+                      if (dialogCtx.mounted) {
+                        if (success) {
+                          Navigator.pop(dialogCtx);
+                          if (mounted) {
+                            AppFeedback.showSuccess(context, 'Parcel verified with OTP & handed over to Flat $flatNumber!');
+                          }
+                        } else {
+                          setDialogState(() {
+                            isVerifying = false;
+                            errorMessage = 'Incorrect OTP! Please verify with resident.';
+                          });
+                        }
+                      }
+                    },
             ),
           ],
         ),
@@ -921,9 +1197,9 @@ class _GuardDashboardState extends State<GuardDashboard> {
         type.startsWith('VISITOR')) {
       _showVisitorApprovalStatusDialog(context, notif);
     }
-    // 2. Gate parcel alerts -> switch to Parcels tab
+    // 2. Gate parcel alerts -> switch to Parcels tab (index 3)
     else if (type.contains('PARCEL') || title.toLowerCase().contains('parcel')) {
-      setState(() => _currentTab = 2);
+      setState(() => _currentTab = 3);
     }
     // 3. Emergency SOS broadcast alerts
     else if (type == 'EMERGENCY' || title.toLowerCase().contains('emergency') || title.toLowerCase().contains('sos')) {
@@ -940,11 +1216,27 @@ class _GuardDashboardState extends State<GuardDashboard> {
     final title = notif['title']?.toString() ?? 'Visitor Clearance';
     final msg = notif['message']?.toString() ?? '';
     final isDenied = title.contains('DENIED') || (notif['approvalStatus'] == 'DENIED');
-    final isApproved = title.contains('Approved') || (notif['approvalStatus'] == 'APPROVED');
+    final isLeaveAtGate = title.contains('Leave at Gate') || (notif['approvalStatus'] == 'LEAVE_AT_GATE');
+    final isApproved = !isLeaveAtGate && (title.contains('Approved') || (notif['approvalStatus'] == 'APPROVED'));
     final visitorName = notif['visitorName']?.toString() ?? 'Visitor';
     final flatNumber = notif['flatNumber']?.toString() ?? '';
     final ts = (notif['createdAt'] as Timestamp?)?.toDate();
     final timeStr = ts != null ? DateFormat('hh:mm a, dd MMM').format(ts) : 'Just now';
+
+    // Proactively ensure parcel is logged in gate_parcels under guard credentials if resident opted for Leave at Gate
+    if (isLeaveAtGate) {
+      VisitorPassService.ensureLeaveAtGateParcelCreated(
+        visitorDocId: notif['visitorDocId']?.toString(),
+        flatNumber: flatNumber,
+        visitorName: visitorName,
+        deliveryProvider: notif['deliveryProvider']?.toString(),
+        pickupOtp: notif['pickupOtp']?.toString(),
+        photoUrl: notif['photoUrl']?.toString(),
+        gateName: notif['gateName']?.toString(),
+        guardName: notif['guardName']?.toString(),
+        guardUid: _currentGuardUid,
+      );
+    }
 
     // Use global navigatorKey context if available to guarantee Navigator ancestor exists
     final targetCtx = PushNotificationManager.navigatorKey.currentContext ?? context;
@@ -959,12 +1251,24 @@ class _GuardDashboardState extends State<GuardDashboard> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: isDenied ? Colors.red.shade50 : (isApproved ? Colors.green.shade50 : AppColors.primarySurface),
+                color: isDenied
+                    ? Colors.red.shade50
+                    : (isLeaveAtGate
+                        ? Colors.orange.shade50
+                        : (isApproved ? Colors.green.shade50 : AppColors.primarySurface)),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(
-                isDenied ? Icons.cancel_rounded : (isApproved ? Icons.check_circle_rounded : Icons.info_rounded),
-                color: isDenied ? Colors.red : (isApproved ? Colors.green : AppColors.primary),
+                isDenied
+                    ? Icons.cancel_rounded
+                    : (isLeaveAtGate
+                        ? Icons.inventory_2_outlined
+                        : (isApproved ? Icons.check_circle_rounded : Icons.info_rounded)),
+                color: isDenied
+                    ? Colors.red
+                    : (isLeaveAtGate
+                        ? Colors.orange.shade800
+                        : (isApproved ? Colors.green : AppColors.primary)),
                 size: 24,
               ),
             ),
@@ -975,11 +1279,19 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    isDenied ? 'Entry Denied' : (isApproved ? 'Entry Approved' : 'Clearance Update'),
+                    isDenied
+                        ? 'Entry Denied'
+                        : (isLeaveAtGate
+                            ? 'Leave at Gate'
+                            : (isApproved ? 'Entry Approved' : 'Clearance Update')),
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: isDenied ? Colors.red.shade900 : (isApproved ? Colors.green.shade900 : AppColors.textPrimary),
+                      color: isDenied
+                          ? Colors.red.shade900
+                          : (isLeaveAtGate
+                              ? Colors.orange.shade900
+                              : (isApproved ? Colors.green.shade900 : AppColors.textPrimary)),
                     ),
                   ),
                   Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.grey)),
@@ -996,20 +1308,34 @@ class _GuardDashboardState extends State<GuardDashboard> {
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isDenied ? Colors.red.shade50 : (isApproved ? Colors.green.shade50 : AppColors.cardSurfaceSecondary),
+                color: isDenied
+                    ? Colors.red.shade50
+                    : (isLeaveAtGate
+                        ? Colors.orange.shade50
+                        : (isApproved ? Colors.green.shade50 : AppColors.cardSurfaceSecondary)),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                  color: isDenied ? Colors.red.shade300 : (isApproved ? Colors.green.shade300 : AppColors.border),
+                  color: isDenied
+                      ? Colors.red.shade300
+                      : (isLeaveAtGate
+                          ? Colors.orange.shade400
+                          : (isApproved ? Colors.green.shade300 : AppColors.border)),
                 ),
               ),
               child: Text(
                 isDenied
                     ? '⛔ ACTION REQUIRED: Turn visitor away immediately. Resident of flat $flatNumber has DENIED gate clearance for $visitorName.'
-                    : '✅ CLEARANCE GRANTED: Resident of flat $flatNumber has APPROVED entry for $visitorName. Allow entry.',
+                    : (isLeaveAtGate
+                        ? '📦 ACTION REQUIRED: Do NOT allow delivery agent inside campus. Collect parcel from $visitorName for flat $flatNumber and place it in the gate holding rack. A 4-digit pickup code has been sent to the resident.'
+                        : '✅ CLEARANCE GRANTED: Resident of flat $flatNumber has APPROVED entry for $visitorName. Allow entry.'),
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  color: isDenied ? Colors.red.shade900 : (isApproved ? Colors.green.shade900 : AppColors.textPrimary),
+                  color: isDenied
+                      ? Colors.red.shade900
+                      : (isLeaveAtGate
+                          ? Colors.orange.shade900
+                          : (isApproved ? Colors.green.shade900 : AppColors.textPrimary)),
                   height: 1.3,
                 ),
               ),
@@ -1019,9 +1345,22 @@ class _GuardDashboardState extends State<GuardDashboard> {
           ],
         ),
         actions: [
+          if (isLeaveAtGate)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                setState(() => _currentTab = 3); // Switch to Parcels tab
+              },
+              child: Text(
+                'View Parcels Tab',
+                style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange.shade900),
+              ),
+            ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: isDenied ? Colors.red.shade700 : AppColors.primary,
+              backgroundColor: isDenied
+                  ? Colors.red.shade700
+                  : (isLeaveAtGate ? Colors.orange.shade800 : AppColors.primary),
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
@@ -1583,30 +1922,213 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 ),
                 const SizedBox(height: 14),
 
-                // Mobile Number
+                // Mobile Number (10 digits strictly enforced; mandatory except for Cab)
                 TextFormField(
                   controller: _walkInPhoneCtrl,
                   keyboardType: TextInputType.phone,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  decoration: const InputDecoration(
-                    labelText: 'Visitor Mobile Number *',
+                  maxLength: 10,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(10),
+                  ],
+                  decoration: InputDecoration(
+                    labelText: _walkInPurpose == 'Cab / Taxi'
+                        ? 'Visitor Mobile Number (Optional)'
+                        : 'Visitor Mobile Number (10 Digits) *',
                     hintText: '10-digit mobile number',
+                    counterText: '',
                     prefixText: '+91 ',
-                    prefixIcon: Icon(Icons.phone_outlined),
+                    prefixIcon: const Icon(Icons.phone_outlined),
                     isDense: true,
                   ),
                 ),
+
+                // ─── Frequent Visitor Auto-Fill Suggestion / Lookup Status ───
+                // Displays real-time lookup feedback or a 1-tap autofill card when a recognized phone number is entered
+                if (_isLookingUpPhone) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: AppColors.primary)),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Checking past visitor records...',
+                        style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade600, fontStyle: FontStyle.italic),
+                      ),
+                    ],
+                  ),
+                ],
+                if (_frequentVisitorData != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 16,
+                          backgroundColor: Colors.blue.shade100,
+                          child: const Icon(Icons.history_rounded, size: 18, color: Colors.blue),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Recognized: ${_frequentVisitorData!['visitorName'] ?? 'Frequent Visitor'}',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${_frequentVisitorData!['purpose'] ?? 'Visitor'} • ${_frequentVisitorData!['deliveryApp'] ?? _frequentVisitorData!['vehicleNumber'] ?? 'Frequent'}',
+                                style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // 1-Tap Autofill Button to populate name, vehicle, purpose, and provider
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue.shade700,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              final sName = _frequentVisitorData!['visitorName']?.toString() ?? '';
+                              if (sName.isNotEmpty) _walkInNameCtrl.text = sName;
+
+                              final sVehicle = _frequentVisitorData!['vehicleNumber']?.toString() ?? '';
+                              if (sVehicle.isNotEmpty) _walkInVehicleCtrl.text = sVehicle;
+
+                              final sPurpose = _frequentVisitorData!['purpose']?.toString() ?? '';
+                              if (sPurpose.isNotEmpty) _walkInPurpose = sPurpose;
+
+                              final sApp = _frequentVisitorData!['deliveryApp']?.toString() ?? '';
+                              if (sApp.isNotEmpty) _deliveryApp = sApp;
+
+                              _frequentVisitorData = null; // Dismiss chip once autofilled
+                            });
+                            if (mounted) {
+                              AppFeedback.showSuccess(context, 'Autofilled visitor details!');
+                            }
+                          },
+                          child: const Text('Autofill', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                        ),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, size: 16, color: Colors.blueGrey),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          tooltip: 'Dismiss suggestion',
+                          onPressed: () => setState(() => _frequentVisitorData = null),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 14),
 
-                // Visiting Flat
-                TextFormField(
-                  controller: _walkInFlatCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Visiting Flat *',
-                    hintText: 'e.g. B-312 or A-101',
-                    prefixIcon: Icon(Icons.apartment_rounded),
-                    isDense: true,
-                  ),
+                // Bifurcated Flat Identification: Block Dropdown and 3-Digit Flat No side-by-side with labels above.
+                // Using equal flex: 5 ratio and removing inner prefixIcon so that 'Block A', 'Block B', 'Block C', 'Block D'
+                // have plenty of horizontal width and are never clipped to just their first letter 'B'.
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Block Selector Dropdown (Block A, B, C, D)
+                    Expanded(
+                      flex: 5,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: const [
+                              Icon(Icons.domain_rounded, size: 14, color: AppColors.primary),
+                              SizedBox(width: 4),
+                              Text(
+                                'Block *',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          DropdownButtonFormField<String>(
+                            // ValueKey ensures widget rebuilds cleanly whenever _walkInBlock changes
+                            key: ValueKey('walkInBlock_$_walkInBlock'),
+                            initialValue: _walkInBlock,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              // Standard horizontal padding without bulky prefix icon ensures full text visibility
+                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            ),
+                            items: const [
+                              DropdownMenuItem(value: 'A', child: Text('Block A', style: TextStyle(fontWeight: FontWeight.w500))),
+                              DropdownMenuItem(value: 'B', child: Text('Block B', style: TextStyle(fontWeight: FontWeight.w500))),
+                              DropdownMenuItem(value: 'C', child: Text('Block C', style: TextStyle(fontWeight: FontWeight.w500))),
+                              DropdownMenuItem(value: 'D', child: Text('Block D', style: TextStyle(fontWeight: FontWeight.w500))),
+                            ],
+                            onChanged: (val) {
+                              if (val != null) {
+                                setState(() => _walkInBlock = val);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // Flat Number Entry (Strictly limited to 3 digits)
+                    Expanded(
+                      flex: 5,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: const [
+                              Icon(Icons.apartment_rounded, size: 14, color: AppColors.primary),
+                              SizedBox(width: 4),
+                              Text(
+                                'Flat No. (3 Digits) *',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          TextFormField(
+                            controller: _walkInFlatNoCtrl,
+                            keyboardType: TextInputType.number,
+                            maxLength: 3,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                              LengthLimitingTextInputFormatter(3),
+                            ],
+                            decoration: const InputDecoration(
+                              hintText: 'e.g. 101 or 312',
+                              counterText: '',
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 14),
 
@@ -1674,11 +2196,11 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   const SizedBox(height: 14),
                 ],
 
-                // Vehicle Number
+                // Vehicle Number (Mandatory for Delivery & Cab; Optional for Maid, Guest, etc.)
                 TextFormField(
                   controller: _walkInVehicleCtrl,
                   decoration: InputDecoration(
-                    labelText: _walkInPurpose == 'Delivery / Courier'
+                    labelText: (_walkInPurpose == 'Delivery / Courier' || _walkInPurpose == 'Cab / Taxi')
                         ? 'Vehicle Number (Mandatory) *'
                         : 'Vehicle Number (Optional)',
                     hintText: 'e.g. DL 01 AB 1234',
@@ -1694,12 +2216,12 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   decoration: BoxDecoration(
                     color: _walkInPhotoBytes != null
                         ? Colors.green.shade50
-                        : (_walkInPurpose == 'Delivery / Courier' ? Colors.amber.shade50 : AppColors.cardSurfaceSecondary),
+                        : Colors.amber.shade50,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
                       color: _walkInPhotoBytes != null
                           ? Colors.green.shade300
-                          : (_walkInPurpose == 'Delivery / Courier' ? Colors.amber.shade400 : AppColors.border),
+                          : Colors.amber.shade400,
                     ),
                   ),
                   child: Column(
@@ -1710,25 +2232,23 @@ class _GuardDashboardState extends State<GuardDashboard> {
                           Icon(
                             _walkInPhotoBytes != null
                                 ? Icons.check_circle_rounded
-                                : (_walkInPurpose == 'Delivery / Courier' ? Icons.camera_alt_rounded : Icons.camera_alt_outlined),
+                                : Icons.camera_alt_rounded,
                             size: 18,
                             color: _walkInPhotoBytes != null
                                 ? Colors.green
-                                : (_walkInPurpose == 'Delivery / Courier' ? Colors.amber.shade800 : AppColors.primary),
+                                : Colors.amber.shade800,
                           ),
                           const SizedBox(width: 8),
                           Text(
                             _walkInPhotoBytes != null
                                 ? 'Visitor Photo Captured'
-                                : (_walkInPurpose == 'Delivery / Courier'
-                                    ? 'Visitor Photo (Mandatory) *'
-                                    : 'Visitor Photo (Recommended)'),
+                                : 'Visitor Photo (Mandatory) *',
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.bold,
                               color: _walkInPhotoBytes != null
                                   ? Colors.green.shade900
-                                  : (_walkInPurpose == 'Delivery / Courier' ? Colors.amber.shade900 : AppColors.textPrimary),
+                                  : Colors.amber.shade900,
                             ),
                           ),
                         ],
@@ -1736,15 +2256,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
                       const SizedBox(height: 4),
                       Text(
                         _walkInPhotoBytes != null
-                            ? 'Photo will be sent with resident approval alert.'
-                            : (_walkInPurpose == 'Delivery / Courier'
-                                ? 'Mandatory: Guard must take photo of delivery personnel for resident security clearance.'
-                                : 'Capture visitor face photo for gate pass and resident clearance.'),
+                            ? 'Photo captured and will be sent with resident approval alert.'
+                            : 'Mandatory: Guard must capture visitor photo via camera before notifying resident.',
                         style: TextStyle(
                           fontSize: 11,
-                          color: _walkInPurpose == 'Delivery / Courier' && _walkInPhotoBytes == null
-                              ? Colors.amber.shade900
-                              : AppColors.textMuted,
+                          color: _walkInPhotoBytes != null
+                              ? AppColors.textMuted
+                              : Colors.amber.shade900,
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -1838,10 +2356,42 @@ class _GuardDashboardState extends State<GuardDashboard> {
 
   // ─── TAB 2: In-Campus Active Visitors Log ──────────────────────────────────
 
+  /// Evaluates whether a visitor has exceeded normal stay duration.
+  /// Delivery/Cab/Courier: warning threshold is 25 minutes.
+  /// Guests/Personal/Other: warning threshold is 6 hours (360 minutes).
+  static bool _isVisitorOverstaying(Map<String, dynamic> data) {
+    final entryTime = (data['entryTime'] as Timestamp?)?.toDate();
+    if (entryTime == null) return false;
+    final diffMinutes = DateTime.now().difference(entryTime).inMinutes;
+    final purpose = (data['purpose'] ?? '').toString().toLowerCase();
+    final isDeliveryOrCab = purpose.contains('delivery') ||
+        purpose.contains('courier') ||
+        purpose.contains('cab') ||
+        purpose.contains('taxi') ||
+        purpose.contains('service');
+    return isDeliveryOrCab ? diffMinutes >= 25 : diffMinutes >= 360;
+  }
+
+  /// Evaluates whether a visitor has exceeded critical stay duration.
+  /// Delivery/Cab/Courier: critical threshold is 45 minutes.
+  /// Guests/Personal/Other: critical threshold is 10 hours (600 minutes).
+  static bool _isVisitorOverstayCritical(Map<String, dynamic> data) {
+    final entryTime = (data['entryTime'] as Timestamp?)?.toDate();
+    if (entryTime == null) return false;
+    final diffMinutes = DateTime.now().difference(entryTime).inMinutes;
+    final purpose = (data['purpose'] ?? '').toString().toLowerCase();
+    final isDeliveryOrCab = purpose.contains('delivery') ||
+        purpose.contains('courier') ||
+        purpose.contains('cab') ||
+        purpose.contains('taxi') ||
+        purpose.contains('service');
+    return isDeliveryOrCab ? diffMinutes >= 45 : diffMinutes >= 600;
+  }
+
   Widget _buildInCampusTab(String guardName, String gateName) {
     return Column(
       children: [
-        // Search & Count Bar
+        // Search Bar
         Container(
           padding: const EdgeInsets.all(16),
           color: Colors.white,
@@ -1876,7 +2426,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
         ),
         const Divider(height: 1, color: AppColors.border),
 
-        // Live Active Visitors List
+        // Live Active Visitors List with Overstay Tracking
         Expanded(
           child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: VisitorPassService.getActiveVisitorsStream(),
@@ -1889,155 +2439,342 @@ class _GuardDashboardState extends State<GuardDashboard> {
               }
 
               final allDocs = snap.data?.docs ?? [];
+              final totalCount = allDocs.length;
+              final overstayCount = allDocs.where((d) => _isVisitorOverstaying(d.data())).length;
+
               final docs = allDocs.where((d) {
-                if (_campusSearchQuery.isEmpty) return true;
                 final data = d.data();
+                // Filter by overstay status if OVERSTAY filter chip is selected
+                if (_campusFilter == 'OVERSTAY' && !_isVisitorOverstaying(data)) {
+                  return false;
+                }
+                // Filter by text search query
+                if (_campusSearchQuery.isEmpty) return true;
                 final name = (data['visitorName'] ?? '').toString().toLowerCase();
                 final flat = (data['flatNumber'] ?? '').toString().toLowerCase();
-                return name.contains(_campusSearchQuery) || flat.contains(_campusSearchQuery);
+                final purpose = (data['purpose'] ?? '').toString().toLowerCase();
+                return name.contains(_campusSearchQuery) ||
+                    flat.contains(_campusSearchQuery) ||
+                    purpose.contains(_campusSearchQuery);
               }).toList();
 
-              if (docs.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.door_front_door_outlined, size: 48, color: AppColors.textMuted.withValues(alpha: 0.5)),
-                      const SizedBox(height: 12),
-                      Text(
-                        _campusSearchQuery.isNotEmpty
-                            ? 'No active visitors matching "$_campusSearchQuery"'
-                            : 'No visitors currently inside campus',
-                        style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textSecondary),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text('When guests check in at the gate, they will appear here.', style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
-                    ],
-                  ),
-                );
-              }
-
-              return ListView.separated(
-                padding: const EdgeInsets.all(16),
-                itemCount: docs.length,
-                separatorBuilder: (context, index) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final doc = docs[index];
-                  final data = doc.data();
-                  final name = data['visitorName'] ?? 'Visitor';
-                  final phone = data['phone'] ?? '';
-                  final flat = data['flatNumber'] ?? 'General';
-                  final purpose = data['purpose'] ?? 'Guest';
-                  final vehicle = data['vehicleNumber'] ?? '';
-                  final entryTime = (data['entryTime'] as Timestamp?)?.toDate();
-                  final entryStr = entryTime != null ? DateFormat('hh:mm a').format(entryTime) : 'Just now';
-
-                  String durationStr = '';
-                  if (entryTime != null) {
-                    final diff = DateTime.now().difference(entryTime);
-                    if (diff.inMinutes < 60) {
-                      durationStr = '${diff.inMinutes}m inside';
-                    } else {
-                      durationStr = '${diff.inHours}h ${diff.inMinutes % 60}m inside';
-                    }
-                  }
-
-                  final photoUrl = data['photoUrl']?.toString();
-
-                  return Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppColors.border),
-                    ),
+              return Column(
+                children: [
+                  // Filter Chips: All Active vs Overstaying
+                  Container(
+                    width: double.infinity,
+                    color: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Row(
                       children: [
-                        if (photoUrl != null && photoUrl.isNotEmpty)
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(20),
-                            child: Image.network(
-                              photoUrl,
-                              width: 44,
-                              height: 44,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => CircleAvatar(
-                                radius: 22,
-                                backgroundColor: AppColors.primaryLight,
-                                child: const Icon(Icons.person_rounded, color: AppColors.primary, size: 20),
-                              ),
-                            ),
-                          )
-                        else
-                          CircleAvatar(
-                            radius: 20,
-                            backgroundColor: AppColors.primaryLight,
-                            child: const Icon(Icons.person_rounded, color: AppColors.primary, size: 20),
-                          ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Wrap(
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                spacing: 8,
-                                runSpacing: 4,
-                                children: [
-                                  Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary)),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primarySurface,
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(color: AppColors.primaryBorder),
-                                    ),
-                                    child: Text('Flat $flat', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primary)),
-                                  ),
-                                  _buildApprovalBadge(data['approvalStatus']?.toString()),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Wrap(
-                                spacing: 10,
-                                children: [
-                                  Text(purpose, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                                  if (phone.isNotEmpty) Text('•  $phone', style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
-                                  if (vehicle.isNotEmpty) Text('•  🚗 $vehicle', style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Text('In at $entryStr ${durationStr.isNotEmpty ? '($durationStr)' : ''}', style: const TextStyle(fontSize: 11, color: AppColors.warningDark, fontWeight: FontWeight.w500)),
-                            ],
+                        ChoiceChip(
+                          label: Text('All ($totalCount)'),
+                          selected: _campusFilter == 'ALL',
+                          onSelected: (_) => setState(() => _campusFilter = 'ALL'),
+                          selectedColor: AppColors.primaryLight,
+                          labelStyle: TextStyle(
+                            color: _campusFilter == 'ALL' ? AppColors.primary : AppColors.textSecondary,
+                            fontWeight: _campusFilter == 'ALL' ? FontWeight.bold : FontWeight.normal,
+                            fontSize: 12,
                           ),
                         ),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.warningSurface,
-                            foregroundColor: AppColors.warningDark,
-                            side: const BorderSide(color: AppColors.warningBorder),
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            elevation: 0,
+                        const SizedBox(width: 10),
+                        ChoiceChip(
+                          label: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.warning_amber_rounded,
+                                size: 14,
+                                color: _campusFilter == 'OVERSTAY'
+                                    ? Colors.amber.shade900
+                                    : (overstayCount > 0 ? Colors.orange.shade800 : Colors.grey),
+                              ),
+                              const SizedBox(width: 4),
+                              Text('Overstaying ($overstayCount)'),
+                            ],
                           ),
-                          icon: const Icon(Icons.logout_rounded, size: 16),
-                          label: const Text('Mark Exit', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          onPressed: () async {
-                            await VisitorPassService.checkOutVisitor(
-                              visitorDocId: doc.id,
-                              guardUid: _currentGuardUid,
-                              guardName: guardName,
-                              gateName: gateName,
-                              visitorData: data,
-                            );
-                            if (context.mounted) {
-                              AppFeedback.showSuccess(context, '$name checked out and resident notified.');
-                            }
-                          },
+                          selected: _campusFilter == 'OVERSTAY',
+                          onSelected: (_) => setState(() => _campusFilter = 'OVERSTAY'),
+                          selectedColor: Colors.amber.shade100,
+                          backgroundColor: Colors.grey.shade100,
+                          labelStyle: TextStyle(
+                            color: _campusFilter == 'OVERSTAY'
+                                ? Colors.amber.shade900
+                                : (overstayCount > 0 ? Colors.orange.shade900 : AppColors.textSecondary),
+                            fontWeight: _campusFilter == 'OVERSTAY' ? FontWeight.bold : FontWeight.normal,
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                     ),
-                  );
-                },
+                  ),
+                  const Divider(height: 1, color: AppColors.border),
+
+                  // Content: Empty State or Visitor Cards List
+                  Expanded(
+                    child: docs.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.door_front_door_outlined, size: 48, color: AppColors.textMuted.withValues(alpha: 0.5)),
+                                const SizedBox(height: 12),
+                                Text(
+                                  _campusSearchQuery.isNotEmpty
+                                      ? 'No active visitors matching "$_campusSearchQuery"'
+                                      : (_campusFilter == 'OVERSTAY'
+                                          ? 'No overstaying visitors currently inside campus'
+                                          : 'No visitors currently inside campus'),
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textSecondary),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _campusFilter == 'OVERSTAY'
+                                      ? 'All visitors are currently within acceptable time limits.'
+                                      : 'When guests check in at the gate, they will appear here.',
+                                  style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: docs.length,
+                            separatorBuilder: (context, index) => const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final doc = docs[index];
+                              final data = doc.data();
+                              final name = data['visitorName'] ?? 'Visitor';
+                              final phone = (data['phone'] ?? '').toString().trim();
+                              final flat = data['flatNumber'] ?? 'General';
+                              final purpose = data['purpose'] ?? 'Guest';
+                              final vehicle = data['vehicleNumber'] ?? '';
+                              final entryTime = (data['entryTime'] as Timestamp?)?.toDate();
+                              final entryStr = entryTime != null ? DateFormat('hh:mm a').format(entryTime) : 'Just now';
+
+                              String durationStr = '';
+                              if (entryTime != null) {
+                                final diff = DateTime.now().difference(entryTime);
+                                if (diff.inMinutes < 60) {
+                                  durationStr = '${diff.inMinutes}m inside';
+                                } else {
+                                  durationStr = '${diff.inHours}h ${diff.inMinutes % 60}m inside';
+                                }
+                              }
+
+                              final isWarning = _isVisitorOverstaying(data);
+                              final isCritical = _isVisitorOverstayCritical(data);
+
+                              // Visual card styling based on overstay status
+                              Color cardBorderColor = AppColors.border;
+                              Color cardBgColor = Colors.white;
+                              if (isCritical) {
+                                cardBorderColor = Colors.red.shade400;
+                                cardBgColor = const Color(0xFFFFF1F2);
+                              } else if (isWarning) {
+                                cardBorderColor = Colors.amber.shade500;
+                                cardBgColor = const Color(0xFFFFFBEB);
+                              }
+
+                              // Duration / Overstay Status Badge Pill
+                              Widget durationBadge;
+                              if (isCritical) {
+                                durationBadge = Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red.shade100,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: Colors.red.shade400),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.warning_rounded, size: 12, color: Colors.red.shade900),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'CRITICAL OVERSTAY: $durationStr',
+                                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.red.shade900),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              } else if (isWarning) {
+                                durationBadge = Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.amber.shade100,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: Colors.amber.shade400),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.schedule_rounded, size: 12, color: Colors.amber.shade900),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'OVERSTAY: $durationStr',
+                                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.amber.shade900),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              } else {
+                                durationBadge = Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primarySurface,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: AppColors.primaryBorder),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.timer_outlined, size: 12, color: AppColors.primary),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        durationStr.isNotEmpty ? durationStr : 'Inside',
+                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.primary),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }
+
+                              final photoUrl = data['photoUrl']?.toString();
+
+                              return Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: cardBgColor,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: cardBorderColor, width: isCritical ? 1.5 : 1.0),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (photoUrl != null && photoUrl.isNotEmpty)
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(20),
+                                        child: Image.network(
+                                          photoUrl,
+                                          width: 44,
+                                          height: 44,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, _, _) => CircleAvatar(
+                                            radius: 22,
+                                            backgroundColor: AppColors.primaryLight,
+                                            child: const Icon(Icons.person_rounded, color: AppColors.primary, size: 20),
+                                          ),
+                                        ),
+                                      )
+                                    else
+                                      CircleAvatar(
+                                        radius: 20,
+                                        backgroundColor: AppColors.primaryLight,
+                                        child: const Icon(Icons.person_rounded, color: AppColors.primary, size: 20),
+                                      ),
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Wrap(
+                                            crossAxisAlignment: WrapCrossAlignment.center,
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: [
+                                              Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary)),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: AppColors.primarySurface,
+                                                  borderRadius: BorderRadius.circular(4),
+                                                  border: Border.all(color: AppColors.primaryBorder),
+                                                ),
+                                                child: Text('Flat $flat', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primary)),
+                                              ),
+                                              _buildApprovalBadge(data['approvalStatus']?.toString()),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Wrap(
+                                            spacing: 10,
+                                            children: [
+                                              Text(purpose, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                                              if (phone.isNotEmpty) Text('•  $phone', style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
+                                              if (vehicle.isNotEmpty) Text('•  🚗 $vehicle', style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Row(
+                                            children: [
+                                              durationBadge,
+                                              const SizedBox(width: 8),
+                                              Text('In: $entryStr', style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        ElevatedButton.icon(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: AppColors.warningSurface,
+                                            foregroundColor: AppColors.warningDark,
+                                            side: const BorderSide(color: AppColors.warningBorder),
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                            elevation: 0,
+                                          ),
+                                          icon: const Icon(Icons.logout_rounded, size: 16),
+                                          label: const Text('Mark Exit', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                          onPressed: () async {
+                                            await VisitorPassService.checkOutVisitor(
+                                              visitorDocId: doc.id,
+                                              guardUid: _currentGuardUid,
+                                              guardName: guardName,
+                                              gateName: gateName,
+                                              visitorData: data,
+                                            );
+                                            if (context.mounted) {
+                                              AppFeedback.showSuccess(context, '$name checked out and resident notified.');
+                                            }
+                                          },
+                                        ),
+                                        if (phone.isNotEmpty) ...[
+                                          const SizedBox(height: 6),
+                                          OutlinedButton.icon(
+                                            style: OutlinedButton.styleFrom(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                              minimumSize: Size.zero,
+                                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                              side: const BorderSide(color: AppColors.primary),
+                                            ),
+                                            icon: const Icon(Icons.phone_rounded, size: 13, color: AppColors.primary),
+                                            label: const Text('Call', style: TextStyle(fontSize: 11, color: AppColors.primary, fontWeight: FontWeight.bold)),
+                                            onPressed: () async {
+                                              final uri = Uri.parse('tel:$phone');
+                                              if (await canLaunchUrl(uri)) {
+                                                await launchUrl(uri);
+                                              } else if (context.mounted) {
+                                                AppFeedback.showError(context, 'Could not initiate call to $phone');
+                                              }
+                                            },
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
               );
             },
           ),
@@ -2067,6 +2804,26 @@ class _GuardDashboardState extends State<GuardDashboard> {
           ],
         ),
       );
+    } else if (status == 'ENTRY_LOGGED' || status == 'AUTO_APPROVED') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.teal.shade50,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.teal.shade300),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.badge_rounded, size: 12, color: Colors.teal.shade700),
+            const SizedBox(width: 4),
+            Text(
+              'STAFF ENTRY',
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.teal.shade800),
+            ),
+          ],
+        ),
+      );
     } else if (status == 'DENIED') {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -2083,6 +2840,26 @@ class _GuardDashboardState extends State<GuardDashboard> {
             Text(
               'DENIED BY RESIDENT',
               style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.red.shade800),
+            ),
+          ],
+        ),
+      );
+    } else if (status == 'LEAVE_AT_GATE') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade50,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.orange.shade400),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.inventory_2_outlined, size: 12, color: Colors.orange.shade900),
+            const SizedBox(width: 4),
+            Text(
+              '📦 LEAVE AT GATE',
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.orange.shade900),
             ),
           ],
         ),
@@ -2514,20 +3291,17 @@ class _GuardDashboardState extends State<GuardDashboard> {
                                           ),
                                           icon: const Icon(Icons.check_rounded, size: 16),
                                           label: const Text('Hand Over to Resident', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                                          onPressed: () async {
+                                          onPressed: () {
                                             final parsedCount = count is int ? count : (int.tryParse(count.toString()) ?? 1);
-                                            await VisitorPassService.markParcelCollected(
+                                            // Open OTP verification modal requiring guard to enter resident's 4-digit pickup code
+                                            _showHandoverOtpDialog(
                                               parcelDocId: doc.id,
-                                              guardUid: _currentGuardUid,
+                                              flatNumber: flat,
+                                              provider: provider,
+                                              packetCount: parsedCount,
                                               guardName: guardName,
                                               gateName: gateName,
-                                              flatNumber: flat,
-                                              deliveryProvider: provider,
-                                              packetCount: parsedCount,
                                             );
-                                            if (context.mounted) {
-                                              AppFeedback.showSuccess(context, 'Parcel handed over to resident of $flat.');
-                                            }
                                           },
                                         ),
                                       ),

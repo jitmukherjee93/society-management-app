@@ -238,6 +238,114 @@ void main() {
       PushNotificationManager.instance.onNotificationClick = null;
       PushNotificationManager.instance.activeNotification.value = null;
     });
+
+    test('isDelivery correctly differentiates Delivery vs Guest payload', () {
+      final guestPayload = PushNotificationPayload(
+        id: 'guest-1',
+        title: 'Visitor At Gate: Rahul Sharma',
+        message: 'Rahul Sharma (Guest / Personal) is at Security Gate.',
+        type: 'VISITOR_CHECK_IN',
+        extraData: {
+          'purpose': 'Guest / Personal',
+          'isWalkIn': true,
+        },
+      );
+
+      final deliveryPayload = PushNotificationPayload(
+        id: 'delivery-1',
+        title: 'Delivery: Blinkit - Rohan',
+        message: 'Blinkit executive Rohan is at Security Gate.',
+        type: 'VISITOR_CHECK_IN',
+        extraData: {
+          'purpose': 'Delivery / Courier',
+          'deliveryApp': 'Blinkit',
+          'isDelivery': true,
+          'isWalkIn': true,
+        },
+      );
+
+      expect(guestPayload.isDelivery, isFalse);
+      expect(guestPayload.deliveryCompany, isNull);
+
+      expect(deliveryPayload.isDelivery, isTrue);
+      expect(deliveryPayload.deliveryCompany, equals('Blinkit'));
+    });
+
+    testWidgets('PushNotificationBanner hides Leave At Gate button for Guests and shows it for Delivery', (tester) async {
+      bool leaveAtGateCalled = false;
+
+      // 1. Guest payload: Leave At Gate button must NOT be present
+      final guestPayload = PushNotificationPayload(
+        id: 'guest-notif',
+        title: 'Visitor At Gate: Priya Verma',
+        message: 'Priya Verma (Guest / Personal) is at Security Gate.',
+        type: 'VISITOR_CHECK_IN',
+        extraData: {
+          'purpose': 'Guest / Personal',
+          'approvalStatus': 'PENDING',
+          'isWalkIn': true,
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PushNotificationBanner(
+              payload: guestPayload,
+              onDismiss: () {},
+              onApprove: () {},
+              onLeaveAtGate: () => leaveAtGateCalled = true,
+              onDeny: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('APPROVE'), findsOneWidget);
+      expect(find.text('DENY'), findsOneWidget);
+      expect(find.text('GATE'), findsNothing); // Must NOT show Leave at Gate for Guests!
+
+      // 2. Delivery payload: Leave At Gate button MUST be present
+      final deliveryPayload = PushNotificationPayload(
+        id: 'delivery-notif',
+        title: 'Delivery: Blinkit - Delivery Boy',
+        message: 'Blinkit executive is at Security Gate.',
+        type: 'VISITOR_CHECK_IN',
+        extraData: {
+          'purpose': 'Delivery / Courier',
+          'deliveryApp': 'Blinkit',
+          'isDelivery': true,
+          'approvalStatus': 'PENDING',
+          'isWalkIn': true,
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PushNotificationBanner(
+              payload: deliveryPayload,
+              onDismiss: () {},
+              onApprove: () {},
+              onLeaveAtGate: () => leaveAtGateCalled = true,
+              onDeny: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('APPROVE'), findsOneWidget);
+      expect(find.text('DENY'), findsOneWidget);
+      expect(find.text('GATE'), findsOneWidget); // Shown for delivery!
+      expect(find.text('Blinkit'), findsOneWidget); // Company name badge shown!
+
+      // Tap on GATE button
+      await tester.tap(find.text('GATE'));
+      await tester.pumpAndSettle();
+      expect(leaveAtGateCalled, isTrue);
+    });
   });
 }
 

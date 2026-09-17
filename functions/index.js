@@ -253,31 +253,34 @@ exports.onNotificationCreated = functions
       for (let i = 0; i < tokens.length; i += BATCH_SIZE) {
         const batchTokens = tokens.slice(i, i + BATCH_SIZE);
 
+        // CRITICAL FOR SINGLE NOTIFICATION WITH APPROVE/DENY BUTTONS:
+        // For visitor clearance requests, omit the top-level 'notification' block.
+        // This delivers a pure high-priority data message to the Android device, preventing
+        // Google Play Services / Android OS from posting a duplicate, buttonless notification.
+        // Flutter's background handler receives the data and posts the ONE and ONLY notification
+        // with the interactive Approve and Deny buttons!
         const multicastMessage = {
           tokens: batchTokens,
-          notification: {
-            title: title,
-            body: messageText,
-          },
+          ...(isVisitorRequest ? {} : {
+            notification: {
+              title: title,
+              body: messageText,
+            },
+          }),
           data: sanitizedData,
           android: {
             priority: "high",
-            notification: {
-              // Route to emergency channel, visitor ring channel with custom doorbell audio, or general notification channel
-              channelId: isEmergency
-                ? "society_emergency_channel"
-                : isVisitorRequest
-                ? "society_visitor_ring_channel"
-                : "society_general_channel",
-              // Visitor requests and emergencies are given MAX priority so they sound and head-up display even in DND/standby
-              priority: isEmergency || isVisitorRequest ? "max" : "high",
-              // Use the raw resource sound 'cell_phone_ring_std' located in android/app/src/main/res/raw/
-              sound: isVisitorRequest ? "cell_phone_ring_std" : "default",
-              defaultSound: !isVisitorRequest,
-              defaultVibrateTimings: true,
-              visibility: "public",
-              tag: notifId,
-            },
+            ...(isVisitorRequest ? {} : {
+              notification: {
+                channelId: isEmergency ? "society_emergency_channel" : "society_general_channel",
+                priority: isEmergency ? "max" : "high",
+                sound: "default",
+                defaultSound: true,
+                defaultVibrateTimings: true,
+                visibility: "public",
+                tag: notifId,
+              },
+            }),
           },
         };
 
