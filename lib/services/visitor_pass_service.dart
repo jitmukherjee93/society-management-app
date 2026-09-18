@@ -457,6 +457,10 @@ class VisitorPassService {
         purpose.toLowerCase().contains('driver');
 
     final approvalStatus = isStaff ? 'ENTRY_LOGGED' : 'PENDING';
+    // Daily domestic staff (maid, cook, driver) are pre-cleared routine workers and checked in directly.
+    // Guests and delivery agents awaiting resident approval must NOT be checked in to campus yet;
+    // their initial status is set to WAITING_APPROVAL and entryTime remains null until approval is granted.
+    final initialStatus = isStaff ? 'CHECKED_IN' : 'WAITING_APPROVAL';
 
     final docRef = await _fs.collection('visitors').add({
       'visitorName': visitorName.trim(),
@@ -471,10 +475,10 @@ class VisitorPassService {
       'isStaff': isStaff,
       'vehicleNumber': vehicleNumber?.trim().toUpperCase() ?? '',
       'photoUrl': photoUrl,
-      'status': 'CHECKED_IN',
+      'status': initialStatus,
       'approvalStatus': approvalStatus,
       'isWalkIn': true,
-      'entryTime': FieldValue.serverTimestamp(),
+      if (isStaff) 'entryTime': FieldValue.serverTimestamp(),
       'createdAt': FieldValue.serverTimestamp(),
       'checkedInBy': guardUid,
       'guardName': guardName ?? 'Security Guard',
@@ -994,13 +998,14 @@ class VisitorPassService {
         final q = await _fs
             .collection('visitors')
             .where('flatNumber', isEqualTo: normFlat)
-            .where('status', isEqualTo: 'CHECKED_IN')
-            .limit(10)
+            .limit(15)
             .get();
         final matches = q.docs.where((d) {
           final data = d.data();
           final vN = (data['visitorName'] ?? '').toString().trim().toLowerCase();
-          return (vN == visitorName.trim().toLowerCase() ||
+          final approval = (data['approvalStatus'] ?? '').toString().toUpperCase();
+          return (approval == 'PENDING' || approval.isEmpty) &&
+              (vN == visitorName.trim().toLowerCase() ||
                   vN.contains(visitorName.trim().toLowerCase()) ||
                   visitorName.trim().toLowerCase().contains(vN));
         }).toList();
@@ -1029,8 +1034,11 @@ class VisitorPassService {
             debugPrint('[VisitorPassService] Visitor $targetDocId already resolved as $currentApproval. Aborting approve.');
             return false;
           }
+          // On approval, grant campus entry clearance by marking status CHECKED_IN with entryTime
           transaction.update(visitorRef, {
             'approvalStatus': 'APPROVED',
+            'status': 'CHECKED_IN',
+            'entryTime': now,
             'approvedAt': now,
           });
           return true;
@@ -1040,6 +1048,8 @@ class VisitorPassService {
         try {
           await visitorRef.update({
             'approvalStatus': 'APPROVED',
+            'status': 'CHECKED_IN',
+            'entryTime': now,
             'approvedAt': now,
           });
           transitioned = true;
@@ -1108,13 +1118,14 @@ class VisitorPassService {
         final q = await _fs
             .collection('visitors')
             .where('flatNumber', isEqualTo: normFlat)
-            .where('status', isEqualTo: 'CHECKED_IN')
-            .limit(10)
+            .limit(15)
             .get();
         final matches = q.docs.where((d) {
           final data = d.data();
           final vN = (data['visitorName'] ?? '').toString().trim().toLowerCase();
-          return (vN == visitorName.trim().toLowerCase() ||
+          final approval = (data['approvalStatus'] ?? '').toString().toUpperCase();
+          return (approval == 'PENDING' || approval.isEmpty) &&
+              (vN == visitorName.trim().toLowerCase() ||
                   vN.contains(visitorName.trim().toLowerCase()) ||
                   visitorName.trim().toLowerCase().contains(vN));
         }).toList();
@@ -1143,9 +1154,11 @@ class VisitorPassService {
             debugPrint('[VisitorPassService] Visitor $targetDocId already resolved as $currentApproval. Aborting deny.');
             return false;
           }
+          // Explicitly set status to DENIED, record denial timestamp, and ensure entryTime is removed so visitor is never marked inside campus
           transaction.update(visitorRef, {
             'approvalStatus': 'DENIED',
             'status': 'DENIED',
+            'entryTime': FieldValue.delete(),
             'deniedAt': now,
           });
           return true;
@@ -1156,6 +1169,7 @@ class VisitorPassService {
           await visitorRef.update({
             'approvalStatus': 'DENIED',
             'status': 'DENIED',
+            'entryTime': FieldValue.delete(),
             'deniedAt': now,
           });
           transitioned = true;
@@ -1235,13 +1249,14 @@ class VisitorPassService {
         final q = await _fs
             .collection('visitors')
             .where('flatNumber', isEqualTo: normFlat)
-            .where('status', isEqualTo: 'CHECKED_IN')
-            .limit(10)
+            .limit(15)
             .get();
         final matches = q.docs.where((d) {
           final data = d.data();
           final vN = (data['visitorName'] ?? '').toString().trim().toLowerCase();
-          return (vN == visitorName.trim().toLowerCase() ||
+          final approval = (data['approvalStatus'] ?? '').toString().toUpperCase();
+          return (approval == 'PENDING' || approval.isEmpty) &&
+              (vN == visitorName.trim().toLowerCase() ||
                   vN.contains(visitorName.trim().toLowerCase()) ||
                   visitorName.trim().toLowerCase().contains(vN));
         }).toList();
@@ -1278,11 +1293,14 @@ class VisitorPassService {
             }
             return true;
           }
+          // When delivery is marked leave at gate, delivery agent is NOT checked in to campus;
+          // status is set to LEFT_AT_GATE, parcel is placed in gate holding, and entryTime is deleted.
           transaction.update(visitorRef, {
             'approvalStatus': 'LEAVE_AT_GATE',
             'leaveAtGate': true,
             'pickupOtp': pickupOtp,
-            'status': 'CHECKED_IN',
+            'status': 'LEFT_AT_GATE',
+            'entryTime': FieldValue.delete(),
             'resolvedAt': now,
           });
           return true;
@@ -1294,7 +1312,8 @@ class VisitorPassService {
             'approvalStatus': 'LEAVE_AT_GATE',
             'leaveAtGate': true,
             'pickupOtp': pickupOtp,
-            'status': 'CHECKED_IN',
+            'status': 'LEFT_AT_GATE',
+            'entryTime': FieldValue.delete(),
             'resolvedAt': now,
           });
           transitioned = true;
@@ -1467,6 +1486,18 @@ class VisitorPassService {
         'visitorDocId': visitorDocId,
         'photoUrl': photoUrl,
       });
+
+      // Also guarantee visitor record has status LEFT_AT_GATE and no active in-campus entryTime
+      if (visitorDocId != null && visitorDocId.isNotEmpty) {
+        try {
+          await _fs.collection('visitors').doc(visitorDocId).update({
+            'status': 'LEFT_AT_GATE',
+            'approvalStatus': 'LEAVE_AT_GATE',
+            'leaveAtGate': true,
+            'entryTime': FieldValue.delete(),
+          });
+        } catch (_) {}
+      }
 
       debugPrint('[VisitorPassService] Successfully ensured parcel ${docRef.id} created for visitor $visitorDocId with OTP $finalOtp');
       return docRef.id;

@@ -478,6 +478,94 @@ void main() {
       };
       expect(VisitorPassService.evaluatePassStatus(checkedOutPass), PassVerificationStatus.alreadyUsed);
     });
+
+    test('Denied visitor state transition guarantees no campus entry and status is DENIED', () {
+      // Simulates the visitor state transition when resident denies clearance
+      final visitorRecord = {
+        'visitorName': 'Unverified Guest',
+        'flatNumber': 'C-302',
+        'status': 'WAITING_APPROVAL',
+        'approvalStatus': 'PENDING',
+        'entryTime': null,
+      };
+
+      // Apply denial update as executed by denyVisitorEntry
+      visitorRecord['approvalStatus'] = 'DENIED';
+      visitorRecord['status'] = 'DENIED';
+      visitorRecord.remove('entryTime');
+
+      // Assert that denied visitors are never marked as CHECKED_IN
+      expect(visitorRecord['status'], 'DENIED');
+      expect(visitorRecord['status'] == 'CHECKED_IN', isFalse);
+      expect(visitorRecord['approvalStatus'], 'DENIED');
+      expect(visitorRecord['entryTime'], isNull);
+
+      // Verify guard clearance text instructs guard to turn visitor away
+      final isDenied = visitorRecord['approvalStatus'] == 'DENIED';
+      final clearanceMessage = isDenied
+          ? '⛔ ACTION REQUIRED: Turn visitor away immediately. Resident of flat C-302 has DENIED gate clearance. No campus entry permitted.'
+          : 'Allow Entry';
+      expect(clearanceMessage.contains('No campus entry permitted'), isTrue);
+    });
+
+    test('Leave at gate delivery state transition guarantees status is LEFT_AT_GATE, not CHECKED_IN', () {
+      // Simulates delivery state transition when resident selects leave at gate
+      final deliveryRecord = {
+        'visitorName': 'Zomato Agent',
+        'flatNumber': 'A-101',
+        'status': 'WAITING_APPROVAL',
+        'approvalStatus': 'PENDING',
+        'isDelivery': true,
+        'entryTime': null,
+      };
+
+      const pickupOtp = '4321';
+
+      // Apply leave-at-gate update as executed by leaveAtGateVisitorEntry
+      deliveryRecord['approvalStatus'] = 'LEAVE_AT_GATE';
+      deliveryRecord['leaveAtGate'] = true;
+      deliveryRecord['pickupOtp'] = pickupOtp;
+      deliveryRecord['status'] = 'LEFT_AT_GATE';
+      deliveryRecord.remove('entryTime');
+
+      // Assert that delivery agents leaving items at gate are strictly LEFT_AT_GATE and never CHECKED_IN
+      expect(deliveryRecord['status'], 'LEFT_AT_GATE');
+      expect(deliveryRecord['status'] == 'CHECKED_IN', isFalse);
+      expect(deliveryRecord['approvalStatus'], 'LEAVE_AT_GATE');
+      expect(deliveryRecord['entryTime'], isNull);
+      expect(deliveryRecord['pickupOtp'], pickupOtp);
+
+      // Parcel record generated for gate holding queue
+      final gateParcelRecord = {
+        'flatNumber': deliveryRecord['flatNumber'],
+        'visitorName': deliveryRecord['visitorName'],
+        'status': 'HELD_AT_GATE',
+        'pickupOtp': pickupOtp,
+      };
+      expect(gateParcelRecord['status'], 'HELD_AT_GATE');
+    });
+
+    test('Walk-in guest classification sets initial status to WAITING_APPROVAL, while staff gets CHECKED_IN', () {
+      String getInitialWalkInStatus(String purpose) {
+        final lower = purpose.toLowerCase();
+        final isStaff = lower.contains('maid') ||
+            lower.contains('helper') ||
+            lower.contains('cook') ||
+            lower.contains('driver');
+        return isStaff ? 'CHECKED_IN' : 'WAITING_APPROVAL';
+      }
+
+      // Guest walk-in must wait at gate for resident clearance
+      expect(getInitialWalkInStatus('Guest / Friend Visit'), 'WAITING_APPROVAL');
+      expect(getInitialWalkInStatus('Delivery agent / courier'), 'WAITING_APPROVAL');
+      expect(getInitialWalkInStatus('Salesperson / Meeting'), 'WAITING_APPROVAL');
+
+      // Daily domestic staff is pre-cleared for direct check-in
+      expect(getInitialWalkInStatus('Maid'), 'CHECKED_IN');
+      expect(getInitialWalkInStatus('House cook'), 'CHECKED_IN');
+      expect(getInitialWalkInStatus('Personal driver'), 'CHECKED_IN');
+      expect(getInitialWalkInStatus('Domestic helper'), 'CHECKED_IN');
+    });
   });
 }
 

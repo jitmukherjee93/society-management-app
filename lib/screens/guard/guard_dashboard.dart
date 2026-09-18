@@ -436,7 +436,20 @@ class _GuardDashboardState extends State<GuardDashboard> {
 
       if (mounted) {
         final label = isDelivery && effectiveDeliveryApp != null ? '$name ($effectiveDeliveryApp)' : name;
-        AppFeedback.showSuccess(context, 'Walk-in visitor $label checked in at $flat.');
+        final bool isStaff = _walkInPurpose.toLowerCase().contains('maid') ||
+            _walkInPurpose.toLowerCase().contains('helper') ||
+            _walkInPurpose.toLowerCase().contains('cook') ||
+            _walkInPurpose.toLowerCase().contains('driver');
+
+        // Domestic staff are checked in directly to campus; guests and deliveries require resident clearance
+        // and must remain at the gate until approval is received.
+        if (isStaff) {
+          AppFeedback.showSuccess(context, 'Staff $label checked in at $flat.');
+          setState(() => _currentTab = 2); // Switch to In-Campus view for routine staff
+        } else {
+          AppFeedback.showSuccess(context, 'Walk-in request for $label sent to flat $flat. Awaiting resident approval.');
+        }
+
         _walkInNameCtrl.clear();
         _walkInPhoneCtrl.clear();
         _walkInFlatNoCtrl.clear();
@@ -446,7 +459,6 @@ class _GuardDashboardState extends State<GuardDashboard> {
         _walkInPhotoBytes = null;
         _walkInPhotoName = null;
         _frequentVisitorData = null; // Clear frequent visitor suggestion
-        setState(() => _currentTab = 2); // Switch to In-Campus view
       }
     } catch (e) {
       if (mounted) {
@@ -1055,10 +1067,15 @@ class _GuardDashboardState extends State<GuardDashboard> {
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text(
-                                  '${unreadDocs.length} unread alert${unreadDocs.length > 1 ? 's' : ''}',
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primary),
+                                // Wrapped in Expanded to ensure unread text never causes RenderFlex overflow against the action button
+                                Expanded(
+                                  child: Text(
+                                    '${unreadDocs.length} unread alert${unreadDocs.length > 1 ? 's' : ''}',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primary),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
+                                const SizedBox(width: 8),
                                 TextButton.icon(
                                   onPressed: () async {
                                     await NotificationService.markAllAsRead(unreadDocs.map((d) => d.id).toList());
@@ -1190,11 +1207,15 @@ class _GuardDashboardState extends State<GuardDashboard> {
     final type = (notif['type'] ?? '').toString().toUpperCase();
     final title = (notif['title'] ?? '').toString();
 
-    // 1. Visitor clearance responses (Approved or Denied by resident)
+    // 1. Visitor clearance responses (Approved, Denied, or Leave at Gate by resident)
+    final approvalStatus = (notif['approvalStatus'] ?? '').toString().toUpperCase();
     if (type == 'VISITOR_APPROVAL_RESPONSE' ||
+        type == 'VISITOR_LEAVE_AT_GATE' ||
+        type.startsWith('VISITOR') ||
+        approvalStatus.isNotEmpty ||
         title.contains('Approved') ||
         title.contains('DENIED') ||
-        type.startsWith('VISITOR')) {
+        title.contains('Leave at Gate')) {
       _showVisitorApprovalStatusDialog(context, notif);
     }
     // 2. Gate parcel alerts -> switch to Parcels tab (index 3)
@@ -1215,9 +1236,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
   void _showVisitorApprovalStatusDialog(BuildContext context, Map<String, dynamic> notif) {
     final title = notif['title']?.toString() ?? 'Visitor Clearance';
     final msg = notif['message']?.toString() ?? '';
-    final isDenied = title.contains('DENIED') || (notif['approvalStatus'] == 'DENIED');
-    final isLeaveAtGate = title.contains('Leave at Gate') || (notif['approvalStatus'] == 'LEAVE_AT_GATE');
-    final isApproved = !isLeaveAtGate && (title.contains('Approved') || (notif['approvalStatus'] == 'APPROVED'));
+    final type = (notif['type'] ?? '').toString().toUpperCase();
+    final approvalStatus = (notif['approvalStatus'] ?? '').toString().toUpperCase();
+
+    // Check explicit enum status first, then fallback to title content (BUG-29)
+    final isDenied = approvalStatus == 'DENIED' || type == 'VISITOR_APPROVAL_DENIED' || title.contains('DENIED');
+    final isLeaveAtGate = approvalStatus == 'LEAVE_AT_GATE' || type == 'VISITOR_LEAVE_AT_GATE' || title.contains('Leave at Gate');
+    final isApproved = !isLeaveAtGate && (approvalStatus == 'APPROVED' || type == 'VISITOR_APPROVAL_APPROVED' || title.contains('Approved'));
     final visitorName = notif['visitorName']?.toString() ?? 'Visitor';
     final flatNumber = notif['flatNumber']?.toString() ?? '';
     final ts = (notif['createdAt'] as Timestamp?)?.toDate();
@@ -1300,50 +1325,54 @@ class _GuardDashboardState extends State<GuardDashboard> {
             ),
           ],
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isDenied
-                    ? Colors.red.shade50
-                    : (isLeaveAtGate
-                        ? Colors.orange.shade50
-                        : (isApproved ? Colors.green.shade50 : AppColors.cardSurfaceSecondary)),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
+        // Wrap content in SingleChildScrollView so tall messages or narrow screen keyboards never trigger RenderFlex overflow
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
                   color: isDenied
-                      ? Colors.red.shade300
+                      ? Colors.red.shade50
                       : (isLeaveAtGate
-                          ? Colors.orange.shade400
-                          : (isApproved ? Colors.green.shade300 : AppColors.border)),
+                          ? Colors.orange.shade50
+                          : (isApproved ? Colors.green.shade50 : AppColors.cardSurfaceSecondary)),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isDenied
+                        ? Colors.red.shade300
+                        : (isLeaveAtGate
+                            ? Colors.orange.shade400
+                            : (isApproved ? Colors.green.shade300 : AppColors.border)),
+                  ),
+                ),
+                child: Text(
+                  isDenied
+                      ? '⛔ ACTION REQUIRED: Turn visitor away immediately. Resident of flat $flatNumber has DENIED gate clearance for $visitorName. No campus entry permitted.'
+                      : (isLeaveAtGate
+                          ? '📦 ACTION REQUIRED: Do NOT allow delivery agent inside campus. Collect parcel from $visitorName for flat $flatNumber and place it in the gate holding rack. A 4-digit pickup code has been sent to the resident. Delivery agent must not enter campus.'
+                          : '✅ CLEARANCE GRANTED: Resident of flat $flatNumber has APPROVED entry for $visitorName. Allow entry.'),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: isDenied
+                        ? Colors.red.shade900
+                        : (isLeaveAtGate
+                            ? Colors.orange.shade900
+                            : (isApproved ? Colors.green.shade900 : AppColors.textPrimary)),
+                    height: 1.3,
+                  ),
                 ),
               ),
-              child: Text(
-                isDenied
-                    ? '⛔ ACTION REQUIRED: Turn visitor away immediately. Resident of flat $flatNumber has DENIED gate clearance for $visitorName.'
-                    : (isLeaveAtGate
-                        ? '📦 ACTION REQUIRED: Do NOT allow delivery agent inside campus. Collect parcel from $visitorName for flat $flatNumber and place it in the gate holding rack. A 4-digit pickup code has been sent to the resident.'
-                        : '✅ CLEARANCE GRANTED: Resident of flat $flatNumber has APPROVED entry for $visitorName. Allow entry.'),
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: isDenied
-                      ? Colors.red.shade900
-                      : (isLeaveAtGate
-                          ? Colors.orange.shade900
-                          : (isApproved ? Colors.green.shade900 : AppColors.textPrimary)),
-                  height: 1.3,
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(msg, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-          ],
+              const SizedBox(height: 12),
+              Text(msg, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+            ],
+          ),
         ),
+        actionsOverflowButtonSpacing: 8,
         actions: [
           if (isLeaveAtGate)
             TextButton(
@@ -1365,7 +1394,11 @@ class _GuardDashboardState extends State<GuardDashboard> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Acknowledge'),
+            child: Text(
+              isDenied
+                  ? 'Acknowledge (Turn Away)'
+                  : (isLeaveAtGate ? 'Acknowledge (Keep at Gate)' : 'Acknowledge (Allow Entry)'),
+            ),
           ),
         ],
       ),
@@ -1410,7 +1443,10 @@ class _GuardDashboardState extends State<GuardDashboard> {
             ),
           ],
         ),
-        content: Text(msg, style: const TextStyle(fontSize: 13, height: 1.4)),
+        // SingleChildScrollView ensures emergency alert descriptions never overflow on compact screen displays
+        content: SingleChildScrollView(
+          child: Text(msg, style: const TextStyle(fontSize: 13, height: 1.4)),
+        ),
         actions: [
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -1446,30 +1482,35 @@ class _GuardDashboardState extends State<GuardDashboard> {
             backgroundColor: AppColors.primaryDark,
             foregroundColor: Colors.white,
             elevation: 1,
+            // Optimized title spacing to grant maximum horizontal width to title on narrow screens
+            titleSpacing: 8,
             title: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(6),
+                  padding: const EdgeInsets.all(5),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Icon(Icons.shield_rounded, size: 20, color: Colors.white),
+                  child: const Icon(Icons.shield_rounded, size: 18, color: Colors.white),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
                         guardName,
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                         overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
                       Text(
                         '$gateName • $shift',
-                        style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.8)),
+                        style: TextStyle(fontSize: 10.5, color: Colors.white.withValues(alpha: 0.8)),
                         overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
                     ],
                   ),
@@ -1477,49 +1518,52 @@ class _GuardDashboardState extends State<GuardDashboard> {
               ],
             ),
             actions: [
-              // Duty Status Pill Toggle
-              InkWell(
-                onTap: () async {
-                  final newStatus = isOnDuty ? 'OFF_DUTY' : 'ON_DUTY';
-                  await snap.data?.reference.update({
-                    'status': newStatus,
-                    'updatedAt': FieldValue.serverTimestamp(),
-                  });
-                  if (!context.mounted) return;
-                  AppFeedback.showSuccess(
-                    context,
-                    newStatus == 'ON_DUTY' ? 'You are marked ON DUTY.' : 'You are marked OFF DUTY.',
-                  );
-                },
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isOnDuty ? AppColors.success : AppColors.cardSurfaceSecondary,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          color: isOnDuty ? Colors.white : AppColors.textMuted,
-                          shape: BoxShape.circle,
+              // Duty Status Pill Toggle - compact layout ensures no crowding on narrow phone screens
+              Tooltip(
+                message: isOnDuty ? 'Status: On Duty (Tap to switch Off Duty)' : 'Status: Off Duty (Tap to switch On Duty)',
+                child: InkWell(
+                  onTap: () async {
+                    final newStatus = isOnDuty ? 'OFF_DUTY' : 'ON_DUTY';
+                    await snap.data?.reference.update({
+                      'status': newStatus,
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+                    if (!context.mounted) return;
+                    AppFeedback.showSuccess(
+                      context,
+                      newStatus == 'ON_DUTY' ? 'You are marked ON DUTY.' : 'You are marked OFF DUTY.',
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(16),
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 13, horizontal: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isOnDuty ? AppColors.success : AppColors.cardSurfaceSecondary,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: isOnDuty ? Colors.white : AppColors.textMuted,
+                            shape: BoxShape.circle,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        isOnDuty ? 'ON DUTY' : 'OFF',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: isOnDuty ? Colors.white : AppColors.textSecondary,
+                        const SizedBox(width: 3),
+                        Text(
+                          isOnDuty ? 'ON' : 'OFF',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: isOnDuty ? Colors.white : AppColors.textSecondary,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -1534,7 +1578,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   final unreadCount = alertSnap.data?.docs.where((d) => (d.data() as Map)['isRead'] != true).length ?? 0;
                   return IconButton(
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                    constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
                     icon: Badge(
                       isLabelVisible: unreadCount > 0,
                       label: Text('$unreadCount', style: const TextStyle(fontSize: 8)),
@@ -1545,12 +1589,12 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   );
                 },
               ),
-              // Emergency SOS Button
+              // Emergency SOS Button (Compact with badge style)
               IconButton(
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
                 icon: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
                   decoration: BoxDecoration(
                     color: AppColors.error,
                     borderRadius: BorderRadius.circular(6),
@@ -1571,7 +1615,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert_rounded, size: 20, color: Colors.white),
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 34),
                 tooltip: 'More actions',
                 onSelected: (value) {
                   if (value == 'notices') {
@@ -1679,13 +1723,16 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   children: [
                     const Icon(Icons.qr_code_2_rounded, size: 48, color: AppColors.primary),
                     const SizedBox(height: 8),
+                    // Center aligned with responsive font size ensures no overflow or awkward wrapping on narrow screens
                     const Text(
                       'Resident Gate Pass Verification',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
                     ),
                     const SizedBox(height: 4),
                     const Text(
                       'Enter the 6-digit OTP code shared by visiting guest',
+                      textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 12, color: AppColors.textMuted),
                     ),
                     const SizedBox(height: 20),
@@ -1903,7 +1950,14 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   children: [
                     Icon(Icons.person_add_alt_1_rounded, color: AppColors.primary, size: 24),
                     SizedBox(width: 10),
-                    Text('Direct / Walk-In Gate Entry', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                    // Wrapped in Expanded with ellipsis for safe rendering on compact phone widths
+                    Expanded(
+                      child: Text(
+                        'Direct / Walk-In Gate Entry',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 4),
@@ -1932,9 +1986,10 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     LengthLimitingTextInputFormatter(10),
                   ],
                   decoration: InputDecoration(
+                    // Concise label avoids truncation on small screens while retaining clarity
                     labelText: _walkInPurpose == 'Cab / Taxi'
-                        ? 'Visitor Mobile Number (Optional)'
-                        : 'Visitor Mobile Number (10 Digits) *',
+                        ? 'Visitor Mobile (Optional)'
+                        : 'Mobile Number (10 Digits) *',
                     hintText: '10-digit mobile number',
                     counterText: '',
                     prefixText: '+91 ',
@@ -1951,9 +2006,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     children: [
                       const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: AppColors.primary)),
                       const SizedBox(width: 8),
-                      Text(
-                        'Checking past visitor records...',
-                        style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade600, fontStyle: FontStyle.italic),
+                      // Expanded with ellipsis prevents status label overflow during async phone lookup
+                      Expanded(
+                        child: Text(
+                          'Checking past visitor records...',
+                          style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade600, fontStyle: FontStyle.italic),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ],
                   ),
@@ -1982,11 +2041,15 @@ class _GuardDashboardState extends State<GuardDashboard> {
                               Text(
                                 'Recognized: ${_frequentVisitorData!['visitorName'] ?? 'Frequent Visitor'}',
                                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: 2),
                               Text(
                                 '${_frequentVisitorData!['purpose'] ?? 'Visitor'} • ${_frequentVisitorData!['deliveryApp'] ?? _frequentVisitorData!['vehicleNumber'] ?? 'Frequent'}',
                                 style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
@@ -2099,12 +2162,16 @@ class _GuardDashboardState extends State<GuardDashboard> {
                             children: const [
                               Icon(Icons.apartment_rounded, size: 14, color: AppColors.primary),
                               SizedBox(width: 4),
-                              Text(
-                                'Flat No. (3 Digits) *',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.textPrimary,
+                              // Expanded with ellipsis prevents label overflow on small mobile widths
+                              Expanded(
+                                child: Text(
+                                  'Flat No. (3 Digits) *',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                             ],
@@ -2239,16 +2306,20 @@ class _GuardDashboardState extends State<GuardDashboard> {
                                 : Colors.amber.shade800,
                           ),
                           const SizedBox(width: 8),
-                          Text(
-                            _walkInPhotoBytes != null
-                                ? 'Visitor Photo Captured'
-                                : 'Visitor Photo (Mandatory) *',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: _walkInPhotoBytes != null
-                                  ? Colors.green.shade900
-                                  : Colors.amber.shade900,
+                          // Expanded with ellipsis guarantees title never causes overflow
+                          Expanded(
+                            child: Text(
+                              _walkInPhotoBytes != null
+                                  ? 'Visitor Photo Captured'
+                                  : 'Visitor Photo (Mandatory) *',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: _walkInPhotoBytes != null
+                                    ? Colors.green.shade900
+                                    : Colors.amber.shade900,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
@@ -2460,53 +2531,56 @@ class _GuardDashboardState extends State<GuardDashboard> {
 
               return Column(
                 children: [
-                  // Filter Chips: All Active vs Overstaying
+                  // Filter Chips: All Active vs Overstaying - wrapped horizontally to prevent chip overflows on narrow phones
                   Container(
                     width: double.infinity,
                     color: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      children: [
-                        ChoiceChip(
-                          label: Text('All ($totalCount)'),
-                          selected: _campusFilter == 'ALL',
-                          onSelected: (_) => setState(() => _campusFilter = 'ALL'),
-                          selectedColor: AppColors.primaryLight,
-                          labelStyle: TextStyle(
-                            color: _campusFilter == 'ALL' ? AppColors.primary : AppColors.textSecondary,
-                            fontWeight: _campusFilter == 'ALL' ? FontWeight.bold : FontWeight.normal,
-                            fontSize: 12,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          ChoiceChip(
+                            label: Text('All ($totalCount)'),
+                            selected: _campusFilter == 'ALL',
+                            onSelected: (_) => setState(() => _campusFilter = 'ALL'),
+                            selectedColor: AppColors.primaryLight,
+                            labelStyle: TextStyle(
+                              color: _campusFilter == 'ALL' ? AppColors.primary : AppColors.textSecondary,
+                              fontWeight: _campusFilter == 'ALL' ? FontWeight.bold : FontWeight.normal,
+                              fontSize: 12,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        ChoiceChip(
-                          label: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.warning_amber_rounded,
-                                size: 14,
-                                color: _campusFilter == 'OVERSTAY'
-                                    ? Colors.amber.shade900
-                                    : (overstayCount > 0 ? Colors.orange.shade800 : Colors.grey),
-                              ),
-                              const SizedBox(width: 4),
-                              Text('Overstaying ($overstayCount)'),
-                            ],
+                          const SizedBox(width: 10),
+                          ChoiceChip(
+                            label: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.warning_amber_rounded,
+                                  size: 14,
+                                  color: _campusFilter == 'OVERSTAY'
+                                      ? Colors.amber.shade900
+                                      : (overstayCount > 0 ? Colors.orange.shade800 : Colors.grey),
+                                ),
+                                const SizedBox(width: 4),
+                                Text('Overstaying ($overstayCount)'),
+                              ],
+                            ),
+                            selected: _campusFilter == 'OVERSTAY',
+                            onSelected: (_) => setState(() => _campusFilter = 'OVERSTAY'),
+                            selectedColor: Colors.amber.shade100,
+                            backgroundColor: Colors.grey.shade100,
+                            labelStyle: TextStyle(
+                              color: _campusFilter == 'OVERSTAY'
+                                  ? Colors.amber.shade900
+                                  : (overstayCount > 0 ? Colors.orange.shade900 : AppColors.textSecondary),
+                              fontWeight: _campusFilter == 'OVERSTAY' ? FontWeight.bold : FontWeight.normal,
+                              fontSize: 12,
+                            ),
                           ),
-                          selected: _campusFilter == 'OVERSTAY',
-                          onSelected: (_) => setState(() => _campusFilter = 'OVERSTAY'),
-                          selectedColor: Colors.amber.shade100,
-                          backgroundColor: Colors.grey.shade100,
-                          labelStyle: TextStyle(
-                            color: _campusFilter == 'OVERSTAY'
-                                ? Colors.amber.shade900
-                                : (overstayCount > 0 ? Colors.orange.shade900 : AppColors.textSecondary),
-                            fontWeight: _campusFilter == 'OVERSTAY' ? FontWeight.bold : FontWeight.normal,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                   const Divider(height: 1, color: AppColors.border),
@@ -2644,7 +2718,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
                               final photoUrl = data['photoUrl']?.toString();
 
                               return Container(
-                                padding: const EdgeInsets.all(16),
+                                padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
                                   color: cardBgColor,
                                   borderRadius: BorderRadius.circular(10),
@@ -2674,7 +2748,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
                                         backgroundColor: AppColors.primaryLight,
                                         child: const Icon(Icons.person_rounded, color: AppColors.primary, size: 20),
                                       ),
-                                    const SizedBox(width: 14),
+                                    const SizedBox(width: 10),
                                     Expanded(
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2699,7 +2773,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
                                           ),
                                           const SizedBox(height: 4),
                                           Wrap(
-                                            spacing: 10,
+                                            spacing: 8,
+                                            runSpacing: 2,
                                             children: [
                                               Text(purpose, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
                                               if (phone.isNotEmpty) Text('•  $phone', style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
@@ -2707,10 +2782,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
                                             ],
                                           ),
                                           const SizedBox(height: 6),
-                                          Row(
+                                          // Using Wrap instead of Row ensures duration badge and entry timestamp wrap gracefully on narrow phone screens without overflow stripes
+                                          Wrap(
+                                            spacing: 6,
+                                            runSpacing: 4,
+                                            crossAxisAlignment: WrapCrossAlignment.center,
                                             children: [
                                               durationBadge,
-                                              const SizedBox(width: 8),
                                               Text('In: $entryStr', style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
                                             ],
                                           ),
@@ -2797,8 +2875,9 @@ class _GuardDashboardState extends State<GuardDashboard> {
           children: [
             Icon(Icons.check_circle_rounded, size: 12, color: Colors.green.shade700),
             const SizedBox(width: 4),
+            // Concise label prevents line wrapping and overflow on small screens
             Text(
-              'RESIDENT APPROVED',
+              'APPROVED',
               style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green.shade800),
             ),
           ],
@@ -2818,7 +2897,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
             Icon(Icons.badge_rounded, size: 12, color: Colors.teal.shade700),
             const SizedBox(width: 4),
             Text(
-              'STAFF ENTRY',
+              'STAFF',
               style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.teal.shade800),
             ),
           ],
@@ -2838,7 +2917,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
             Icon(Icons.cancel_rounded, size: 12, color: Colors.red.shade700),
             const SizedBox(width: 4),
             Text(
-              'DENIED BY RESIDENT',
+              'DENIED',
               style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.red.shade800),
             ),
           ],
@@ -2878,7 +2957,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
             Icon(Icons.hourglass_top_rounded, size: 12, color: Colors.amber.shade800),
             const SizedBox(width: 4),
             Text(
-              'AWAITING RESIDENT',
+              'AWAITING',
               style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.brown.shade700),
             ),
           ],
@@ -2907,11 +2986,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
                     Text(
                       'Gate Parcel Log & Holding',
                       style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.textPrimary),
+                      overflow: TextOverflow.ellipsis,
                     ),
                     SizedBox(height: 2),
                     Text(
                       'Search, filter, and track all incoming, held, and delivered packages',
                       style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
@@ -3279,18 +3360,19 @@ class _GuardDashboardState extends State<GuardDashboard> {
                                     // Hand Over Action Button (only if parcel is still held at gate)
                                     if (status == 'HELD_AT_GATE') ...[
                                       const SizedBox(height: 10),
-                                      Align(
-                                        alignment: Alignment.centerRight,
+                                      // Full width button prevents overflow on narrow screen displays and improves touch accessibility for gate security
+                                      SizedBox(
+                                        width: double.infinity,
                                         child: ElevatedButton.icon(
                                           style: ElevatedButton.styleFrom(
                                             backgroundColor: AppColors.success,
                                             foregroundColor: Colors.white,
-                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                             elevation: 0,
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                           ),
                                           icon: const Icon(Icons.check_rounded, size: 16),
-                                          label: const Text('Hand Over to Resident', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                          label: const Text('Hand Over to Resident (Enter OTP)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                                           onPressed: () {
                                             final parsedCount = count is int ? count : (int.tryParse(count.toString()) ?? 1);
                                             // Open OTP verification modal requiring guard to enter resident's 4-digit pickup code
@@ -3498,9 +3580,13 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 children: [
                   Icon(Icons.phone_in_talk_rounded, color: Colors.red.shade800, size: 16),
                   const SizedBox(width: 6),
-                  Text(
-                    'Emergency Helplines & Intercom',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.red.shade900),
+                  // Expanded ensures the emergency intercom header text never causes horizontal overflow
+                  const Expanded(
+                    child: Text(
+                      'Emergency Helplines & Intercom',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.error),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ],
               ),
@@ -3581,8 +3667,19 @@ class _GuardDashboardState extends State<GuardDashboard> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary)),
-                              Text('$occupantType • $phone', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                              Text(
+                                name,
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '$occupantType • $phone',
+                                style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ],
                           ),
                         ),
@@ -3625,14 +3722,24 @@ class _GuardDashboardState extends State<GuardDashboard> {
     );
   }
 
+  // Detail row with safe layout: Expanded value ensures long text (e.g. visitor names, vehicles) never overflows
   Widget _buildDetailRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label, style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-          Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+          ),
         ],
       ),
     );

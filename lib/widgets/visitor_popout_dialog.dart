@@ -178,7 +178,7 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
       return;
     }
 
-    // Resolve visitorDocId from Firestore by querying matching checked-in visitor
+    // Resolve visitorDocId from Firestore by querying matching pending or active visitor
     try {
       final snap = await FirebaseFirestore.instance
           .collection('visitors')
@@ -190,7 +190,12 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
           final data = d.data();
           final vN = (data['visitorName'] ?? '').toString().trim().toLowerCase();
           final vStatus = data['status']?.toString();
-          return vStatus == 'CHECKED_IN' &&
+          final approval = data['approvalStatus']?.toString().toUpperCase();
+          final isEligible = vStatus == 'WAITING_APPROVAL' ||
+              vStatus == 'PENDING' ||
+              approval == 'PENDING' ||
+              vStatus == 'CHECKED_IN';
+          return isEligible &&
               (vN == _visitorName.trim().toLowerCase() ||
                   vN.contains(_visitorName.trim().toLowerCase()) ||
                   _visitorName.trim().toLowerCase().contains(vN));
@@ -203,10 +208,14 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
           return;
         }
 
-        final checkedIn = snap.docs.where((d) => d.data()['status'] == 'CHECKED_IN').toList();
-        if (checkedIn.isNotEmpty) {
-          _visitorDocId = checkedIn.last.id;
-          _photoUrl ??= checkedIn.last.data()['photoUrl']?.toString();
+        final pendingOrActive = snap.docs.where((d) {
+          final st = d.data()['status']?.toString();
+          final appSt = d.data()['approvalStatus']?.toString().toUpperCase();
+          return st == 'WAITING_APPROVAL' || st == 'PENDING' || appSt == 'PENDING' || st == 'CHECKED_IN';
+        }).toList();
+        if (pendingOrActive.isNotEmpty) {
+          _visitorDocId = pendingOrActive.last.id;
+          _photoUrl ??= pendingOrActive.last.data()['photoUrl']?.toString();
           _bindVisitorStream(_visitorDocId!);
         }
       }

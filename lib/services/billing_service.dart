@@ -209,6 +209,10 @@ class BillingService {
       }
     }
 
+    // Construct a unique payment reference incorporating the voucher code to guarantee
+    // uniqueness and eliminate ID collisions across multiple cash collections (BUG-24).
+    final cashRefId = 'CASH-$voucherCode';
+
     batch.update(dueRef, {
       'status': 'PAID_OFFLINE_VERIFIED',
       'receiptNumber': voucherCode,
@@ -217,8 +221,8 @@ class BillingService {
       'verifiedBy': recordedBy,
       'paymentCategory': 'OFFLINE',
       'paymentMode': 'Cash to Cashier',
-      'uniqueId': 'CASH-OFFICE',
-      'referenceNumber': 'CASH-OFFICE',
+      'uniqueId': cashRefId,
+      'referenceNumber': cashRefId,
       'cashierNotes': notes,
     });
 
@@ -233,10 +237,10 @@ class BillingService {
       'paidToOrReceivedFrom': 'Flat $normFlat',
       'paymentDate': FieldValue.serverTimestamp(),
       'paymentMode': 'Cash',
-      'referenceNumber': 'CASH-OFFICE',
+      'referenceNumber': cashRefId,
       'description': 'Cash collection for $month from Flat $normFlat ($notes)',
       'linkedDueId': dueId,
-      'uniqueId': 'CASH-OFFICE',
+      'uniqueId': cashRefId,
       'paymentCategory': 'OFFLINE',
       'recordedBy': recordedBy,
       'createdAt': FieldValue.serverTimestamp(),
@@ -348,6 +352,7 @@ class BillingService {
     }
     final primaryData = primaryDueDoc.data() ?? {};
     final String parentId = (primaryData['multiMonthParentDueId'] ?? dueId).toString();
+    final String uniqueId = (primaryData['uniqueId'] ?? primaryData['utrNumber'] ?? '').toString();
 
     // 2. Fetch all sibling dues belonging to this payment group
     final relatedDuesSnap = await _fs
@@ -394,14 +399,45 @@ class BillingService {
       });
     }
 
-    // 4. Atomically remove linked ledger transaction records for all linked dues
+    // 4. Atomically remove linked ledger transaction records for all linked dues,
+    // as well as parent due IDs and unique payment references (BUG-11).
+    // Ledger entries may have been created under the primary/parent due ID or the unique UTR.
+    final Set<String> processedTxnDocIds = {};
     for (final id in allDueIds) {
       final txSnap = await _fs
           .collection('society_transactions')
           .where('linkedDueId', isEqualTo: id)
           .get();
       for (final doc in txSnap.docs) {
-        batch.delete(doc.reference);
+        if (processedTxnDocIds.add(doc.id)) {
+          batch.delete(doc.reference);
+        }
+      }
+    }
+
+    // Also purge transactions linked via parent due ID to prevent orphaned income when resetting a sibling due
+    if (parentId.isNotEmpty) {
+      final parentTxSnap = await _fs
+          .collection('society_transactions')
+          .where('linkedParentDueId', isEqualTo: parentId)
+          .get();
+      for (final doc in parentTxSnap.docs) {
+        if (processedTxnDocIds.add(doc.id)) {
+          batch.delete(doc.reference);
+        }
+      }
+    }
+
+    // Purge transactions matching unique transaction reference / UTR
+    if (uniqueId.isNotEmpty && uniqueId != 'N/A') {
+      final uniqueTxSnap = await _fs
+          .collection('society_transactions')
+          .where('uniqueId', isEqualTo: uniqueId)
+          .get();
+      for (final doc in uniqueTxSnap.docs) {
+        if (processedTxnDocIds.add(doc.id)) {
+          batch.delete(doc.reference);
+        }
       }
     }
 
@@ -523,6 +559,40 @@ class BillingService {
       monthConfigs: monthConfigs,
       fine: dueFine,
     );
+
+    // SEC-03: Validate that client-submitted total amount matches the computed breakdown within 1 rupee tolerance
+    final double expectedTotal = isParkingOnlyPrimary
+        ? CurrencyMath.roundPaise(((extraResidentData?['carParkingCharges'] as num?)?.toDouble() ?? 0.0) +
+            ((extraResidentData?['bikeParkingCharges'] as num?)?.toDouble() ?? 0.0))
+        : (breakdown['totalAmount'] as num).toDouble();
+    if ((totalAmount - expectedTotal).abs() > 1.0) {
+      throw Exception(
+        'Submitted payment amount (${AppFormatters.currency(totalAmount)}) does not match calculated bill amount (${AppFormatters.currency(expectedTotal)}). Submission rejected.',
+      );
+    }
+
+    // BUG-23: Prevent duplicate UTR submission across flats or already verified dues
+    final trimmedUniqueId = uniqueId.trim();
+    if (trimmedUniqueId.isNotEmpty &&
+        trimmedUniqueId != 'N/A' &&
+        !trimmedUniqueId.toUpperCase().startsWith('OFFLINE-') &&
+        !trimmedUniqueId.toUpperCase().startsWith('CASH-')) {
+      final existingUtrSnap = await _fs
+          .collection('maintenance_dues')
+          .where('uniqueId', isEqualTo: trimmedUniqueId)
+          .limit(1)
+          .get();
+      if (existingUtrSnap.docs.isNotEmpty) {
+        final existingDoc = existingUtrSnap.docs.first;
+        final existingFlat = (existingDoc.data()['flatNumber'] ?? '').toString();
+        final existingStatus = (existingDoc.data()['status'] ?? '').toString().toUpperCase();
+        if (existingStatus.startsWith('PAID') || existingFlat != normFlat) {
+          throw Exception(
+            'This transaction reference / UTR ($trimmedUniqueId) has already been processed or claimed ($existingStatus by Flat $existingFlat).',
+          );
+        }
+      }
+    }
 
     final maintenanceMonths = List<String>.from(breakdown['maintenanceMonths'] as List);
     final parkingMonths = List<String>.from(breakdown['parkingMonths'] as List);

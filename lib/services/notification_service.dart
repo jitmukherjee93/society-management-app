@@ -27,6 +27,19 @@ import '../utils/flat_utils.dart';
 class NotificationService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  // In-memory cache mapping normalized flat numbers to resolved UID and email.
+  // Prevents N+1 database reads when dispatching notifications across flats (BUG-28).
+  static final Map<String, ({String uid, String? email})> _flatUserCache = {};
+
+  /// Invalidates the flat user cache, or clears specific flat if provided.
+  static void invalidateFlatUserCache([String? flat]) {
+    if (flat != null) {
+      _flatUserCache.remove(FlatUtils.normalize(flat));
+    } else {
+      _flatUserCache.clear();
+    }
+  }
+
   /// Dispatches a notification to a specific resident identified by [flatNumber] and/or [targetUid].
   ///
   /// - Automatically resolves the resident's user document and email if only [flatNumber] is provided.
@@ -51,18 +64,30 @@ class NotificationService {
       if (resolvedUid != null) targetUids.add(resolvedUid);
 
       if (resolvedUid == null && normFlat.isNotEmpty) {
-        final usersSnap = await _firestore
-            .collection('users')
-            .where('flatNumber', isEqualTo: normFlat)
-            .limit(1)
-            .get();
-
-        if (usersSnap.docs.isNotEmpty) {
-          final uDoc = usersSnap.docs.first;
-          resolvedUid = uDoc.id;
+        // Check cache first to avoid redundant round-trip database queries (BUG-28)
+        if (_flatUserCache.containsKey(normFlat)) {
+          final cached = _flatUserCache[normFlat]!;
+          resolvedUid = cached.uid;
           targetUids.add(resolvedUid);
-          resolvedEmail = uDoc.data()['email']?.toString();
+          resolvedEmail = cached.email;
           if (resolvedEmail != null) targetUids.add(resolvedEmail);
+        } else {
+          final usersSnap = await _firestore
+              .collection('users')
+              .where('flatNumber', isEqualTo: normFlat)
+              .limit(1)
+              .get();
+
+          if (usersSnap.docs.isNotEmpty) {
+            final uDoc = usersSnap.docs.first;
+            resolvedUid = uDoc.id;
+            targetUids.add(resolvedUid);
+            resolvedEmail = uDoc.data()['email']?.toString();
+            if (resolvedEmail != null) targetUids.add(resolvedEmail);
+
+            // Populate cache for subsequent notification dispatches
+            _flatUserCache[normFlat] = (uid: resolvedUid, email: resolvedEmail);
+          }
         }
       }
 

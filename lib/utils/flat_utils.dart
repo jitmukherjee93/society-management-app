@@ -89,6 +89,24 @@ class FlatUtils {
     }
     return keys;
   }
+
+  /// Canonical occupant classification helper.
+  /// Determines if a user role or occupantType corresponds to a tenant/rentee.
+  /// Centralizes logic previously duplicated across administrative views (ARCH-03).
+  static bool isRentee(dynamic roleOrType) {
+    if (roleOrType == null) return false;
+    final s = roleOrType.toString().trim().toLowerCase();
+    return s == 'rentee' || s == 'tenant' || s == 'resident';
+  }
+
+  /// Canonical occupant classification helper.
+  /// Determines if a user role or occupantType corresponds to an owner/landlord.
+  /// Centralizes logic previously duplicated across administrative views (ARCH-03).
+  static bool isOwner(dynamic roleOrType) {
+    if (roleOrType == null) return false;
+    final s = roleOrType.toString().trim().toLowerCase();
+    return s == 'owner' || s == 'landlord';
+  }
 }
 
 

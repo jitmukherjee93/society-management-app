@@ -3883,6 +3883,21 @@ class MaintenanceTab extends StatefulWidget {
 
 class _MaintenanceTabState extends State<MaintenanceTab> {
   final _currencyFmt = AppFormatters.currencyFormat;
+  Future<DocumentReference?>? _userDocRefFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    // Cache user document reference future in initState to avoid re-querying Firestore on every build (BUG-20)
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final userEmail = user.email?.toLowerCase();
+      final flatPrefix = userEmail?.contains('@') == true
+          ? userEmail!.split('@').first.toLowerCase()
+          : null;
+      _userDocRefFuture = _resolveUserDocRef(user.uid, userEmail, flatPrefix);
+    }
+  }
 
   void _showReceiptDialog(BuildContext context, Map<String, dynamic> dueData, String receiptNumber, String? paidDateStr) {
     ReceiptPreviewDialog.show(
@@ -4085,7 +4100,7 @@ class _MaintenanceTabState extends State<MaintenanceTab> {
         : null;
 
     return FutureBuilder<DocumentReference?>(
-      future: _resolveUserDocRef(user.uid, userEmail, flatPrefix),
+      future: _userDocRefFuture ?? _resolveUserDocRef(user.uid, userEmail, flatPrefix),
       builder: (context, docRefSnap) {
         if (docRefSnap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -6532,6 +6547,21 @@ class ResidentHelpdeskTab extends StatefulWidget {
 }
 
 class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
+  Stream<QuerySnapshot>? _complaintsStream;
+
+  @override
+  void initState() {
+    super.initState();
+    // Cache complaints stream in initState to avoid re-creating Firestore subscriptions on rebuild (BUG-20)
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      _complaintsStream = FirebaseFirestore.instance
+          .collection('complaints')
+          .where('residentUid', isEqualTo: uid)
+          .snapshots();
+    }
+  }
+
   Future<void> _showRaiseTicketDialog() async {
     final titleController = TextEditingController();
     final descController = TextEditingController();
@@ -6646,10 +6676,13 @@ class _ResidentHelpdeskTabState extends State<ResidentHelpdeskTab> {
     
     return Scaffold(
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('complaints')
-            .where('residentUid', isEqualTo: uid)
-            .snapshots(),
+        stream: _complaintsStream ??
+            (uid != null
+                ? FirebaseFirestore.instance
+                    .collection('complaints')
+                    .where('residentUid', isEqualTo: uid)
+                    .snapshots()
+                : const Stream.empty()),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: AppColors.error)));
