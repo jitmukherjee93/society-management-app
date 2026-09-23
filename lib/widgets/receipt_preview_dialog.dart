@@ -83,9 +83,10 @@ class ReceiptPreviewDialog extends StatefulWidget {
     }
 
     final List<String> parts = [];
-    final cleanCar = (carReg ?? '').toString().trim();
-    final cleanBike = (bikeReg ?? '').toString().trim();
-    final cleanBike2 = (bike2Reg ?? '').toString().trim();
+    // Auto-capitalize vehicle registration strings for receipt display & PDF generation
+    final cleanCar = (carReg ?? '').toString().trim().toUpperCase();
+    final cleanBike = (bikeReg ?? '').toString().trim().toUpperCase();
+    final cleanBike2 = (bike2Reg ?? '').toString().trim().toUpperCase();
 
     if (carAmt > 0 && isValid(cleanCar)) {
       parts.add('4W: $cleanCar');

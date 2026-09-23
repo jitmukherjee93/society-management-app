@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 /// Centralized Date and Currency formatters across the application
@@ -46,5 +47,37 @@ class AppFormatters {
   static DateFormat get dateFormat => _dateFmt;
   static DateFormat get dateTimeFormat => _dateTimeFmt;
   static DateFormat get guardTimeFormat => _guardTimeFmt;
+
+  /// Centralized TextInputFormatter to automatically force uppercase letters
+  /// in real-time as users type or paste text into vehicle number fields.
+  static final TextInputFormatter upperCaseFormatter = UpperCaseTextFormatter();
+
+  /// Canonical normalization utility for vehicle registration numbers throughout the app.
+  /// Trims leading/trailing whitespace and converts all characters to uppercase.
+  /// Returns empty string if the provided vehicle string is null or empty.
+  static String vehicleNumber(String? reg) {
+    if (reg == null) return '';
+    return reg.trim().toUpperCase();
+  }
+}
+
+/// Custom TextInputFormatter that automatically transforms any lowercase character
+/// to uppercase in real-time while preserving cursor/selection position.
+class UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    // If the text is already uppercase or empty, return unchanged
+    if (newValue.text.isEmpty || newValue.text == newValue.text.toUpperCase()) {
+      return newValue;
+    }
+    // Convert text to uppercase while preserving user selection/cursor offset
+    return newValue.copyWith(
+      text: newValue.text.toUpperCase(),
+      selection: newValue.selection,
+    );
+  }
 }
 

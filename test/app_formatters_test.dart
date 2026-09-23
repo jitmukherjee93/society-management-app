@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:society_management/utils/app_formatters.dart';
 
@@ -40,6 +41,42 @@ void main() {
       final dt = DateTime(2026, 9, 14, 10, 30);
       expect(AppFormatters.guardTime(dt), '10:30 AM, 14 Sep');
       expect(AppFormatters.guardTime(null), '');
+    });
+
+    test('vehicleNumber normalizes and auto-capitalizes registration numbers', () {
+      expect(AppFormatters.vehicleNumber(null), '');
+      expect(AppFormatters.vehicleNumber(''), '');
+      expect(AppFormatters.vehicleNumber('   '), '');
+      expect(AppFormatters.vehicleNumber('dl 01 ab 1234'), 'DL 01 AB 1234');
+      expect(AppFormatters.vehicleNumber('  wb02cd5678  '), 'WB02CD5678');
+      expect(AppFormatters.vehicleNumber('Mh-12-de-9999'), 'MH-12-DE-9999');
+    });
+
+    test('UpperCaseTextFormatter converts lowercase input to uppercase preserving selection', () {
+      final formatter = AppFormatters.upperCaseFormatter;
+      const oldValue = TextEditingValue(text: '');
+      const newValue = TextEditingValue(
+        text: 'wb06a1234',
+        selection: TextSelection.collapsed(offset: 9),
+      );
+
+      final result = formatter.formatEditUpdate(oldValue, newValue);
+      expect(result.text, 'WB06A1234');
+      expect(result.selection.baseOffset, 9);
+      expect(result.selection.extentOffset, 9);
+    });
+
+    test('UpperCaseTextFormatter returns unchanged value when text is already uppercase', () {
+      final formatter = AppFormatters.upperCaseFormatter;
+      const oldValue = TextEditingValue(text: 'WB06');
+      const newValue = TextEditingValue(
+        text: 'WB06A',
+        selection: TextSelection.collapsed(offset: 5),
+      );
+
+      final result = formatter.formatEditUpdate(oldValue, newValue);
+      expect(result.text, 'WB06A');
+      expect(result.selection.baseOffset, 5);
     });
   });
 }

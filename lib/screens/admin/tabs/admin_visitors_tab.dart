@@ -533,7 +533,8 @@ class _AdminVisitorsTabState extends State<AdminVisitorsTab> {
     final phone = (data['phone'] ?? '').toString().trim();
     final flatNumber = (data['hostFlatNumber'] ?? data['flatNumber'] ?? '').toString().trim();
     final purpose = (data['purpose'] ?? 'Guest / Personal').toString().trim();
-    final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim();
+    // Auto-capitalize vehicle registration number for admin card display
+    final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim().toUpperCase();
     final isComingByCar = data['isComingByCar'] == true || vehicleNumber.isNotEmpty;
     final photoUrl = data['photoUrl']?.toString();
     final passCode = data['passCode']?.toString();
@@ -906,7 +907,8 @@ class _AdminVisitorsTabState extends State<AdminVisitorsTab> {
     final phone = (data['phone'] ?? 'N/A').toString().trim();
     final flatNumber = (data['hostFlatNumber'] ?? data['flatNumber'] ?? 'N/A').toString().trim();
     final purpose = (data['purpose'] ?? 'Guest / Personal').toString().trim();
-    final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim();
+    // Auto-capitalize vehicle registration number for admin details dialog
+    final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim().toUpperCase();
     final isComingByCar = data['isComingByCar'] == true || vehicleNumber.isNotEmpty;
     final photoUrl = data['photoUrl']?.toString();
     final passCode = data['passCode']?.toString();

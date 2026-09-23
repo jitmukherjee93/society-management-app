@@ -65,10 +65,29 @@ class PushNotificationPayload {
       type.toUpperCase().contains('OVERSTAY') ||
       title.toUpperCase().contains('OVERSTAY');
 
-  /// Returns `true` if this is a gate visitor entry request requiring resident action.
-  bool get isVisitorApprovalRequest =>
-      type == 'VISITOR_CHECK_IN' &&
-      (extraData['approvalStatus'] == 'PENDING' || extraData['isWalkIn'] == true || extraData['isWalkIn'] == 'true');
+  /// Returns `true` if this is an incoming walk-in visitor entry request currently requiring resident action.
+  /// If the visitor request has already been approved, denied, left at gate, or checked out,
+  /// this returns `false` so stale notifications do not launch the full-screen clearance dialog.
+  /// Safely resolves metadata from both direct extraData and nested extraData['extraData'] (as stored in Firestore).
+  bool get isVisitorApprovalRequest {
+    if (type != 'VISITOR_CHECK_IN') return false;
+    final nested = extraData['extraData'] is Map ? extraData['extraData'] as Map : null;
+    final appStatus = (extraData['approvalStatus'] ?? nested?['approvalStatus'] ?? '').toString().toUpperCase();
+    // If visitor request was already resolved, clearance action is no longer required
+    if (appStatus == 'APPROVED' || appStatus == 'DENIED' || appStatus == 'LEAVE_AT_GATE') {
+      return false;
+    }
+    // If the visitor has already checked out or left, do not treat as an active clearance request
+    final st = (extraData['status'] ?? nested?['status'] ?? '').toString().toUpperCase();
+    if (st == 'CHECKED_OUT' || st == 'DENIED') {
+      return false;
+    }
+    final isWalkIn = extraData['isWalkIn'] == true ||
+        extraData['isWalkIn'] == 'true' ||
+        nested?['isWalkIn'] == true ||
+        nested?['isWalkIn'] == 'true';
+    return appStatus == 'PENDING' || isWalkIn;
+  }
 
   /// Returns `true` if this is a maintenance bill or payment confirmation.
   bool get isPaymentOrBill =>

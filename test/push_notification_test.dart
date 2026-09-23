@@ -45,6 +45,62 @@ void main() {
       expect(payload.isEmergency, isFalse);
     });
 
+    test('Resolved and checked-out visitor payloads are not treated as active clearance requests', () {
+      // Test 1: Visitor already approved
+      final approvedPayload = PushNotificationPayload(
+        id: 'notif-2a',
+        title: 'Visitor At Gate: Swiggy Courier',
+        message: 'Delivery executive has arrived.',
+        type: 'VISITOR_CHECK_IN',
+        extraData: {
+          'approvalStatus': 'APPROVED',
+          'isWalkIn': true,
+          'visitorName': 'Swiggy',
+        },
+      );
+      expect(approvedPayload.isVisitorApprovalRequest, isFalse);
+
+      // Test 2: Visitor entry denied
+      final deniedPayload = PushNotificationPayload(
+        id: 'notif-2b',
+        title: 'Visitor At Gate: Unknown',
+        message: 'Visitor denied.',
+        type: 'VISITOR_CHECK_IN',
+        extraData: {
+          'approvalStatus': 'DENIED',
+          'isWalkIn': true,
+        },
+      );
+      expect(deniedPayload.isVisitorApprovalRequest, isFalse);
+
+      // Test 3: Visitor marked leave at gate
+      final leaveAtGatePayload = PushNotificationPayload(
+        id: 'notif-2c',
+        title: 'Visitor At Gate: Amazon',
+        message: 'Package left at gate.',
+        type: 'VISITOR_CHECK_IN',
+        extraData: {
+          'approvalStatus': 'LEAVE_AT_GATE',
+          'isWalkIn': true,
+          'pickupOtp': '4512',
+        },
+      );
+      expect(leaveAtGatePayload.isVisitorApprovalRequest, isFalse);
+
+      // Test 4: Visitor already checked out of campus
+      final checkedOutPayload = PushNotificationPayload(
+        id: 'notif-2d',
+        title: 'Guest Departed: Swiggy Courier',
+        message: 'Delivery executive has left campus.',
+        type: 'VISITOR_CHECK_OUT',
+        extraData: {
+          'status': 'CHECKED_OUT',
+          'visitorName': 'Swiggy',
+        },
+      );
+      expect(checkedOutPayload.isVisitorApprovalRequest, isFalse);
+    });
+
     test('Maintenance bill and payment approval identification', () {
       final billPayload = PushNotificationPayload(
         id: 'notif-3',

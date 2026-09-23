@@ -8,6 +8,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import '../../../utils/flat_utils.dart';
+import '../../../utils/app_formatters.dart';
 import '../../../widgets/form_helpers.dart';
 import '../../../utils/storage_utils.dart';
 import '../../../widgets/document_preview_dialog.dart';
@@ -181,17 +182,18 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
             final isCarOwner = carOwnerIndex != -1 && row.length > carOwnerIndex
                 ? row[carOwnerIndex].toString().trim().toLowerCase() == 'yes'
                 : false;
+            // Auto-capitalize vehicle registrations from CSV input to ensure clean uppercase storage
             final carReg = carRegIndex != -1 && row.length > carRegIndex
-                ? row[carRegIndex].toString().trim()
+                ? AppFormatters.vehicleNumber(row[carRegIndex].toString())
                 : '';
             final isBikeOwner = bikeOwnerIndex != -1 && row.length > bikeOwnerIndex
                 ? row[bikeOwnerIndex].toString().trim().toLowerCase() == 'yes'
                 : false;
             final bikeReg = bikeRegIndex != -1 && row.length > bikeRegIndex
-                ? row[bikeRegIndex].toString().trim()
+                ? AppFormatters.vehicleNumber(row[bikeRegIndex].toString())
                 : '';
             final bike2Reg = bike2RegIndex != -1 && row.length > bike2RegIndex
-                ? row[bike2RegIndex].toString().trim()
+                ? AppFormatters.vehicleNumber(row[bike2RegIndex].toString())
                 : '';
             final bool hasBike2 = isBikeOwner && bike2Reg.isNotEmpty;
 
@@ -941,11 +943,12 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                                 mobileCtrl.text.trim(),
                                 selectedBlock ?? '',
                                 isCarOwner == 'Yes',
-                                carRegCtrl.text.trim(),
+                                // Auto-capitalize vehicle registration when registering owner
+                                AppFormatters.vehicleNumber(carRegCtrl.text),
                                 isBikeOwner == 'Yes',
-                                bikeRegCtrl.text.trim(),
+                                AppFormatters.vehicleNumber(bikeRegCtrl.text),
                                 hasBike2: hasBike2 && isBikeOwner == 'Yes',
-                                bike2Reg: (hasBike2 && isBikeOwner == 'Yes') ? bike2RegCtrl.text.trim() : '',
+                                bike2Reg: (hasBike2 && isBikeOwner == 'Yes') ? AppFormatters.vehicleNumber(bike2RegCtrl.text) : '',
                                 email: emailCtrl.text.trim(),
                               );
                               if (dialogCtx.mounted) {
@@ -1189,11 +1192,12 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                                 mobileCtrl.text.trim(),
                                 block,
                                 isCarOwner == 'Yes',
-                                carRegCtrl.text.trim(),
+                                // Auto-capitalize vehicle registration when registering rentee/tenant
+                                AppFormatters.vehicleNumber(carRegCtrl.text),
                                 isBikeOwner == 'Yes',
-                                bikeRegCtrl.text.trim(),
+                                AppFormatters.vehicleNumber(bikeRegCtrl.text),
                                 hasBike2: hasBike2 && isBikeOwner == 'Yes',
-                                bike2Reg: (hasBike2 && isBikeOwner == 'Yes') ? bike2RegCtrl.text.trim() : '',
+                                bike2Reg: (hasBike2 && isBikeOwner == 'Yes') ? AppFormatters.vehicleNumber(bike2RegCtrl.text) : '',
                                 role: 'Rentee',
                                 email: emailCtrl.text.trim(),
                                 rentAgreementUrl: downloadUrl,
@@ -1412,11 +1416,12 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
                                 'phone': '+91${mobileCtrl.text.trim()}',
                                 'whatsapp': waCtrl.text.trim(),
                                 'isCarOwner': isCarOwner == 'Yes',
-                                'carReg': isCarOwner == 'Yes' ? carRegCtrl.text.trim() : '',
+                                // Auto-capitalize vehicle registration upon member edit
+                                'carReg': isCarOwner == 'Yes' ? AppFormatters.vehicleNumber(carRegCtrl.text) : '',
                                 'isBikeOwner': isBikeOwner == 'Yes',
-                                'bikeReg': isBikeOwner == 'Yes' ? bikeRegCtrl.text.trim() : '',
+                                'bikeReg': isBikeOwner == 'Yes' ? AppFormatters.vehicleNumber(bikeRegCtrl.text) : '',
                                 'hasBike2': isBikeOwner == 'Yes' && hasBike2,
-                                'bike2Reg': (isBikeOwner == 'Yes' && hasBike2) ? bike2RegCtrl.text.trim() : '',
+                                'bike2Reg': (isBikeOwner == 'Yes' && hasBike2) ? AppFormatters.vehicleNumber(bike2RegCtrl.text) : '',
                               };
                               if (isCarOwner == 'No') {
                                 updateData['pendingCarReg'] = FieldValue.delete();
@@ -1553,8 +1558,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
       String? approvedReg;
 
       if (vehicleType == 'Car') {
-        approvedReg = userData['pendingCarReg']?.toString().trim();
-        if (approvedReg != null && approvedReg.isNotEmpty) {
+        // Ensure approved vehicle registration is auto-capitalized
+        approvedReg = AppFormatters.vehicleNumber(userData['pendingCarReg']?.toString());
+        if (approvedReg.isNotEmpty) {
           updateData['carReg'] = approvedReg;
           updateData['isCarOwner'] = true;
           if (userData['pendingCarRcUrl'] != null) {
@@ -1567,8 +1573,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         updateData['pendingCarRcFileName'] = FieldValue.delete();
         updateData['carRejectionReason'] = FieldValue.delete();
       } else if (vehicleType == 'Bike 1' || vehicleType == 'Bike') {
-        approvedReg = userData['pendingBikeReg']?.toString().trim();
-        if (approvedReg != null && approvedReg.isNotEmpty) {
+        // Ensure approved vehicle registration is auto-capitalized
+        approvedReg = AppFormatters.vehicleNumber(userData['pendingBikeReg']?.toString());
+        if (approvedReg.isNotEmpty) {
           updateData['bikeReg'] = approvedReg;
           updateData['isBikeOwner'] = true;
           if (userData['pendingBikeRcUrl'] != null) {
@@ -1581,8 +1588,9 @@ class _ManageSocietyTabState extends State<ManageSocietyTab> {
         updateData['pendingBikeRcFileName'] = FieldValue.delete();
         updateData['bikeRejectionReason'] = FieldValue.delete();
       } else if (vehicleType == 'Bike 2') {
-        approvedReg = userData['pendingBike2Reg']?.toString().trim();
-        if (approvedReg != null && approvedReg.isNotEmpty) {
+        // Ensure approved vehicle registration is auto-capitalized
+        approvedReg = AppFormatters.vehicleNumber(userData['pendingBike2Reg']?.toString());
+        if (approvedReg.isNotEmpty) {
           updateData['bike2Reg'] = approvedReg;
           updateData['hasBike2'] = true;
           if (userData['pendingBike2RcUrl'] != null) {

@@ -34,16 +34,17 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun configureScreenAndLockFlags() {
+        // Configure window flags so full-screen incoming visitor doorbell popups and urgent alerts
+        // appear directly over the lockscreen and turn the display on without requesting keyguard dismissal.
+        // Calling requestDismissKeyguard forces a PIN/biometric prompt, which blocks user interaction
+        // with the Approve/Deny buttons over the lockscreen.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-            keyguardManager?.requestDismissKeyguard(this, null)
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             )

@@ -302,7 +302,8 @@ class VisitorPassService {
       final purpose = (data['purpose'] ?? 'Guest / Personal').toString().trim();
       final residentUid = data['residentUid']?.toString() ?? data['hostUid']?.toString();
       final phone = (data['phone'] ?? '').toString().trim();
-      final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim();
+      // Auto-capitalize vehicle registration for arrival notification message
+      final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim().toUpperCase();
       final isComingByCar = data['isComingByCar'] == true || vehicleNumber.isNotEmpty;
       final gate = gateName ?? 'Main Gate';
       final guard = guardName ?? 'Security Guard';
@@ -573,7 +574,8 @@ class VisitorPassService {
       final purpose = (data['purpose'] ?? 'Guest / Personal').toString().trim();
       final residentUid = data['residentUid']?.toString() ?? data['hostUid']?.toString();
       final phone = (data['phone'] ?? '').toString().trim();
-      final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim();
+      // Auto-capitalize vehicle registration for exit notification message
+      final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim().toUpperCase();
       final isComingByCar = data['isComingByCar'] == true || vehicleNumber.isNotEmpty;
       final gate = gateName ?? data['gateName']?.toString() ?? 'Main Gate';
       final guard = guardName ?? data['guardName']?.toString() ?? 'Security Guard';

@@ -11,6 +11,7 @@ import '../../services/visitor_pass_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/push_notification_manager.dart';
 import '../../utils/flat_utils.dart';
+import '../../utils/app_formatters.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/app_feedback.dart';
@@ -360,7 +361,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
     final flat = (data['flatNumber'] ?? data['hostFlatNumber'] ?? 'General').toString();
     final purpose = (data['purpose'] ?? 'Guest').toString();
     final phone = (data['phone'] ?? '').toString().trim();
-    final vehicle = (data['vehicleNumber'] ?? '').toString().trim();
+    // Auto-capitalize vehicle registration for consistent uppercase display
+    final vehicle = AppFormatters.vehicleNumber(data['vehicleNumber']?.toString());
     final photoUrl = (data['photoUrl'] ?? '').toString().trim();
     final entryTime = (data['entryTime'] is Timestamp)
         ? (data['entryTime'] as Timestamp).toDate()
@@ -703,7 +705,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
     final name = _walkInNameCtrl.text.trim();
     final phone = _walkInPhoneCtrl.text.trim();
     final flatNo = _walkInFlatNoCtrl.text.trim();
-    final vehicle = _walkInVehicleCtrl.text.trim().toUpperCase();
+    // Auto-capitalize vehicle registration to ensure consistent uppercase storage
+    final vehicle = AppFormatters.vehicleNumber(_walkInVehicleCtrl.text);
     final isDelivery = _walkInPurpose == 'Delivery / Courier';
     final isCab = _walkInPurpose == 'Cab / Taxi';
 
@@ -2293,7 +2296,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
                       if ((_verifiedVisitorData!['phone']?.toString() ?? '').isNotEmpty)
                         _buildDetailRow('Mobile', _verifiedVisitorData!['phone'].toString()),
                       if ((_verifiedVisitorData!['vehicleNumber']?.toString() ?? '').isNotEmpty)
-                        _buildDetailRow('Vehicle', _verifiedVisitorData!['vehicleNumber'].toString())
+                        _buildDetailRow('Vehicle', AppFormatters.vehicleNumber(_verifiedVisitorData!['vehicleNumber']?.toString()))
                       else if (_verifiedVisitorData!['isComingByCar'] == true)
                         _buildDetailRow('Vehicle', 'Arriving by Car (No reg entered)'),
                       const SizedBox(height: 20),
@@ -2465,7 +2468,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
                               if (sName.isNotEmpty) _walkInNameCtrl.text = sName;
 
                               final sVehicle = _frequentVisitorData!['vehicleNumber']?.toString() ?? '';
-                              if (sVehicle.isNotEmpty) _walkInVehicleCtrl.text = sVehicle;
+                              // Auto-capitalize vehicle registration when autofilling from frequent visitor record
+                              if (sVehicle.isNotEmpty) _walkInVehicleCtrl.text = AppFormatters.vehicleNumber(sVehicle);
 
                               final sPurpose = _frequentVisitorData!['purpose']?.toString() ?? '';
                               if (sPurpose.isNotEmpty) _walkInPurpose = sPurpose;
@@ -2662,6 +2666,9 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 // Vehicle Number (Mandatory for Delivery & Cab; Optional for Maid, Guest, etc.)
                 TextFormField(
                   controller: _walkInVehicleCtrl,
+                  // Auto-capitalize vehicle registration as the security guard types
+                  textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [AppFormatters.upperCaseFormatter],
                   decoration: InputDecoration(
                     labelText: (_walkInPurpose == 'Delivery / Courier' || _walkInPurpose == 'Cab / Taxi')
                         ? 'Vehicle Number (Mandatory) *'
@@ -3019,7 +3026,8 @@ class _GuardDashboardState extends State<GuardDashboard> {
                               final phone = (data['phone'] ?? '').toString().trim();
                               final flat = data['flatNumber'] ?? 'General';
                               final purpose = data['purpose'] ?? 'Guest';
-                              final vehicle = data['vehicleNumber'] ?? '';
+                              // Auto-capitalize vehicle registration for in-campus visitor display
+                              final vehicle = AppFormatters.vehicleNumber(data['vehicleNumber']?.toString());
                               final entryTime = (data['entryTime'] as Timestamp?)?.toDate();
                               final entryStr = entryTime != null ? DateFormat('hh:mm a').format(entryTime) : 'Just now';
 

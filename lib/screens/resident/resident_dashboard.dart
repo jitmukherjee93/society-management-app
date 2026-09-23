@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../models/accounting_heads.dart';
 import '../../constants/society_config.dart';
 import '../../utils/app_formatters.dart';
@@ -1367,6 +1368,8 @@ class _HomeTabState extends State<HomeTab> {
                           border: OutlineInputBorder(),
                         ),
                         textCapitalization: TextCapitalization.characters,
+                        // Force real-time auto-capitalization of car registration as user types
+                        inputFormatters: [AppFormatters.upperCaseFormatter],
                         validator: (v) {
                           if (isCarOwner && (v == null || v.trim().isEmpty)) {
                             return 'Please enter car registration number';
@@ -1479,6 +1482,8 @@ class _HomeTabState extends State<HomeTab> {
                           border: OutlineInputBorder(),
                         ),
                         textCapitalization: TextCapitalization.characters,
+                        // Force real-time auto-capitalization of bike 1 registration as user types
+                        inputFormatters: [AppFormatters.upperCaseFormatter],
                         validator: (v) {
                           if (isBikeOwner && (v == null || v.trim().isEmpty)) {
                             return 'Please enter bike registration number';
@@ -1567,6 +1572,8 @@ class _HomeTabState extends State<HomeTab> {
                                   border: OutlineInputBorder(),
                                 ),
                                 textCapitalization: TextCapitalization.characters,
+                                // Force real-time auto-capitalization of bike 2 registration as user types
+                                inputFormatters: [AppFormatters.upperCaseFormatter],
                                 validator: (v) {
                                   if (isBikeOwner && hasBike2 && (v == null || v.trim().isEmpty)) {
                                     return 'Please enter Bike 2 registration number';
@@ -1671,9 +1678,10 @@ class _HomeTabState extends State<HomeTab> {
                   : () async {
                       if (!formKey.currentState!.validate()) return;
 
-                      final newCarReg = isCarOwner ? carRegCtrl.text.trim().toUpperCase() : '';
-                      final newBikeReg = isBikeOwner ? bikeRegCtrl.text.trim().toUpperCase() : '';
-                      final newBike2Reg = (isBikeOwner && hasBike2) ? bike2RegCtrl.text.trim().toUpperCase() : '';
+                      // Auto-capitalize vehicle registration strings for saving and notifications
+                      final newCarReg = isCarOwner ? AppFormatters.vehicleNumber(carRegCtrl.text) : '';
+                      final newBikeReg = isBikeOwner ? AppFormatters.vehicleNumber(bikeRegCtrl.text) : '';
+                      final newBike2Reg = (isBikeOwner && hasBike2) ? AppFormatters.vehicleNumber(bike2RegCtrl.text) : '';
 
                       final existingPendingCar = data['pendingCarReg']?.toString().trim() ?? '';
                       final isNewCarSubmission = newCarReg.isNotEmpty && (newCarReg != currentCarReg || carRcFile != null);
@@ -2002,21 +2010,22 @@ class _HomeTabState extends State<HomeTab> {
     final whatsapp = data?['whatsapp'] ?? 'N/A';
     final email = data?['email'] ?? 'N/A';
     final bool isCarOwner = data?['isCarOwner'] == true;
-    final String carReg = data?['carReg']?.toString().trim() ?? '';
+    // Auto-capitalize vehicle registration numbers for profile card display
+    final String carReg = AppFormatters.vehicleNumber(data?['carReg']?.toString());
     final bool isBikeOwner = data?['isBikeOwner'] == true;
-    final String bikeReg = data?['bikeReg']?.toString().trim() ?? '';
+    final String bikeReg = AppFormatters.vehicleNumber(data?['bikeReg']?.toString());
     final bool hasBike2 = data?['hasBike2'] == true;
-    final String bike2Reg = data?['bike2Reg']?.toString().trim() ?? '';
+    final String bike2Reg = AppFormatters.vehicleNumber(data?['bike2Reg']?.toString());
 
-    final String? pendingCarReg = data?['pendingCarReg']?.toString().trim();
+    final String? pendingCarReg = data?['pendingCarReg'] != null ? AppFormatters.vehicleNumber(data!['pendingCarReg'].toString()) : null;
     final String? pendingCarRcUrl = data?['pendingCarRcUrl']?.toString();
     final String? carRejectionReason = data?['carRejectionReason']?.toString();
 
-    final String? pendingBikeReg = data?['pendingBikeReg']?.toString().trim();
+    final String? pendingBikeReg = data?['pendingBikeReg'] != null ? AppFormatters.vehicleNumber(data!['pendingBikeReg'].toString()) : null;
     final String? pendingBikeRcUrl = data?['pendingBikeRcUrl']?.toString();
     final String? bikeRejectionReason = data?['bikeRejectionReason']?.toString();
 
-    final String? pendingBike2Reg = data?['pendingBike2Reg']?.toString().trim();
+    final String? pendingBike2Reg = data?['pendingBike2Reg'] != null ? AppFormatters.vehicleNumber(data!['pendingBike2Reg'].toString()) : null;
     final String? pendingBike2RcUrl = data?['pendingBike2RcUrl']?.toString();
     final String? bike2RejectionReason = data?['bike2RejectionReason']?.toString();
 
@@ -3121,17 +3130,15 @@ class NotificationsTab extends StatelessWidget {
     } else if (isStaff) {
       showStaffNotificationDialog(context, notif);
     } else if (isVisitor) {
-      // Only play ringtone and allow approval/denial if the visitor request is strictly PENDING.
-      // If it was already approved or denied, display the resolved status without ringing.
-      final isPending = (notif['approvalStatus'] ?? '').toString().toUpperCase() == 'PENDING';
-      showVisitorNotificationDialog(
+      // When a resident clicks a visitor notification from the notification tray or notification list,
+      // present the dedicated, informative visitor details dialog displaying real-time entry/exit/clearance status,
+      // without triggering the full-screen urgent walk-in wake-up popout.
+      showVisitorDetailsDialog(
         context,
         notif,
         notifDocId: docId,
         userFlat: userFlat,
         fullFlat: fullFlat,
-        playRingtone: isPending,
-        force: true, // User tapped notification explicitly, always display the popout screen
       );
     } else if (isParcel) {
       showParcelNotificationDialog(context, notif, docId, userFlat, fullFlat);
@@ -3269,6 +3276,375 @@ class NotificationsTab extends StatelessWidget {
             child: const Text('Understood'),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Displays comprehensive visitor details when a visitor notification is tapped
+  /// from the notification drawer list or after the walk-in arrival moment has passed.
+  /// Clearly displays live status (Approved, Checked Out, Denied, Left at Gate) with
+  /// entry/exit timestamps, gate, vehicle, and phone dialer — never showing stale "waiting at gate".
+  static Future<void> showVisitorDetailsDialog(
+    BuildContext context,
+    Map<String, dynamic> notif, {
+    String? notifDocId,
+    String? userFlat,
+    String? fullFlat,
+  }) async {
+    final extra = notif['extraData'] is Map ? Map<String, dynamic>.from(notif['extraData']) : notif;
+    final visitorDocId = (notif['visitorDocId'] ?? extra['visitorDocId'])?.toString();
+    final notifType = (notif['type'] ?? '').toString().toUpperCase();
+    final isCheckoutNotif = notifType == 'VISITOR_CHECK_OUT';
+
+    // Fetch freshest live visitor data from Firestore if docId is available
+    Map<String, dynamic> liveData = {};
+    if (visitorDocId != null && visitorDocId.isNotEmpty) {
+      try {
+        final docSnap = await FirebaseFirestore.instance.collection('visitors').doc(visitorDocId).get();
+        if (docSnap.exists && docSnap.data() != null) {
+          liveData = docSnap.data()!;
+        }
+      } catch (_) {}
+    }
+
+    if (!context.mounted) return;
+
+    // Merge live data with notification metadata, giving precedence to live Firestore document
+    final visitorName = (liveData['visitorName'] ?? notif['visitorName'] ?? extra['visitorName'] ?? 'Visitor').toString().trim();
+    final purpose = (liveData['purpose'] ?? notif['purpose'] ?? extra['purpose'] ?? 'Guest / Personal').toString().trim();
+    final gateName = (liveData['gateName'] ?? notif['gateName'] ?? extra['gateName'] ?? 'Main Gate').toString().trim();
+    final guardName = (liveData['guardName'] ?? notif['guardName'] ?? extra['guardName'] ?? 'Security Guard').toString().trim();
+    final phone = (liveData['phone'] ?? notif['phone'] ?? extra['phone'] ?? '').toString().trim();
+    final rawVehicle = (liveData['vehicleNumber'] ?? notif['vehicleNumber'] ?? extra['vehicleNumber'] ?? '').toString().trim();
+    final vehicleNumber = rawVehicle.isNotEmpty ? rawVehicle.toUpperCase() : '';
+    final photoUrl = (liveData['photoUrl'] ?? notif['photoUrl'] ?? extra['photoUrl'])?.toString();
+    final deliveryApp = (liveData['deliveryApp'] ?? notif['deliveryApp'] ?? extra['deliveryApp'])?.toString().trim();
+    final isDelivery = liveData['isDelivery'] == true ||
+        extra['isDelivery'] == true ||
+        purpose.toLowerCase().contains('delivery') ||
+        purpose.toLowerCase().contains('courier') ||
+        (deliveryApp != null && deliveryApp.isNotEmpty);
+
+    final flatNumber = notif['flatNumber']?.toString() ?? userFlat ?? fullFlat ?? '';
+
+    // Determine current live status
+    String status = (liveData['status'] ?? extra['status'] ?? '').toString().toUpperCase();
+    String approvalStatus = (liveData['approvalStatus'] ?? extra['approvalStatus'] ?? '').toString().toUpperCase();
+    if (isCheckoutNotif) {
+      status = 'CHECKED_OUT';
+    }
+
+    // Format timestamps
+    String? entryTimeString;
+    final rawEntry = liveData['entryTime'] ?? extra['entryTime'];
+    if (rawEntry is Timestamp) {
+      entryTimeString = DateFormat('hh:mm a, dd MMM').format(rawEntry.toDate());
+    } else if (rawEntry is String && rawEntry.isNotEmpty) {
+      final parsed = DateTime.tryParse(rawEntry);
+      if (parsed != null) {
+        entryTimeString = DateFormat('hh:mm a, dd MMM').format(parsed);
+      }
+    }
+
+    String? exitTimeString;
+    final rawExit = liveData['exitTime'] ?? extra['exitTime'];
+    if (rawExit is Timestamp) {
+      exitTimeString = DateFormat('hh:mm a, dd MMM').format(rawExit.toDate());
+    } else if (rawExit is String && rawExit.isNotEmpty) {
+      final parsed = DateTime.tryParse(rawExit);
+      if (parsed != null) {
+        exitTimeString = DateFormat('hh:mm a, dd MMM').format(parsed);
+      }
+    }
+
+    final pickupOtp = (liveData['pickupOtp'] ?? extra['pickupOtp'])?.toString();
+
+    // Determine UI status badge styling & text
+    Color badgeColor;
+    Color badgeTextColor;
+    IconData badgeIcon;
+    String badgeText;
+
+    if (status == 'CHECKED_OUT') {
+      badgeColor = Colors.blueGrey.shade50;
+      badgeTextColor = Colors.blueGrey.shade800;
+      badgeIcon = Icons.logout_rounded;
+      badgeText = 'Departed / Checked Out';
+    } else if (approvalStatus == 'APPROVED' || status == 'CHECKED_IN') {
+      badgeColor = Colors.green.shade50;
+      badgeTextColor = Colors.green.shade800;
+      badgeIcon = Icons.check_circle_rounded;
+      badgeText = 'Entry Approved • In Campus';
+    } else if (approvalStatus == 'LEAVE_AT_GATE') {
+      badgeColor = Colors.amber.shade50;
+      badgeTextColor = Colors.amber.shade900;
+      badgeIcon = Icons.inventory_2_rounded;
+      badgeText = 'Package Left at Gate';
+    } else if (approvalStatus == 'DENIED' || status == 'DENIED') {
+      badgeColor = Colors.red.shade50;
+      badgeTextColor = Colors.red.shade800;
+      badgeIcon = Icons.cancel_rounded;
+      badgeText = 'Entry Denied';
+    } else {
+      badgeColor = Colors.orange.shade50;
+      badgeTextColor = Colors.orange.shade900;
+      badgeIcon = Icons.hourglass_top_rounded;
+      badgeText = 'Awaiting Clearance';
+    }
+
+    final isCurrentlyPending = approvalStatus == 'PENDING' && status != 'CHECKED_OUT';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            actionsPadding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: isDelivery ? Colors.amber.shade50 : Colors.teal.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    isDelivery ? Icons.local_shipping_rounded : Icons.person_rounded,
+                    color: isDelivery ? const Color(0xFFD97706) : const Color(0xFF0D9488),
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        visitorName,
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: badgeColor,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: badgeTextColor.withValues(alpha: 0.3)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(badgeIcon, size: 12, color: badgeTextColor),
+                            const SizedBox(width: 4),
+                            Text(
+                              badgeText,
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: badgeTextColor),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (photoUrl != null && photoUrl.isNotEmpty) ...[
+                    Center(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.network(
+                          photoUrl,
+                          width: 110,
+                          height: 110,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => CircleAvatar(
+                            radius: 36,
+                            backgroundColor: Colors.grey.shade200,
+                            child: const Icon(Icons.person_rounded, size: 36, color: Colors.grey),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                  ],
+
+                  // Details card
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            if (deliveryApp != null && deliveryApp.isNotEmpty) ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                margin: const EdgeInsets.only(right: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade100,
+                                  borderRadius: BorderRadius.circular(5),
+                                ),
+                                child: Text(
+                                  deliveryApp,
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.amber.shade900),
+                                ),
+                              ),
+                            ],
+                            Expanded(
+                              child: Text(
+                                purpose,
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text('Gate: $gateName • Guard: $guardName', style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                        if (vehicleNumber.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text('Vehicle: $vehicleNumber', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                        ],
+                        if (phone.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          InkWell(
+                            onTap: () async {
+                              final uri = Uri.parse('tel:$phone');
+                              if (await canLaunchUrl(uri)) await launchUrl(uri);
+                            },
+                            child: Row(
+                              children: [
+                                const Icon(Icons.phone_rounded, size: 14, color: Color(0xFF16A34A)),
+                                const SizedBox(width: 4),
+                                Text(phone, style: const TextStyle(fontSize: 12, color: Color(0xFF16A34A), fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                          ),
+                        ],
+                        if (entryTimeString != null) ...[
+                          const SizedBox(height: 4),
+                          Text('Entry: $entryTimeString', style: const TextStyle(fontSize: 11.5, color: AppColors.textMuted)),
+                        ],
+                        if (exitTimeString != null) ...[
+                          const SizedBox(height: 2),
+                          Text('Exit: $exitTimeString', style: const TextStyle(fontSize: 11.5, color: AppColors.textMuted)),
+                        ],
+                      ],
+                    ),
+                  ),
+
+                  // If pickup OTP is available (e.g. Leave at gate)
+                  if (pickupOtp != null && pickupOtp.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.amber.shade300),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const Text('PARCEL PICKUP OTP', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8, color: Color(0xFFB45309))),
+                          const SizedBox(height: 4),
+                          Text(
+                            pickupOtp,
+                            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 4, color: Color(0xFF92400E)),
+                          ),
+                          const SizedBox(height: 2),
+                          const Text('Show this OTP to security guard to collect your parcel', style: TextStyle(fontSize: 10.5, color: Color(0xFF78350F)), textAlign: TextAlign.center),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              if (isCurrentlyPending) ...[
+                TextButton(
+                  onPressed: () async {
+                    Navigator.of(dialogCtx).pop();
+                    await VisitorPassService.denyVisitorEntry(
+                      visitorDocId: visitorDocId,
+                      flatNumber: flatNumber,
+                      visitorName: visitorName,
+                      notifDocId: notifDocId,
+                    );
+                    if (context.mounted) AppFeedback.showSuccess(context, 'Entry denied for $visitorName.');
+                  },
+                  child: const Text('Deny', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                ),
+                if (isDelivery) ...[
+                  TextButton(
+                    onPressed: () async {
+                      Navigator.of(dialogCtx).pop();
+                      final otp = await VisitorPassService.leaveAtGateVisitorEntry(
+                        visitorDocId: visitorDocId,
+                        flatNumber: flatNumber,
+                        visitorName: visitorName,
+                        notifDocId: notifDocId,
+                        deliveryApp: deliveryApp,
+                        photoUrl: photoUrl,
+                        gateName: gateName,
+                        residentUid: FirebaseAuth.instance.currentUser?.uid,
+                      );
+                      if (context.mounted) {
+                        AppFeedback.showSuccess(context, 'Delivery left at gate. OTP: $otp');
+                      }
+                    },
+                    child: const Text('Leave at Gate', style: TextStyle(color: Color(0xFFD97706), fontWeight: FontWeight.bold)),
+                  ),
+                ],
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF16A34A),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () async {
+                    Navigator.of(dialogCtx).pop();
+                    await VisitorPassService.approveVisitorEntry(
+                      visitorDocId: visitorDocId,
+                      flatNumber: flatNumber,
+                      visitorName: visitorName,
+                      notifDocId: notifDocId,
+                    );
+                    if (context.mounted) AppFeedback.showSuccess(context, 'Entry approved for $visitorName.');
+                  },
+                  child: const Text('Approve', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ] else ...[
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0F172A),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Close'),
+                ),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -6271,7 +6647,8 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
           flatNumber = userDoc.data()?['flatNumber'] ?? 'Unknown';
         }
 
-        final vehicleNumber = _isComingByCar ? _vehicleCtrl.text.trim().toUpperCase() : '';
+        // Auto-capitalize vehicle registration for pre-approved visitor pass
+        final vehicleNumber = _isComingByCar ? AppFormatters.vehicleNumber(_vehicleCtrl.text) : '';
 
         final passResult = await VisitorPassService.createVisitorPass(
           residentUid: user.uid,
@@ -6497,6 +6874,8 @@ class _PreApproveVisitorScreenState extends State<PreApproveVisitorScreen> {
                   TextFormField(
                     controller: _vehicleCtrl,
                     textCapitalization: TextCapitalization.characters,
+                    // Auto-capitalize vehicle registration in real-time as user types
+                    inputFormatters: [AppFormatters.upperCaseFormatter],
                     decoration: const InputDecoration(
                       labelText: 'Vehicle Number *',
                       hintText: 'e.g. WB 06 A 1234',

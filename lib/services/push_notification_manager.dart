@@ -171,7 +171,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
                 'APPROVE_ACTION',
                 'Approve',
                 titleColor: Color(0xFF16A34A),
-                showsUserInterface: true,
+                showsUserInterface: false,
                 cancelNotification: true,
               ),
               if (isDelivery)
@@ -179,14 +179,14 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
                   'LEAVE_AT_GATE_ACTION',
                   'Leave at Gate',
                   titleColor: Color(0xFFD97706),
-                  showsUserInterface: true,
+                  showsUserInterface: false,
                   cancelNotification: true,
                 ),
               const AndroidNotificationAction(
                 'DENY_ACTION',
                 'Deny',
                 titleColor: Color(0xFFDC2626),
-                showsUserInterface: true,
+                showsUserInterface: false,
                 cancelNotification: true,
               ),
             ]
@@ -336,13 +336,13 @@ class PushNotificationManager with WidgetsBindingObserver {
         android: initializationSettingsAndroid,
       );
 
-      // Initialize the local notifications plugin with Android settings and response callback
+      // Initialize the local notifications plugin with Android settings and response callbacks
       await _localNotifications.initialize(
         settings: initializationSettings,
         onDidReceiveNotificationResponse: (NotificationResponse response) async {
-          // Check if user tapped an interactive action button ('Approve' / 'Deny')
+          // Check if user tapped an interactive action button ('Approve' / 'Deny' / 'Leave at Gate')
           final actionId = response.actionId;
-          if (actionId == 'APPROVE_ACTION' || actionId == 'DENY_ACTION') {
+          if (actionId == 'APPROVE_ACTION' || actionId == 'DENY_ACTION' || actionId == 'LEAVE_AT_GATE_ACTION') {
             await handleNotificationActionStatic(response);
             return;
           }
@@ -366,15 +366,18 @@ class PushNotificationManager with WidgetsBindingObserver {
 
               final ctx = navigatorKey.currentContext;
               if (ctx != null && ctx.mounted) {
-                // For visitor approvals: open the full-screen clearance popup (MyGate style)
-                // For everything else: use standard handleBannerTap → notifications tab
-                if (payload.isVisitorApprovalRequest && onIncomingVisitorApproval != null) {
-                  debugPrint('[PushNotificationManager] Local notif tapped — opening visitor approval popout dialog');
+                // Determine whether the notification was received recently (within 3 minutes).
+                // If it is older than 3 minutes or no longer pending clearance, route to the standard
+                // visitor details dialog via handleBannerTap rather than opening the intrusive full-screen wake-up screen.
+                final isFresh = DateTime.now().difference(payload.receivedAt).inMinutes < 3;
+                if (payload.isVisitorApprovalRequest && isFresh && onIncomingVisitorApproval != null) {
+                  debugPrint('[PushNotificationManager] Fresh local notif tapped — opening visitor approval popout dialog');
                   // User tapped the notification manually — clear the pending payload so the
                   // lifecycle resume handler doesn't fire a second duplicate popup.
                   _pendingVisitorApprovalPayload = null;
                   onIncomingVisitorApproval!.call(ctx, payload);
                 } else {
+                  debugPrint('[PushNotificationManager] Local notif tapped — routing to details dialog via handleBannerTap');
                   handleBannerTap(ctx, payload);
                 }
               } else {
@@ -556,13 +559,15 @@ class PushNotificationManager with WidgetsBindingObserver {
           );
           final ctx = navigatorKey.currentContext;
           if (ctx != null && ctx.mounted) {
-            // For visitor approval requests: open the full-screen MyGate-style clearance popup
-            // directly — the resident tapped the doorbell notification from the home screen!
-            // For all other notification types: fall through to standard handleBannerTap routing.
-            if (payload.isVisitorApprovalRequest && onIncomingVisitorApproval != null) {
-              debugPrint('[PushNotificationManager] FCM background tap — opening visitor approval popout dialog');
+            // For fresh visitor approval requests: open the full-screen clearance popup
+            // if the event is recent (< 3 minutes) and still actively pending approval.
+            // For all stale or resolved visitor notifications: fall through to handleBannerTap → details dialog.
+            final isFresh = DateTime.now().difference(payload.receivedAt).inMinutes < 3;
+            if (payload.isVisitorApprovalRequest && isFresh && onIncomingVisitorApproval != null) {
+              debugPrint('[PushNotificationManager] Fresh FCM background tap — opening visitor approval popout dialog');
               onIncomingVisitorApproval!.call(ctx, payload);
             } else {
+              debugPrint('[PushNotificationManager] FCM background tap — routing to details dialog via handleBannerTap');
               handleBannerTap(ctx, payload);
             }
           } else {
@@ -1011,7 +1016,8 @@ class PushNotificationManager with WidgetsBindingObserver {
             ? AndroidNotificationCategory.alarm
             : (isVisitorApproval ? AndroidNotificationCategory.call : AndroidNotificationCategory.message),
         // Interactive action buttons on the heads-up notification card: Approve, Leave at Gate, and Deny.
-        // Setting showsUserInterface: true brings the app to the foreground so the resident can see the action or popout screen immediately.
+        // Setting showsUserInterface: false ensures actions execute headlessly in the background via
+        // notificationTapBackground without demanding the user unlock the screen or PIN challenge.
         // Leave at Gate is strictly reserved for delivery/courier personnel; omitted for Guests!
         actions: isVisitorApproval
             ? <AndroidNotificationAction>[
@@ -1019,7 +1025,7 @@ class PushNotificationManager with WidgetsBindingObserver {
                   'APPROVE_ACTION',
                   'Approve',
                   titleColor: Color(0xFF16A34A),
-                  showsUserInterface: true,
+                  showsUserInterface: false,
                   cancelNotification: true,
                 ),
                 if (payload.isDelivery)
@@ -1027,14 +1033,14 @@ class PushNotificationManager with WidgetsBindingObserver {
                     'LEAVE_AT_GATE_ACTION',
                     'Leave at Gate',
                     titleColor: Color(0xFFD97706),
-                    showsUserInterface: true,
+                    showsUserInterface: false,
                     cancelNotification: true,
                   ),
                 const AndroidNotificationAction(
                   'DENY_ACTION',
                   'Deny',
                   titleColor: Color(0xFFDC2626),
-                  showsUserInterface: true,
+                  showsUserInterface: false,
                   cancelNotification: true,
                 ),
               ]

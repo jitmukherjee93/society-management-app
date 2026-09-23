@@ -63,6 +63,7 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
   AudioPlayer? _audioPlayer;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _visitorSub;
   String? _currentApproval;
+  String? _visitorStatus;
   String? _visitorDocId;
   bool _isActionLoading = false;
 
@@ -92,6 +93,7 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
 
     _visitorDocId = notif['visitorDocId']?.toString() ?? extra['visitorDocId']?.toString();
     _currentApproval = notif['approvalStatus']?.toString() ?? extra['approvalStatus']?.toString() ?? 'PENDING';
+    _visitorStatus = notif['status']?.toString() ?? extra['status']?.toString();
     _pickupOtp = notif['pickupOtp']?.toString() ?? extra['pickupOtp']?.toString();
 
     // Parse visitor name
@@ -123,9 +125,12 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
     // Gate Name
     _gateName = notif['gateName']?.toString() ?? extra['gateName']?.toString() ?? 'Main Gate';
 
-    // Phone & Vehicle
+    // Phone & Vehicle (auto-capitalized for clean display)
     _phone = notif['phone']?.toString() ?? extra['phone']?.toString();
-    _vehicleNumber = notif['vehicleNumber']?.toString() ?? extra['vehicleNumber']?.toString();
+    final rawVehicle = notif['vehicleNumber']?.toString() ?? extra['vehicleNumber']?.toString();
+    _vehicleNumber = (rawVehicle != null && rawVehicle.trim().isNotEmpty)
+        ? rawVehicle.trim().toUpperCase()
+        : null;
     _photoUrl = notif['photoUrl']?.toString() ?? extra['photoUrl']?.toString();
   }
 
@@ -227,17 +232,18 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
     _visitorSub = FirebaseFirestore.instance.collection('visitors').doc(docId).snapshots().listen((snap) {
       if (snap.exists && mounted) {
         final liveApproval = (snap.data()?['approvalStatus'] ?? '').toString().toUpperCase();
+        final liveStatus = (snap.data()?['status'] ?? '').toString().toUpperCase();
         final liveOtp = snap.data()?['pickupOtp']?.toString();
-        if (liveApproval == 'APPROVED' || liveApproval == 'DENIED' || liveApproval == 'LEAVE_AT_GATE') {
+        // If the visitor has checked out or entry decision was reached, silence ringtone and update state
+        if (liveStatus == 'CHECKED_OUT' || liveApproval == 'APPROVED' || liveApproval == 'DENIED' || liveApproval == 'LEAVE_AT_GATE') {
           _stopRingtone();
-          if (_currentApproval != liveApproval || (_pickupOtp == null && liveOtp != null && liveOtp.isNotEmpty)) {
-            setState(() {
-              _currentApproval = liveApproval;
-              if (liveOtp != null && liveOtp.isNotEmpty) {
-                _pickupOtp = liveOtp;
-              }
-            });
-          }
+          setState(() {
+            if (liveApproval.isNotEmpty) _currentApproval = liveApproval;
+            if (liveStatus.isNotEmpty) _visitorStatus = liveStatus;
+            if (liveOtp != null && liveOtp.isNotEmpty) {
+              _pickupOtp = liveOtp;
+            }
+          });
         }
       }
     });
@@ -357,19 +363,39 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final bool isResolved = _currentApproval == 'APPROVED' ||
+    final bool isCheckedOut = _visitorStatus == 'CHECKED_OUT';
+    final bool isResolved = isCheckedOut ||
+        _currentApproval == 'APPROVED' ||
         _currentApproval == 'DENIED' ||
         _currentApproval == 'LEAVE_AT_GATE';
 
-    // Headline generation
+    // Headline generation:
+    // When a visitor has departed or approval was completed, dynamically reflect their
+    // final status rather than stating they are currently waiting at the gate.
     String headline;
-    if (_isDelivery) {
-      final appName = _deliveryApp != null && _deliveryApp!.isNotEmpty ? _deliveryApp! : 'Delivery Executive';
-      headline = '$appName is waiting at the $_gateName';
-    } else if (_purpose.toLowerCase().contains('cab') || _purpose.toLowerCase().contains('taxi')) {
-      headline = 'Cab ($_visitorName) is waiting at the $_gateName';
+    if (isCheckedOut) {
+      headline = '$_visitorName has checked out and departed';
+    } else if (isResolved) {
+      if (_currentApproval == 'APPROVED') {
+        headline = _isDelivery
+            ? '${_deliveryApp ?? "Delivery"} — Entry Approved'
+            : '$_visitorName — Entry Approved';
+      } else if (_currentApproval == 'DENIED') {
+        headline = '$_visitorName — Entry Denied';
+      } else if (_currentApproval == 'LEAVE_AT_GATE') {
+        headline = 'Package left at gate';
+      } else {
+        headline = '$_visitorName — Clearance Complete';
+      }
     } else {
-      headline = '$_visitorName is waiting at the $_gateName';
+      if (_isDelivery) {
+        final appName = _deliveryApp != null && _deliveryApp!.isNotEmpty ? _deliveryApp! : 'Delivery Executive';
+        headline = '$appName is waiting at the $_gateName';
+      } else if (_purpose.toLowerCase().contains('cab') || _purpose.toLowerCase().contains('taxi')) {
+        headline = 'Cab ($_visitorName) is waiting at the $_gateName';
+      } else {
+        headline = '$_visitorName is waiting at the $_gateName';
+      }
     }
 
     // Top overlapping icon badge selection
@@ -774,6 +800,33 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
   }
 
   Widget _buildResolvedBanner() {
+    // If the visitor has already departed campus, display a clear checkout status banner
+    if (_visitorStatus == 'CHECKED_OUT') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.blueGrey.shade50,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.blueGrey.shade300),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.logout_rounded, color: Colors.blueGrey.shade700, size: 18),
+            const SizedBox(width: 6),
+            Text(
+              'Guest Departed • Checked Out',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Colors.blueGrey.shade800,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     if (_currentApproval == 'APPROVED') {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),

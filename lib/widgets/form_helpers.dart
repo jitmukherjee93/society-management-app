@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_formatters.dart';
 
 // ─── Shared constants ────────────────────────────────────────────────────────
 
@@ -183,6 +184,8 @@ class VehiclesSection extends StatelessWidget {
                       controller: bike2RegController,
                       decoration: kInput('Bike 2 Reg. No. *'),
                       textCapitalization: TextCapitalization.characters,
+                      // Automatically force all typed/pasted characters to uppercase for vehicle registrations
+                      inputFormatters: [AppFormatters.upperCaseFormatter],
                       validator: (val) => (val == null || val.trim().isEmpty)
                           ? (hasAttemptedSubmit ? 'Required' : null)
                           : null,
@@ -247,6 +250,8 @@ class _VehicleRow extends StatelessWidget {
                 controller: regController,
                 decoration: kInput(regLabel),
                 textCapitalization: TextCapitalization.characters,
+                // Automatically force all typed/pasted characters to uppercase for vehicle registrations
+                inputFormatters: [AppFormatters.upperCaseFormatter],
                 validator: (val) => hasOwnership &&
                         (val == null || val.trim().isEmpty)
                     ? (hasAttemptedSubmit ? 'Required' : null)
