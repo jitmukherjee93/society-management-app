@@ -85,6 +85,24 @@ void main() {
 
       expect(payload.isComplaint, isTrue);
     });
+
+    test('Visitor overstay notification identification', () {
+      final payload = PushNotificationPayload(
+        id: 'notif-7',
+        title: 'OVERSTAY ALERT: Blinkit Courier (B-312)',
+        message: 'Blinkit Courier has exceeded the maximum allowed stay time inside campus.',
+        type: 'VISITOR_OVERSTAY',
+        flatNumber: 'B-312',
+        extraData: {
+          'visitorName': 'Blinkit Courier',
+          'durationStr': '35m',
+        },
+      );
+
+      expect(payload.isOverstay, isTrue);
+      expect(payload.isEmergency, isFalse);
+      expect(payload.isVisitorApprovalRequest, isFalse);
+    });
   });
 
   group('PushNotificationBanner Widget Tests', () {

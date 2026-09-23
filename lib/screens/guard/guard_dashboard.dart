@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:audioplayers/audioplayers.dart';
 import '../../services/visitor_pass_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/push_notification_manager.dart';
@@ -61,6 +62,15 @@ class _GuardDashboardState extends State<GuardDashboard> {
   Map<String, dynamic>? _verifiedVisitorData;
   String? _verifiedVisitorDocId;
   PassVerificationResult? _passVerificationResult;
+
+  // Overstay monitoring and audio alarm state
+  // Manages looping playback of clock_alarm.mp3 when visitors exceed permitted duration
+  final AudioPlayer _overstayAudioPlayer = AudioPlayer();
+  bool _isOverstayAlarmPlaying = false;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _activeVisitorsSubscription;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _cachedActiveVisitorDocs = [];
+  final Set<String> _alertedOverstayDocIds = <String>{};
+  Timer? _overstayCheckTimer;
 
   // Walk-in visitor state
   final _walkInNameCtrl = TextEditingController();
@@ -171,6 +181,9 @@ class _GuardDashboardState extends State<GuardDashboard> {
 
     // Reconcile and auto-log any parcels for visitors with LEAVE_AT_GATE status using guard authority
     _syncLeaveAtGateParcels();
+
+    // Start real-time visitor overstay monitoring and clock alarm detection
+    _startOverstayMonitoring();
   }
 
   StreamSubscription? _leaveAtGateSubscription;
@@ -214,11 +227,381 @@ class _GuardDashboardState extends State<GuardDashboard> {
     });
   }
 
+  // ─── Overstay Detection & Audio Alarm System ───────────────────────────────
+
+  /// Starts real-time monitoring of in-campus visitors for overstay detection.
+  /// Subscribes to the active visitors Firestore stream (`status == CHECKED_IN`)
+  /// and runs a periodic 30-second timer to detect elapsed time threshold crossings
+  /// even when no database writes take place.
+  void _startOverstayMonitoring() {
+    _activeVisitorsSubscription = VisitorPassService.getActiveVisitorsStream().listen(
+      (snap) {
+        _cachedActiveVisitorDocs = snap.docs;
+
+        // Clean up alerted IDs for visitors who have checked out so if they revisit later they can alert again
+        final currentActiveDocIds = snap.docs.map((d) => d.id).toSet();
+        _alertedOverstayDocIds.removeWhere((id) => !currentActiveDocIds.contains(id));
+
+        // Evaluate cached visitors against overstay thresholds
+        _checkOverstayConditions();
+      },
+      onError: (e) {
+        debugPrint('[GuardDashboard] Note on active visitor overstay monitoring: $e');
+      },
+    );
+
+    // Periodic 30-second timer evaluates elapsed stay time for currently on-campus visitors
+    _overstayCheckTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        _checkOverstayConditions();
+      }
+    });
+  }
+
+  /// Evaluates cached active visitors and triggers alarm/notification for any visitor exceeding limits.
+  void _checkOverstayConditions() {
+    if (!mounted || _cachedActiveVisitorDocs.isEmpty) return;
+
+    for (final doc in _cachedActiveVisitorDocs) {
+      final data = doc.data();
+      final docId = doc.id;
+
+      // Check if visitor has exceeded permitted campus duration (25m delivery / 6h guest)
+      if (_isVisitorOverstaying(data)) {
+        if (!_alertedOverstayDocIds.contains(docId)) {
+          _alertedOverstayDocIds.add(docId);
+          _triggerOverstayAlert(docId, data);
+          break; // Trigger alert for one visitor at a time to prevent stacking dialogs
+        }
+      }
+    }
+  }
+
+  /// Plays the clock alarm sound in a continuous loop when an overstay alert is triggered.
+  Future<void> _playOverstayAlarmSound() async {
+    try {
+      if (_isOverstayAlarmPlaying) return;
+      _isOverstayAlarmPlaying = true;
+      await _overstayAudioPlayer.setReleaseMode(ReleaseMode.loop);
+      await _overstayAudioPlayer.setVolume(1.0);
+      await _overstayAudioPlayer.play(AssetSource('audio/clock_alarm.mp3'));
+    } catch (e) {
+      debugPrint('[GuardDashboard] Note on overstay alarm audio playback: $e');
+    }
+  }
+
+  /// Stops the currently playing overstay alarm sound immediately.
+  Future<void> _stopOverstayAlarmSound() async {
+    try {
+      if (!_isOverstayAlarmPlaying) return;
+      _isOverstayAlarmPlaying = false;
+      await _overstayAudioPlayer.stop();
+    } catch (e) {
+      debugPrint('[GuardDashboard] Note on stopping overstay alarm audio: $e');
+    }
+  }
+
+  /// Triggers the full overstay alert flow:
+  /// 1. Play clock_alarm sound in continuous loop.
+  /// 2. Dispatches high-priority notification to Guard with clock_alarm notification sound.
+  /// 3. Displays interactive Overstay Alert Dialog on guard terminal.
+  Future<void> _triggerOverstayAlert(String visitorDocId, Map<String, dynamic> data) async {
+    final visitorName = (data['visitorName'] ?? 'Visitor').toString();
+    final flat = (data['flatNumber'] ?? data['hostFlatNumber'] ?? 'Unknown').toString();
+    final purpose = (data['purpose'] ?? 'Guest').toString();
+    final phone = (data['phone'] ?? '').toString();
+    final entryTime = (data['entryTime'] as Timestamp?)?.toDate();
+    final diffMinutes = entryTime != null ? DateTime.now().difference(entryTime).inMinutes : 0;
+    final durationStr = diffMinutes < 60 ? '${diffMinutes}m' : '${diffMinutes ~/ 60}h ${diffMinutes % 60}m';
+
+    // 1. Play loop alarm sound on guard terminal
+    await _playOverstayAlarmSound();
+
+    // 2. Dispatch notification to security guard (FCM / OS status bar with clock_alarm sound)
+    await NotificationService.notifyGuard(
+      title: 'OVERSTAY ALERT: $visitorName ($flat)',
+      message: '$visitorName ($purpose) has been inside campus for $durationStr. Please verify.',
+      type: 'VISITOR_OVERSTAY',
+      flatNumber: flat,
+      extraData: {
+        'visitorDocId': visitorDocId,
+        'visitorName': visitorName,
+        'flatNumber': flat,
+        'purpose': purpose,
+        'phone': phone,
+        'entryTime': entryTime?.toIso8601String(),
+        'photoUrl': data['photoUrl']?.toString() ?? '',
+        'vehicleNumber': data['vehicleNumber']?.toString() ?? '',
+        'durationStr': durationStr,
+      },
+    );
+
+    // 3. Display interactive modal on guard screen
+    if (mounted) {
+      _showOverstayAlertDialog(context, {
+        ...data,
+        'visitorDocId': visitorDocId,
+        'durationStr': durationStr,
+      });
+    }
+  }
+
+  /// Displays an interactive Overstay Alert Dialog on the guard screen with:
+  /// - Full visitor details & live photo captured at gate
+  /// - Host flat and visit purpose
+  /// - Elapsed time inside campus vs allowed threshold
+  /// - Quick action to Call Visitor or view overstay list
+  /// - "Stop Alarm & Acknowledge" button that immediately halts the clock alarm sound
+  void _showOverstayAlertDialog(BuildContext context, Map<String, dynamic> data) {
+    final targetCtx = PushNotificationManager.navigatorKey.currentContext ?? context;
+    if (!targetCtx.mounted) return;
+
+    final visitorName = (data['visitorName'] ?? 'Visitor').toString();
+    final flat = (data['flatNumber'] ?? data['hostFlatNumber'] ?? 'General').toString();
+    final purpose = (data['purpose'] ?? 'Guest').toString();
+    final phone = (data['phone'] ?? '').toString().trim();
+    final vehicle = (data['vehicleNumber'] ?? '').toString().trim();
+    final photoUrl = (data['photoUrl'] ?? '').toString().trim();
+    final entryTime = (data['entryTime'] is Timestamp)
+        ? (data['entryTime'] as Timestamp).toDate()
+        : (data['entryTime'] is String ? DateTime.tryParse(data['entryTime']) : null);
+    final diffMinutes = entryTime != null ? DateTime.now().difference(entryTime).inMinutes : 0;
+    final durationStr = data['durationStr']?.toString() ??
+        (diffMinutes < 60 ? '${diffMinutes}m' : '${diffMinutes ~/ 60}h ${diffMinutes % 60}m');
+    final isDeliveryOrCab = purpose.toLowerCase().contains('delivery') ||
+        purpose.toLowerCase().contains('courier') ||
+        purpose.toLowerCase().contains('cab') ||
+        purpose.toLowerCase().contains('taxi') ||
+        purpose.toLowerCase().contains('service');
+    final maxLimitStr = isDeliveryOrCab ? '25 minutes' : '6 hours';
+
+    showDialog(
+      context: targetCtx,
+      barrierDismissible: false, // Must acknowledge to dismiss
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        titlePadding: EdgeInsets.zero,
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: const BoxDecoration(
+            color: Color(0xFFDC2626), // High-alert Red
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+            ),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.alarm_on_rounded, color: Colors.white, size: 24),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'OVERSTAY ALERT',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Warning Banner
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF1F2),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade300),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, color: Colors.red.shade800, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Visitor exceeded maximum allowed campus duration ($maxLimitStr).',
+                        style: TextStyle(
+                          color: Colors.red.shade900,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // Visitor Card with Photo
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (photoUrl.isNotEmpty)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(28),
+                      child: Image.network(
+                        photoUrl,
+                        width: 56,
+                        height: 56,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => CircleAvatar(
+                          radius: 28,
+                          backgroundColor: Colors.red.shade100,
+                          child: Icon(Icons.person_rounded, color: Colors.red.shade800, size: 28),
+                        ),
+                      ),
+                    )
+                  else
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundColor: Colors.red.shade100,
+                      child: Icon(Icons.person_rounded, color: Colors.red.shade800, size: 28),
+                    ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          visitorName,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          purpose,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textSecondary,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        if (phone.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            phone,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.primaryDark,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Divider(height: 1, color: AppColors.border),
+              const SizedBox(height: 8),
+
+              // Key details
+              _buildDetailRow('Host Flat:', 'Flat $flat'),
+              _buildDetailRow('Time Inside:', durationStr),
+              _buildDetailRow('Max Allowed:', maxLimitStr),
+              if (vehicle.isNotEmpty) _buildDetailRow('Vehicle:', vehicle),
+              if (entryTime != null)
+                _buildDetailRow('Entry Time:', DateFormat('hh:mm a').format(entryTime)),
+            ],
+          ),
+        ),
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        actions: [
+          // Action row 1: Call visitor and View in-campus
+          Row(
+            children: [
+              if (phone.isNotEmpty)
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      side: const BorderSide(color: AppColors.primary),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    icon: const Icon(Icons.phone_rounded, size: 16, color: AppColors.primary),
+                    label: const Text('Call Visitor', style: TextStyle(fontSize: 12, color: AppColors.primary)),
+                    onPressed: () async {
+                      final uri = Uri.parse('tel:$phone');
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(uri);
+                      }
+                    },
+                  ),
+                ),
+              if (phone.isNotEmpty) const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: AppColors.border),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  icon: const Icon(Icons.list_alt_rounded, size: 16, color: AppColors.textPrimary),
+                  label: const Text('Overstay List', style: TextStyle(fontSize: 12, color: AppColors.textPrimary)),
+                  onPressed: () {
+                    _stopOverstayAlarmSound();
+                    Navigator.pop(dialogCtx);
+                    setState(() {
+                      _currentTab = 2;
+                      _campusFilter = 'OVERSTAY';
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Action row 2: Stop Alarm & Acknowledge
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: const Icon(Icons.alarm_off_rounded, size: 18, color: Colors.white),
+              label: const Text(
+                'STOP ALARM & ACKNOWLEDGE',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+              ),
+              onPressed: () {
+                _stopOverstayAlarmSound();
+                Navigator.pop(dialogCtx);
+              },
+            ),
+          ),
+        ],
+      ),
+    ).then((_) {
+      // Ensure alarm audio always stops if dialog is closed
+      _stopOverstayAlarmSound();
+    });
+  }
+
   @override
   void dispose() {
     // Clean up phone listener, leave-at-gate listener, and push notification delegate on screen unmount
     _walkInPhoneCtrl.removeListener(_onWalkInPhoneChanged);
     _leaveAtGateSubscription?.cancel();
+    _activeVisitorsSubscription?.cancel();
+    _overstayCheckTimer?.cancel();
+    _stopOverstayAlarmSound();
+    _overstayAudioPlayer.dispose();
     if (PushNotificationManager.instance.onNotificationClick != null) {
       PushNotificationManager.instance.onNotificationClick = null;
     }
@@ -1206,6 +1589,19 @@ class _GuardDashboardState extends State<GuardDashboard> {
 
     final type = (notif['type'] ?? '').toString().toUpperCase();
     final title = (notif['title'] ?? '').toString();
+
+    // 0. Visitor Overstay Alert: Halt alarm sound, route to In-Campus tab (index 2), and show details modal
+    if (type == 'VISITOR_OVERSTAY' ||
+        type.contains('OVERSTAY') ||
+        title.toUpperCase().contains('OVERSTAY')) {
+      _stopOverstayAlarmSound();
+      setState(() {
+        _currentTab = 2; // In-Campus tab
+        _campusFilter = 'OVERSTAY';
+      });
+      _showOverstayAlertDialog(context, notif);
+      return;
+    }
 
     // 1. Visitor clearance responses (Approved, Denied, or Leave at Gate by resident)
     final approvalStatus = (notif['approvalStatus'] ?? '').toString().toUpperCase();

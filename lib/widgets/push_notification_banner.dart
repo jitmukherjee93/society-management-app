@@ -58,6 +58,13 @@ class PushNotificationPayload {
       type.toUpperCase().contains('SOS') ||
       title.toUpperCase().contains('EMERGENCY');
 
+  /// Returns `true` if this is an urgent visitor overstay alarm alert.
+  /// Identifies when visitors or delivery executives exceed maximum allowed campus stay duration.
+  bool get isOverstay =>
+      type.toUpperCase() == 'VISITOR_OVERSTAY' ||
+      type.toUpperCase().contains('OVERSTAY') ||
+      title.toUpperCase().contains('OVERSTAY');
+
   /// Returns `true` if this is a gate visitor entry request requiring resident action.
   bool get isVisitorApprovalRequest =>
       type == 'VISITOR_CHECK_IN' &&
@@ -171,7 +178,8 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
 
   /// Resolves the primary background color based on notification severity.
   Color _getHeaderColor() {
-    if (widget.payload.isEmergency) return const Color(0xFFDC2626); // Crimson Red
+    // High-priority crimson red styling for life-safety emergency SOS and overstay alarm alerts
+    if (widget.payload.isEmergency || widget.payload.isOverstay) return const Color(0xFFDC2626); // Crimson Red
     if (widget.payload.isVisitorApprovalRequest) return const Color(0xFFD97706); // Amber Alert
     if (widget.payload.isPaymentOrBill) return const Color(0xFF059669); // Emerald Green
     if (widget.payload.isStaffEntry) return const Color(0xFF0D9488); // Teal for Domestic Help / Staff
@@ -183,6 +191,8 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
   /// Resolves the category icon for the push banner.
   IconData _getCategoryIcon() {
     if (widget.payload.isEmergency) return Icons.warning_amber_rounded;
+    // Alarm bell icon for visitor overstay alerts
+    if (widget.payload.isOverstay) return Icons.alarm_on_rounded;
     if (widget.payload.isVisitorApprovalRequest) return Icons.sensor_door_outlined;
     if (widget.payload.isPaymentOrBill) return Icons.account_balance_wallet_outlined;
     if (widget.payload.isStaffEntry) return Icons.badge_outlined;

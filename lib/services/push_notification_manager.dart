@@ -104,6 +104,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
     final int notifId = id.hashCode & 0x7FFFFFFF;
     final bool isEmergency = type == 'EMERGENCY' || type == 'SOS';
+    // Overstay alarm condition: flags visitors who have exceeded stay threshold
+    final bool isOverstay = type == 'VISITOR_OVERSTAY' ||
+        type.contains('OVERSTAY') ||
+        title.toUpperCase().contains('OVERSTAY');
     final bool isVisitorApproval = type == 'VISITOR_CHECK_IN' &&
         (data['approvalStatus'] == 'PENDING' || data['isWalkIn'] == 'true' || data['isWalkIn'] == true);
 
@@ -117,35 +121,45 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
     final String channelId = isEmergency
         ? 'society_emergency_channel'
-        : (isVisitorApproval ? 'society_visitor_ring_channel_v4' : 'society_general_channel');
+        : (isOverstay
+            ? 'society_overstay_channel'
+            : (isVisitorApproval ? 'society_visitor_ring_channel_v4' : 'society_general_channel'));
 
     final String channelName = isEmergency
         ? 'Society Emergency Alerts'
-        : (isVisitorApproval ? 'Visitor Doorbell & Gate Approvals' : 'Society Notifications');
+        : (isOverstay
+            ? 'Visitor Overstay Alerts'
+            : (isVisitorApproval ? 'Visitor Doorbell & Gate Approvals' : 'Society Notifications'));
 
     final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       channelId,
       channelName,
       channelDescription: isEmergency
           ? 'Critical emergency SOS alerts'
-          : (isVisitorApproval
-              ? 'Urgent visitor gate clearance requests with custom doorbell ringtone'
-              : 'Important society announcements, bills, visitor and parcel alerts'),
-      importance: (isEmergency || isVisitorApproval) ? Importance.max : Importance.high,
-      priority: (isEmergency || isVisitorApproval) ? Priority.max : Priority.high,
+          : (isOverstay
+              ? 'High-priority alarm alerts when visitors or delivery agents exceed allowed stay time'
+              : (isVisitorApproval
+                  ? 'Urgent visitor gate clearance requests with custom doorbell ringtone'
+                  : 'Important society announcements, bills, visitor and parcel alerts')),
+      importance: (isEmergency || isOverstay || isVisitorApproval) ? Importance.max : Importance.high,
+      priority: (isEmergency || isOverstay || isVisitorApproval) ? Priority.max : Priority.high,
       autoCancel: true,
       ongoing: false,
       ticker: title,
-      color: const Color(0xFF0F766E),
+      color: isOverstay ? const Color(0xFFDC2626) : const Color(0xFF0F766E),
       visibility: NotificationVisibility.public,
       enableLights: true,
       enableVibration: true,
       playSound: true,
-      sound: isVisitorApproval ? const RawResourceAndroidNotificationSound('cell_phone_ring_std') : null,
-      audioAttributesUsage: isVisitorApproval ? AudioAttributesUsage.notificationRingtone : AudioAttributesUsage.notification,
+      sound: isOverstay
+          ? const RawResourceAndroidNotificationSound('clock_alarm')
+          : (isVisitorApproval ? const RawResourceAndroidNotificationSound('cell_phone_ring_std') : null),
+      audioAttributesUsage: isOverstay
+          ? AudioAttributesUsage.alarm
+          : (isVisitorApproval ? AudioAttributesUsage.notificationRingtone : AudioAttributesUsage.notification),
       channelShowBadge: true,
-      fullScreenIntent: isEmergency || isVisitorApproval,
-      category: isEmergency
+      fullScreenIntent: isEmergency || isOverstay || isVisitorApproval,
+      category: (isEmergency || isOverstay)
           ? AndroidNotificationCategory.alarm
           : (isVisitorApproval ? AndroidNotificationCategory.call : AndroidNotificationCategory.message),
       // Interactive action buttons on the heads-up notification card: Approve, Leave at Gate, and Deny.
@@ -235,6 +249,16 @@ class PushNotificationManager with WidgetsBindingObserver {
   bool _isSystemNotificationsInitialized = false;
   PushNotificationPayload? _pendingLaunchPayload;
 
+  // Stores a visitor approval payload that arrived while the screen was locked/off.
+  // fullScreenIntent wakes the screen, but Android does NOT fire onDidReceiveNotificationResponse
+  // automatically — that only fires on an explicit user tap.
+  // When fullScreenIntent auto-brings the app to foreground, didChangeAppLifecycleState fires.
+  // We flush this pending payload there so the VisitorPopoutDialog opens immediately.
+  PushNotificationPayload? _pendingVisitorApprovalPayload;
+  // Timestamp when _pendingVisitorApprovalPayload was set — used to enforce a 2-minute TTL
+  // so a stale payload doesn't incorrectly show a popup if the user opens the app much later.
+  DateTime? _pendingVisitorApprovalSetAt;
+
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscription;
@@ -251,8 +275,53 @@ class PushNotificationManager with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    final previous = _lifecycleState;
     _lifecycleState = state;
     debugPrint('[PushNotificationManager] App lifecycle state transitioned to: $state');
+
+    // ── FULL-SCREEN INTENT FOREGROUND HANDLER (over lock screen + after unlock) ──────────────
+    // When fullScreenIntent fires, Android auto-brings the app toward the foreground (no tap needed).
+    // The lifecycle state it lands on depends on the device / Android version:
+    //   • Most Android (stock/Pixel): app goes directly to `resumed`
+    //   • Samsung One UI (strict mode): app goes to `inactive` while keyguard is up,
+    //     then to `resumed` when the user unlocks
+    //
+    // To show the popup OVER the lock screen (MyGate-style — no unlock required), we must flush
+    // on `inactive` too, not just on `resumed`.
+    //
+    // Guard conditions:
+    //   1. The incoming state must be `inactive` or `resumed` (app is at least partially visible)
+    //   2. The previous state must have been a fully background state (`paused` or `detached`)
+    //      This prevents spurious triggers when the user alt-tabs or receives a phone call
+    //   3. A pending payload must exist AND be within 2 minutes (TTL) to avoid stale popups
+    final bool comingToForeground =
+        (state == AppLifecycleState.inactive || state == AppLifecycleState.resumed) &&
+        (previous == AppLifecycleState.paused || previous == AppLifecycleState.detached);
+
+    if (comingToForeground && _pendingVisitorApprovalPayload != null) {
+      // TTL check: discard payloads older than 2 minutes (visitor already left / resolved)
+      final setAt = _pendingVisitorApprovalSetAt;
+      final bool isStale = setAt != null &&
+          DateTime.now().difference(setAt).inSeconds > 120;
+
+      if (isStale) {
+        debugPrint('[PushNotificationManager] Discarding stale visitor approval payload (>2 min old)');
+        _pendingVisitorApprovalPayload = null;
+        _pendingVisitorApprovalSetAt = null;
+      } else {
+        final deferred = _pendingVisitorApprovalPayload!;
+        _pendingVisitorApprovalPayload = null;  // Consume immediately — prevents double-firing
+        _pendingVisitorApprovalSetAt = null;
+        debugPrint('[PushNotificationManager] fullScreenIntent foreground detected (state=$state) — showing visitor popup over lock screen');
+        // 300ms delay gives Flutter's Navigator time to be ready without making the user wait
+        Future.delayed(const Duration(milliseconds: 300), () {
+          final ctx = navigatorKey.currentContext;
+          if (ctx != null && ctx.mounted && onIncomingVisitorApproval != null) {
+            onIncomingVisitorApproval!.call(ctx, deferred);
+          }
+        });
+      }
+    }
   }
 
   /// Initializes native OS system notifications (notification hood, status bar, sound, channels, FCM).
@@ -301,6 +370,9 @@ class PushNotificationManager with WidgetsBindingObserver {
                 // For everything else: use standard handleBannerTap → notifications tab
                 if (payload.isVisitorApprovalRequest && onIncomingVisitorApproval != null) {
                   debugPrint('[PushNotificationManager] Local notif tapped — opening visitor approval popout dialog');
+                  // User tapped the notification manually — clear the pending payload so the
+                  // lifecycle resume handler doesn't fire a second duplicate popup.
+                  _pendingVisitorApprovalPayload = null;
                   onIncomingVisitorApproval!.call(ctx, payload);
                 } else {
                   handleBannerTap(ctx, payload);
@@ -341,6 +413,22 @@ class PushNotificationManager with WidgetsBindingObserver {
           AndroidFlutterLocalNotificationsPlugin>();
       await androidPlugin?.requestNotificationsPermission();
 
+      // ── USE_FULL_SCREEN_INTENT PERMISSION (Android 14+ / API 34+) ──────────────────
+      // On Android 14+, apps that are NOT phone-dialers or alarm apps must get explicit
+      // user permission for fullScreenIntent to work. Without it, the notification is
+      // posted silently into the status bar (doorbell rings) but the screen NEVER wakes.
+      //
+      // requestFullScreenIntentPermission() opens the system Settings page for this app
+      // where the user toggles "Allow display of pop-up while screen is on / off lock screen".
+      // On Android < 14, this is a no-op. flutter_local_notifications v22.3.1 supports this.
+      try {
+        await androidPlugin?.requestFullScreenIntentPermission();
+        debugPrint('[PushNotificationManager] USE_FULL_SCREEN_INTENT permission requested ✓');
+      } catch (e) {
+        // Safe to ignore — permission check may not apply on all Android versions.
+        debugPrint('[PushNotificationManager] fullScreenIntent permission check skipped: $e');
+      }
+
       // Explicitly purge legacy channels that may have had sound or importance muted in device settings
       await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_ring_channel');
       await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_ring_channel_v2');
@@ -380,23 +468,51 @@ class PushNotificationManager with WidgetsBindingObserver {
         audioAttributesUsage: AudioAttributesUsage.notificationRingtone,
       );
 
+      // Dedicated channel for visitor overstay alerts with custom clock alarm sound
+      const AndroidNotificationChannel overstayChannel = AndroidNotificationChannel(
+        'society_overstay_channel',
+        'Visitor Overstay Alerts',
+        description: 'High-priority alarm alerts when visitors or delivery agents exceed allowed campus stay time',
+        importance: Importance.max,
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound('clock_alarm'),
+        enableVibration: true,
+        showBadge: true,
+        audioAttributesUsage: AudioAttributesUsage.alarm,
+      );
+
       await androidPlugin?.createNotificationChannel(generalChannel);
       await androidPlugin?.createNotificationChannel(emergencyChannel);
       await androidPlugin?.createNotificationChannel(visitorRingChannel);
+      await androidPlugin?.createNotificationChannel(overstayChannel);
 
-      // Silent wake channel for visitor gate alerts (no sound/heads-up from OS side).
-      // fullScreenIntent on this channel wakes the device so the VisitorPopoutDialog fires
-      // directly when the resident taps or Android auto-launches the full-screen intent.
-      const AndroidNotificationChannel visitorSilentWakeChannel = AndroidNotificationChannel(
-        'society_visitor_silent_wake_channel',
+      // ── SCREEN-WAKE CHANNEL FIX ────────────────────────────────────────────────────────────────
+      // ROOT CAUSE: The old 'society_visitor_silent_wake_channel' used Importance.low.
+      // Android (documented behavior) silently suppresses fullScreenIntent for channels whose
+      // importance < HIGH. On Samsung One UI this is especially strict — the screen NEVER wakes
+      // from a low-importance channel notification, regardless of fullScreenIntent:true on the
+      // individual notification. This is why only sound played but the popup never appeared.
+      //
+      // FIX STRATEGY:
+      // 1. Delete the old low-importance channel — Android caches channel importance on first
+      //    registration and ignores any subsequent updates to the same channel ID. The only way
+      //    to change importance is to delete the channel and create a new one (or use a new ID).
+      // 2. Create 'society_visitor_wake_channel_v2' with Importance.max so Android actually fires
+      //    the fullScreenIntent and wakes/unlocks the screen.
+      // 3. playSound:false at the CHANNEL level — the doorbell ringtone already plays via the
+      //    FCM background handler through 'society_visitor_ring_channel_v4'. Keeping sound off
+      //    here prevents the doorbell from double-ringing.
+      await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_silent_wake_channel');
+      const AndroidNotificationChannel visitorWakeChannel = AndroidNotificationChannel(
+        'society_visitor_wake_channel_v2',
         'Visitor Gate Alerts',
-        description: 'Silent wake notification for visitor gate clearance — full screen popup handled in-app',
-        importance: Importance.low,
-        playSound: false,
+        description: 'Full-screen popup notification that wakes the screen when a visitor is waiting at the gate',
+        importance: Importance.max,   // MUST be HIGH or MAX for fullScreenIntent to fire on Samsung / Pixel
+        playSound: false,              // Doorbell sound already comes from society_visitor_ring_channel_v4 via FCM
         enableVibration: true,
         showBadge: true,
       );
-      await androidPlugin?.createNotificationChannel(visitorSilentWakeChannel);
+      await androidPlugin?.createNotificationChannel(visitorWakeChannel);
 
       // Initialize Firebase Cloud Messaging permissions and stream listeners
       try {
@@ -744,15 +860,17 @@ class PushNotificationManager with WidgetsBindingObserver {
       return; // Exit early — no banner, no generic flow below.
     }
 
-    // ── NON-VISITOR FLOW (bills, parcels, emergency, announcements) ──────────
+    // ── NON-VISITOR FLOW (bills, parcels, emergency, overstay, announcements) ──────────
     // 1. Post native Android OS system notification into notification hood / status bar.
-    if (!isAppForeground) {
+    // Ensure overstay alerts also post OS system notifications even if the app is currently in foreground,
+    // so the custom clock_alarm sound and status bar alert are triggered at the OS level.
+    if (!isAppForeground || payload.isOverstay) {
       _showSystemNotification(payload);
     }
 
     // 2. If app is in foreground, trigger haptic feedback and show in-app banner.
     if (isAppForeground) {
-      if (payload.isEmergency) {
+      if (payload.isEmergency || payload.isOverstay) {
         HapticFeedback.heavyImpact();
       } else {
         HapticFeedback.mediumImpact();
@@ -761,9 +879,9 @@ class PushNotificationManager with WidgetsBindingObserver {
       // Display the floating in-app heads-up banner.
       activeNotification.value = payload;
 
-      // Auto-dismiss banner after 6 seconds (emergency banners stay until dismissed).
+      // Auto-dismiss banner after 6 seconds (emergency and overstay banners stay until dismissed).
       _dismissTimer?.cancel();
-      if (!payload.isEmergency) {
+      if (!payload.isEmergency && !payload.isOverstay) {
         _dismissTimer = Timer(const Duration(seconds: 6), () {
           if (activeNotification.value?.id == payload.id) {
             activeNotification.value = null;
@@ -773,22 +891,38 @@ class PushNotificationManager with WidgetsBindingObserver {
     }
   }
 
-  /// Posts a SILENT wake notification for visitor approvals when the resident's app is in the background.
-  /// This has NO action buttons, NO heads-up banner (Importance.low), and NO doorbell sound from the OS.
-  /// Its sole purpose is to give Android a reason to bring the app to front when tapped,
-  /// at which point the tap callback opens the full VisitorPopoutDialog.
+  /// Posts a HIGH-IMPORTANCE wake notification for visitor approvals when the resident's app is in the background.
+  ///
+  /// SCREEN-WAKE FIX: fullScreenIntent ONLY fires (and thus wakes the screen) if the notification channel
+  /// has Importance.HIGH or higher. This notification uses 'society_visitor_wake_channel_v2' (Importance.max)
+  /// instead of the old low-importance channel, so the screen reliably wakes on Samsung and other Android devices.
+  ///
+  /// Sound is disabled per-notification (playSound:false) because the doorbell ringtone already plays via the
+  /// FCM background handler's 'society_visitor_ring_channel_v4' — preventing double-ringing.
+  ///
+  /// When the resident taps the notification or Android auto-launches the full-screen intent,
+  /// the tap callback opens the full VisitorPopoutDialog directly.
   Future<void> _showVisitorWakeNotification(PushNotificationPayload payload) async {
     try {
       final int notifId = payload.id.hashCode & 0x7FFFFFFF;
 
-      // Use low importance so Android does NOT show a heads-up banner / sound.
-      // fullScreenIntent: true still wakes the device and fires the full-screen UI.
+      // Store the payload so didChangeAppLifecycleState can flush it when Android
+      // auto-brings the app to foreground via fullScreenIntent (both over lock screen and after unlock).
+      // Without this, the popup would never show because onDidReceiveNotificationResponse
+      // only fires on explicit user tap — NOT on fullScreenIntent auto-launch.
+      _pendingVisitorApprovalPayload = payload;
+      // Record time so the lifecycle handler can enforce a 2-minute TTL on this payload.
+      _pendingVisitorApprovalSetAt = DateTime.now();
+
+      // Use 'society_visitor_wake_channel_v2' (Importance.max) — this is the key fix.
+      // Android requires the channel importance to be HIGH or MAX for fullScreenIntent to actually
+      // wake the screen. The old low-importance channel was silently suppressing the full-screen intent.
       final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-        'society_visitor_silent_wake_channel',
+        'society_visitor_wake_channel_v2',  // NEW: Importance.max channel — screen wakes reliably
         'Visitor Gate Alerts',
-        channelDescription: 'Silent wake notification for visitor gate clearance',
-        importance: Importance.low,
-        priority: Priority.high,
+        channelDescription: 'Full-screen popup notification that wakes the screen when a visitor is waiting at the gate',
+        importance: Importance.max,         // FIXED: was Importance.low — now correctly wakes screen
+        priority: Priority.max,             // FIXED: was Priority.high
         autoCancel: true,
         ongoing: false,
         ticker: payload.title,
@@ -796,9 +930,9 @@ class PushNotificationManager with WidgetsBindingObserver {
         visibility: NotificationVisibility.public,
         enableLights: true,
         enableVibration: true,
-        playSound: false,          // No OS doorbell — the in-app ringtone plays inside VisitorPopoutDialog
+        playSound: false,          // No OS doorbell here — FCM handler plays via society_visitor_ring_channel_v4
         channelShowBadge: true,
-        fullScreenIntent: true,    // Wake device and bring app to front
+        fullScreenIntent: true,    // Wakes device and opens VisitorPopoutDialog over lock screen
         category: AndroidNotificationCategory.call,
         // No action buttons — resident will interact via the full-screen popup
       );
@@ -819,7 +953,7 @@ class PushNotificationManager with WidgetsBindingObserver {
           'extraData': sanitizedExtraData,
         }),
       );
-      debugPrint('[PushNotificationManager] Posted visitor wake notification (silent): $notifId');
+      debugPrint('[PushNotificationManager] Posted visitor wake notification (Importance.max, screen will wake): $notifId');
     } catch (e) {
       debugPrint('[PushNotificationManager] Visitor wake notification error: $e');
     }
@@ -831,38 +965,49 @@ class PushNotificationManager with WidgetsBindingObserver {
     try {
       final int notifId = payload.id.hashCode & 0x7FFFFFFF;
       final bool isVisitorApproval = payload.isVisitorApprovalRequest;
+      final bool isOverstay = payload.isOverstay;
 
       final String channelId = payload.isEmergency
           ? 'society_emergency_channel'
-          : (isVisitorApproval ? 'society_visitor_ring_channel_v4' : 'society_general_channel');
+          : (isOverstay
+              ? 'society_overstay_channel'
+              : (isVisitorApproval ? 'society_visitor_ring_channel_v4' : 'society_general_channel'));
 
       final String channelName = payload.isEmergency
           ? 'Society Emergency Alerts'
-          : (isVisitorApproval ? 'Visitor Doorbell & Gate Approvals' : 'Society Notifications');
+          : (isOverstay
+              ? 'Visitor Overstay Alerts'
+              : (isVisitorApproval ? 'Visitor Doorbell & Gate Approvals' : 'Society Notifications'));
 
       final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
         channelId,
         channelName,
         channelDescription: payload.isEmergency
             ? 'Critical emergency SOS alerts'
-            : (isVisitorApproval
-                ? 'Urgent visitor gate clearance requests with custom doorbell ringtone'
-                : 'Important society announcements, bills, visitor and parcel alerts'),
-        importance: (payload.isEmergency || isVisitorApproval) ? Importance.max : Importance.high,
-        priority: (payload.isEmergency || isVisitorApproval) ? Priority.max : Priority.high,
+            : (isOverstay
+                ? 'High-priority alarm alerts when visitors or delivery agents exceed allowed campus stay time'
+                : (isVisitorApproval
+                    ? 'Urgent visitor gate clearance requests with custom doorbell ringtone'
+                    : 'Important society announcements, bills, visitor and parcel alerts')),
+        importance: (payload.isEmergency || isOverstay || isVisitorApproval) ? Importance.max : Importance.high,
+        priority: (payload.isEmergency || isOverstay || isVisitorApproval) ? Priority.max : Priority.high,
         autoCancel: true,
         ongoing: false,
         ticker: payload.title,
-        color: const Color(0xFF0F766E), // Teal theme primary
+        color: isOverstay ? const Color(0xFFDC2626) : const Color(0xFF0F766E), // Red for overstay alarm
         visibility: NotificationVisibility.public,
         enableLights: true,
         enableVibration: true,
         playSound: true,
-        sound: isVisitorApproval ? const RawResourceAndroidNotificationSound('cell_phone_ring_std') : null,
-        audioAttributesUsage: isVisitorApproval ? AudioAttributesUsage.notificationRingtone : AudioAttributesUsage.notification,
+        sound: isOverstay
+            ? const RawResourceAndroidNotificationSound('clock_alarm')
+            : (isVisitorApproval ? const RawResourceAndroidNotificationSound('cell_phone_ring_std') : null),
+        audioAttributesUsage: isOverstay
+            ? AudioAttributesUsage.alarm
+            : (isVisitorApproval ? AudioAttributesUsage.notificationRingtone : AudioAttributesUsage.notification),
         channelShowBadge: true,
-        fullScreenIntent: payload.isEmergency || isVisitorApproval,
-        category: payload.isEmergency
+        fullScreenIntent: payload.isEmergency || isOverstay || isVisitorApproval,
+        category: (payload.isEmergency || isOverstay)
             ? AndroidNotificationCategory.alarm
             : (isVisitorApproval ? AndroidNotificationCategory.call : AndroidNotificationCategory.message),
         // Interactive action buttons on the heads-up notification card: Approve, Leave at Gate, and Deny.
