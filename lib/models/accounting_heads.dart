@@ -1,4 +1,5 @@
 import 'package:intl/intl.dart';
+import '../utils/flat_utils.dart';
 
 // ============================================================================
 // RAMKRISHNAPURAM RESIDENTS' WELFARE ASSOCIATION (RKP RWA)
@@ -652,9 +653,12 @@ class AccountingConfig {
     int bikeCount = 0,
     double fine = 0.0,
   }) {
-    final clean = flatNumber.trim().toUpperCase();
-    final match = RegExp(r'^([A-D])(?=[- ]|$)').firstMatch(clean);
-    final String block = match != null ? match.group(1)! : 'A';
+    // Canonical block extraction via FlatUtils ensuring consistent block identification across all screens.
+    // Non-canonical blocks (e.g. 'General', 'AB') safely default to Block A standard rates.
+    final String extracted = FlatUtils.extractBlock(flatNumber);
+    final String block = (extracted == 'A' || extracted == 'B' || extracted == 'C' || extracted == 'D')
+        ? extracted
+        : 'A';
 
     final rateData = blockRateBreakup[block] ?? blockRateBreakup['A']!;
     final double baseMaint = (rateData['maintenance'] ?? rateData['total'] ?? 390).toDouble();

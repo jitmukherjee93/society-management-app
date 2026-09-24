@@ -653,6 +653,12 @@ class BillingService {
           : (m == primaryMonth ? _fs.collection('maintenance_dues').doc(effectivePrimaryDueId) : _fs.collection('maintenance_dues').doc());
 
       final existingDocData = existingDoc?.data() as Map<String, dynamic>?;
+      if (existingDocData != null) {
+        final curStatus = (existingDocData['status'] ?? '').toString().toUpperCase();
+        if (curStatus.startsWith('PAID')) {
+          throw Exception('Month $m has already been marked as $curStatus. Cannot resubmit payment for this month.');
+        }
+      }
       final bool docIsParkingOnly = isParkingOnly ||
           existingDocData?['isParkingOnlyBill'] == true ||
           ((existingDocData?['baseMaintenance'] as num?)?.toDouble() == 0.0);

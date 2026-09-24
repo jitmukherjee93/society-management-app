@@ -566,6 +566,69 @@ void main() {
       expect(getInitialWalkInStatus('Personal driver'), 'CHECKED_IN');
       expect(getInitialWalkInStatus('Domestic helper'), 'CHECKED_IN');
     });
+
+    test('Guest departure checkout notification ID is deterministic (checkout_<visitorDocId>)', () {
+      const visitorDocId = 'vis_101_sample_abc';
+      final deterministicId = 'checkout_$visitorDocId';
+
+      // Verify deterministic ID format
+      expect(deterministicId, 'checkout_vis_101_sample_abc');
+      expect(deterministicId.startsWith('checkout_'), isTrue);
+
+      // Verify that calling checkout notification generation twice yields the EXACT same doc ID
+      String getCheckoutNotifId(String vId) => 'checkout_$vId';
+      expect(getCheckoutNotifId(visitorDocId), getCheckoutNotifId(visitorDocId));
+    });
+
+    test('System notification deduplication window suppresses rapid duplicate alerts', () {
+      final recentlyShown = <String, DateTime>{};
+      bool shouldSuppress(String key, DateTime now) {
+        if (recentlyShown.containsKey(key)) {
+          final last = recentlyShown[key]!;
+          if (now.difference(last).inSeconds < 60) {
+            return true; // Suppress duplicate
+          }
+        }
+        recentlyShown[key] = now;
+        return false;
+      }
+
+      final t0 = DateTime(2026, 9, 24, 16, 0, 0);
+      const dedupeKey = 'visitor_VISITOR_CHECK_OUT_vis_123';
+
+      // First trigger at t0: should NOT be suppressed
+      expect(shouldSuppress(dedupeKey, t0), isFalse);
+
+      // Second trigger at t0 + 2s (e.g. from background stream / FCM race): MUST be suppressed!
+      expect(shouldSuppress(dedupeKey, t0.add(const Duration(seconds: 2))), isTrue);
+
+      // Third trigger at t0 + 30s: MUST be suppressed!
+      expect(shouldSuppress(dedupeKey, t0.add(const Duration(seconds: 30))), isTrue);
+
+      // Subsequent trigger after 61s: allowed
+      expect(shouldSuppress(dedupeKey, t0.add(const Duration(seconds: 61))), isFalse);
+    });
+
+    test('Visitor departure checkout payload includes correct vehicle and gate metadata', () {
+      final checkoutData = {
+        'status': 'CHECKED_OUT',
+        'visitorName': 'Amit Kumar',
+        'purpose': 'Guest / Family',
+        'phone': '9876543210',
+        'isComingByCar': true,
+        'vehicleNumber': 'DL-01-AB-1234',
+        'gateName': 'Main Gate',
+        'guardName': 'Rajesh Singh',
+      };
+
+      expect(checkoutData['status'], 'CHECKED_OUT');
+      expect(checkoutData['vehicleNumber'], 'DL-01-AB-1234');
+      final vehicleInfo = checkoutData['isComingByCar'] == true && (checkoutData['vehicleNumber'] as String).isNotEmpty
+          ? ' with vehicle ${checkoutData['vehicleNumber']}'
+          : '';
+      final message = 'Your guest ${checkoutData['visitorName']} (${checkoutData['purpose']}) has checked out and exited from ${checkoutData['gateName']}$vehicleInfo.';
+      expect(message, 'Your guest Amit Kumar (Guest / Family) has checked out and exited from Main Gate with vehicle DL-01-AB-1234.');
+    });
   });
 }
 

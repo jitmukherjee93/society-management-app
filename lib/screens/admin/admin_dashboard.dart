@@ -17,6 +17,8 @@ import 'tabs/generate_maintenance_tab.dart';
 import 'tabs/manage_announcements_tab.dart';
 import 'tabs/manage_complaints_tab.dart';
 import 'tabs/admin_visitors_tab.dart';
+// Admin tab for approving Community Hall, Ground & Gym reservations
+import 'tabs/manage_amenity_bookings_tab.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -259,6 +261,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
         title.contains('visitor') ||
         message.contains('visitor')) {
       setState(() => _currentIndex = 6); // Visitors Tab
+    } else if (type.contains('AMENITY') ||
+        title.contains('booking') ||
+        message.contains('booking') ||
+        notif['amenity'] != null) {
+      // Direct navigation to Amenity Bookings Tab for reviewing pending requests and verifying advance payments
+      setState(() => _currentIndex = 7); // Amenity Bookings Tab
     } else if (notif['flatNumber'] != null) {
       setState(() {
         _selectedFlatQuery = notif['flatNumber']?.toString();
@@ -987,6 +995,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 _buildSidebarNavItem(4, 'Helpdesk', Icons.support_agent_outlined, Icons.support_agent_rounded),
                 _buildSidebarNavItem(5, 'Maintenance', Icons.receipt_long_outlined, Icons.receipt_long_rounded),
                 _buildSidebarNavItem(6, 'Visitors', Icons.badge_outlined, Icons.badge_rounded),
+                // Amenity & facility booking management tab (Hall, Ground, Gym)
+                _buildSidebarNavItem(7, 'Amenities', Icons.event_available_outlined, Icons.event_available_rounded),
               ],
             ),
           ),
@@ -1041,23 +1051,28 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   Widget _buildSidebarNavItem(int index, String title, IconData icon, IconData activeIcon) {
     final isSelected = _currentIndex == index;
-    final content = InkWell(
-      onTap: () {
-        setState(() {
-          _currentIndex = index;
-        });
-      },
-      borderRadius: BorderRadius.circular(8),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 10,
-        ),
-        decoration: BoxDecoration(
-          color: isSelected ? AppColors.primaryLight : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
+    final content = Semantics(
+      button: true,
+      selected: isSelected,
+      label: '$title tab',
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          constraints: const BoxConstraints(minHeight: 48), // WCAG minimum 48dp touch target
+          padding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 10,
+          ),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.primaryLight : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
         child: Row(
           mainAxisAlignment: _isSidebarCollapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
           children: [
@@ -1092,7 +1107,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ],
         ),
       ),
-    );
+    ),
+  );
 
     if (_isSidebarCollapsed) {
       return Padding(
@@ -1318,6 +1334,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
       const ManageComplaintsTab(),
       const GenerateMaintenanceTab(),
       const AdminVisitorsTab(),
+      // Tab 7: Amenity booking approval, schedule tracking, and balance payment collection
+      const ManageAmenityBookingsTab(),
     ];
 
     final isDesktop = MediaQuery.sizeOf(context).width >= 900;
@@ -1446,57 +1464,79 @@ class _AdminDashboardState extends State<AdminDashboard> {
         ],
       ),
       body: IndexedStack(index: _currentIndex, children: pages),
-      bottomNavigationBar: Container(
+      bottomNavigationBar: _buildMobileBottomNav(),
+    );
+  }
+
+  Widget _buildMobileBottomNav() {
+    return SafeArea(
+      child: Container(
+        height: 64,
         decoration: const BoxDecoration(
+          color: Colors.white,
           border: Border(top: BorderSide(color: AppColors.border, width: 0.9)),
         ),
-        child: NavigationBar(
-          selectedIndex: _currentIndex,
-          height: 62,
-          backgroundColor: Colors.white,
-          indicatorColor: AppColors.primaryLight,
-          onDestinationSelected: (index) {
-            setState(() {
-              _currentIndex = index;
-            });
-          },
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.dashboard_outlined, size: 20),
-              selectedIcon: Icon(Icons.dashboard_rounded, size: 20, color: AppColors.primary),
-              label: 'Dashboard',
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
+            children: [
+              _buildMobileNavItem(0, 'Dashboard', Icons.dashboard_outlined, Icons.dashboard_rounded),
+              _buildMobileNavItem(1, 'Flats', Icons.apartment_outlined, Icons.apartment_rounded),
+              _buildMobileNavItem(2, 'Accounts', Icons.account_balance_wallet_outlined, Icons.account_balance_wallet_rounded),
+              _buildMobileNavItem(3, 'Notices', Icons.campaign_outlined, Icons.campaign_rounded),
+              _buildMobileNavItem(4, 'Helpdesk', Icons.support_agent_outlined, Icons.support_agent_rounded),
+              _buildMobileNavItem(5, 'Bills', Icons.receipt_long_outlined, Icons.receipt_long_rounded),
+              _buildMobileNavItem(6, 'Visitors', Icons.badge_outlined, Icons.badge_rounded),
+              _buildMobileNavItem(7, 'Amenities', Icons.event_available_outlined, Icons.event_available_rounded),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMobileNavItem(int index, String label, IconData icon, IconData activeIcon) {
+    final isSelected = _currentIndex == index;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Semantics(
+        button: true,
+        selected: isSelected,
+        label: '$label tab',
+        child: InkWell(
+          onTap: () => setState(() => _currentIndex = index),
+          borderRadius: BorderRadius.circular(10),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            constraints: const BoxConstraints(minHeight: 48, minWidth: 64),
+            decoration: BoxDecoration(
+              color: isSelected ? AppColors.primaryLight : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: isSelected ? Border.all(color: AppColors.primaryBorder) : null,
             ),
-            NavigationDestination(
-              icon: Icon(Icons.apartment_outlined, size: 20),
-              selectedIcon: Icon(Icons.apartment_rounded, size: 20, color: AppColors.primary),
-              label: 'Flats',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  isSelected ? activeIcon : icon,
+                  size: 20,
+                  color: isSelected ? AppColors.primary : AppColors.textSecondary,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    color: isSelected ? AppColors.primaryDark : AppColors.textSecondary,
+                  ),
+                ),
+              ],
             ),
-            NavigationDestination(
-              icon: Icon(Icons.account_balance_wallet_outlined, size: 20),
-              selectedIcon: Icon(Icons.account_balance_wallet_rounded, size: 20, color: AppColors.primary),
-              label: 'Accounts',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.campaign_outlined, size: 20),
-              selectedIcon: Icon(Icons.campaign_rounded, size: 20, color: AppColors.primary),
-              label: 'Notices',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.support_agent_outlined, size: 20),
-              selectedIcon: Icon(Icons.support_agent_rounded, size: 20, color: AppColors.primary),
-              label: 'Helpdesk',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.receipt_long_outlined, size: 20),
-              selectedIcon: Icon(Icons.receipt_long_rounded, size: 20, color: AppColors.primary),
-              label: 'Bills',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.badge_outlined, size: 20),
-              selectedIcon: Icon(Icons.badge_rounded, size: 20, color: AppColors.primary),
-              label: 'Visitors',
-            ),
-          ],
+          ),
         ),
       ),
     );

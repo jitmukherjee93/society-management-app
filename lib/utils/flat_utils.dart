@@ -37,8 +37,8 @@ class FlatUtils {
       return trimmed;
     }
 
-    // Match leading block letter followed by separator or digits (e.g., 'B 312' or 'B312' -> 'B-312')
-    final match = RegExp(r'^([A-D])[\s-]*([0-9A-Za-z]+)$').firstMatch(trimmed);
+    // Match leading block letters followed by separator or digits (e.g. 'B 312', 'B312' -> 'B-312', 'AB101' -> 'AB-101')
+    final match = RegExp(r'^([A-Za-z]+)[\s-]*([0-9]+[A-Za-z]*)$').firstMatch(trimmed);
     if (match != null) {
       return '${match.group(1)}-${match.group(2)}';
     }
@@ -46,11 +46,14 @@ class FlatUtils {
     return trimmed;
   }
 
-  /// Extracts the block letter (A, B, C, D) strictly from a flat number.
-  /// Returns `'General'` if no standard block letter is present.
+  /// Extracts the canonical block letter ('A', 'B', 'C', 'D') strictly from a flat number.
+  /// Returns `'General'` if no standard single-letter block prefix is present (e.g. '101', 'AB-101', 'Alpha-1').
   static String extractBlock(String? rawFlat) {
     final norm = normalize(rawFlat);
-    final match = RegExp(r'^([A-D])(?=[- ]|$)').firstMatch(norm);
+    if (norm.isEmpty) return 'General';
+
+    // Must strictly match canonical blocks A, B, C, D followed by '-' or string end
+    final match = RegExp(r'^([A-D])(?=[-]|$)').firstMatch(norm);
     if (match != null) {
       return match.group(1)!;
     }

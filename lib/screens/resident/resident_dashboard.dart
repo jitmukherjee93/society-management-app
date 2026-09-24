@@ -11,6 +11,7 @@ import '../../constants/society_config.dart';
 import '../../utils/app_formatters.dart';
 import '../../services/billing_service.dart';
 import 'tabs/community_feed_tab.dart';
+import 'tabs/resident_visitors_tab.dart';
 import '../../utils/storage_utils.dart';
 import '../../services/notification_service.dart';
 import '../../services/visitor_pass_service.dart';
@@ -25,6 +26,8 @@ import '../../models/notice_model.dart';
 import '../../widgets/notices/two_column_notice_list.dart';
 import '../../widgets/maintenance/maintenance_months_calendar.dart';
 import '../../widgets/visitor_popout_dialog.dart';
+import 'amenity_booking_screen.dart';
+import '../../models/amenity_booking.dart';
 
 // ============================================================================
 // RESIDENT PORTAL & SELF-SERVICE DASHBOARD
@@ -103,6 +106,54 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
   String? _selectedMaintenanceMonth;
   Future<DocumentReference?>? _userDocRefFuture;
   bool _isWarningBannerCollapsed = false;
+  /// Cached notifications stream to prevent redundant listener churn and lag
+  Stream<QuerySnapshot>? _notificationsStream;
+
+  /// Maps the internal page index (`_currentIndex`) to the accessible 4-item Bottom Navigation Bar.
+  ///
+  /// Page Mapping Architecture (Separated Notices & Alerts):
+  /// - Index 0: HomeTab (Daily Essential) -> Bottom Nav Tab 0 "Home"
+  /// - Index 5: ResidentVisitorsTab (Daily Essential) -> Bottom Nav Tab 1 "Visitors"
+  /// - Index 4: MaintenanceTab (Daily Essential) -> Bottom Nav Tab 2 "Bills"
+  /// - Index 2: ResidentNoticesTab (Society Circulars Only) -> Bottom Nav Tab 3 "Notice"
+  /// - Index 6: ResidentAlertsTab (Personal Clearances & Alerts Only) -> Opened via Top Bell Icon
+  /// - Index 1: CommunityFeedTab (Secondary Community Feature) -> Accessible via Navigation Drawer
+  /// - Index 3: ResidentHelpdeskTab (Secondary Facility Feature) -> Accessible via Navigation Drawer
+  ///
+  /// Preserves zero regressions for all programmatic `onNavigateTab?.call(0..4)` events.
+  int get _bottomNavIndex {
+    switch (_currentIndex) {
+      case 5:
+        return 1; // Visitors
+      case 4:
+        return 2; // Bills
+      case 2:
+        return 3; // Notice
+      case 0:
+      default:
+        return 0; // Home (or drawer/alerts active)
+    }
+  }
+
+  /// Handles destination switching from the accessible 4-item Bottom Navigation Bar.
+  void _onBottomNavSelected(int bottomIndex) {
+    setState(() {
+      switch (bottomIndex) {
+        case 0:
+          _currentIndex = 0; // Home
+          break;
+        case 1:
+          _currentIndex = 5; // Visitors
+          break;
+        case 2:
+          _currentIndex = 4; // Bills / Maintenance
+          break;
+        case 3:
+          _currentIndex = 2; // Notice (Society Notices & Circulars)
+          break;
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -114,6 +165,11 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           ? userEmail!.split('@').first.toLowerCase()
           : null;
       _userDocRefFuture = _resolveUserDocRef(user.uid, userEmail, flatPrefix);
+      _notificationsStream = FirebaseFirestore.instance
+          .collection('notifications')
+          .where('targetRole', whereIn: ['RESIDENT', 'ALL'])
+          .limit(50)
+          .snapshots();
     }
 
     // Register Push Notification Click Delegate for instant navigation/dialogs
@@ -235,8 +291,20 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           });
         },
       ),
-      const CommunityFeedTab(),
-      NotificationsTab(
+      const CommunityFeedTab(), // Index 1
+      const ResidentNoticesTab(), // Index 2: Society Notices Only (Bottom Nav Tab 3 "Notice")
+      ResidentHelpdeskTab(userFlat: userFlat), // Index 3
+      MaintenanceTab( // Index 4: Maintenance Bills (Bottom Nav Tab 2 "Bills")
+        key: ValueKey(_selectedMaintenanceMonth ?? 'maint_default'),
+        initialSelectedMonth: _selectedMaintenanceMonth,
+      ),
+      // Resident Visitors & Gate Passes Tab (Index 5: Bottom Nav Tab 1 "Visitors")
+      ResidentVisitorsTab(
+        userFlat: userFlat,
+        fullFlat: fullFlat,
+      ),
+      // Resident Personal Alerts & Clearances Tab (Index 6: Opened via Top Bell Icon)
+      ResidentAlertsTab(
         userFlat: userFlat,
         fullFlat: fullFlat,
         onNavigateTab: (idx, [payload]) {
@@ -248,120 +316,127 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           });
         },
       ),
-      ResidentHelpdeskTab(userFlat: userFlat),
-      MaintenanceTab(
-        key: ValueKey(_selectedMaintenanceMonth ?? 'maint_default'),
-        initialSelectedMonth: _selectedMaintenanceMonth,
-      ),
     ];
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('notifications')
-          .where('targetRole', whereIn: ['RESIDENT', 'ALL'])
-          .limit(100)
-          .snapshots(),
-      builder: (context, notifSnap) {
-        final docs = (notifSnap.data?.docs ?? []).where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          return _isNotificationForResident(data, user, userFlat, fullFlat);
-        }).toList();
-        final notifCount = docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          return data['isRead'] != true;
-        }).length;
-
-        return Scaffold(
-          appBar: AppBar(
-            backgroundColor: AppColors.surface,
-            elevation: 0,
-            scrolledUnderElevation: 1,
-            title: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: AppColors.primarySurface,
-                    borderRadius: BorderRadius.circular(8),
+    return PopScope(
+      canPop: _currentIndex == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_currentIndex != 0) {
+          setState(() => _currentIndex = 0);
+        }
+      },
+      child: Scaffold(
+            appBar: AppBar(
+              backgroundColor: AppColors.surface,
+              elevation: 0,
+              scrolledUnderElevation: 1,
+              // Elder-Friendly Hamburger Menu Button (Min 48x48dp touch target, high contrast)
+              leading: Builder(
+                builder: (ctx) => Semantics(
+                  label: 'Open navigation menu',
+                  button: true,
+                  child: IconButton(
+                    icon: const Icon(Icons.menu_rounded, size: 28, color: AppColors.slate800),
+                    tooltip: 'Open Menu',
+                    onPressed: () => Scaffold.of(ctx).openDrawer(),
                   ),
-                  child: const Icon(Icons.apartment_rounded, color: AppColors.primary, size: 20),
                 ),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Resident Portal',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
+              ),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: AppColors.primarySurface,
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                    if (fullFlat != null && fullFlat.isNotEmpty)
-                      Text(
-                        'Flat $fullFlat',
-                        style: const TextStyle(fontSize: 11, color: AppColors.slate500, fontWeight: FontWeight.w500),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.shield_outlined, color: AppColors.slate700),
-                tooltip: 'Account & Security Settings',
-                onPressed: () => _showUpdateEmailDialog(
-                  context,
-                  user,
-                  userDocRef,
-                  uData,
-                  defaultLoginId,
-                ),
-              ),
-              IconButton(
-                icon: Badge(
-                  isLabelVisible: notifCount > 0,
-                  backgroundColor: AppColors.error,
-                  label: Text('$notifCount', style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
-                  child: const Icon(Icons.notifications_outlined, color: AppColors.slate700),
-                ),
-                tooltip: 'Alerts',
-                onPressed: () => setState(() => _currentIndex = 2),
-              ),
-              if (MediaQuery.sizeOf(context).width < 600)
-                IconButton(
-                  icon: const Icon(Icons.logout_rounded, color: AppColors.error, size: 20),
-                  tooltip: 'Log out',
-                  onPressed: () async {
-                    final confirm = await AppDialog.show<bool>(
-                      context: context,
-                      title: 'Sign Out',
-                      subtitle: 'Are you sure you want to log out?',
-                      icon: Icons.logout_rounded,
-                      iconColor: AppColors.error,
-                      iconBgColor: AppColors.errorSurface,
-                      body: const Text('You will need to sign in again to access your resident portal.'),
-                      actions: [
-                        OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
-                          onPressed: () => Navigator.pop(context, true),
-                          child: const Text('Sign Out'),
+                    child: Icon(
+                      _currentIndex == 6
+                          ? Icons.notifications_active_rounded
+                          : (_currentIndex == 2 ? Icons.campaign_rounded : Icons.apartment_rounded),
+                      color: AppColors.primary,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  // Text Overflow Protection for high system font scaling (Expanded + ellipsis)
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _currentIndex == 6
+                              ? 'Personal Alerts'
+                              : (_currentIndex == 2 ? 'Society Notices' : 'Resident Portal'),
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate900),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
                         ),
+                        if (fullFlat != null && fullFlat.isNotEmpty)
+                          Text(
+                            _currentIndex == 6
+                                ? 'Flat $fullFlat • Clearances & Updates'
+                                : (_currentIndex == 2
+                                    ? 'Flat $fullFlat • Official Circulars'
+                                    : 'Flat $fullFlat'),
+                            style: const TextStyle(fontSize: 11, color: AppColors.slate600, fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
                       ],
-                    );
-                    if (confirm == true) {
-                      await FirebaseAuth.instance.signOut();
-                    }
-                  },
-                )
-              else
-                Padding(
-                  padding: const EdgeInsets.only(right: 8.0),
-                  child: TextButton.icon(
-                    style: TextButton.styleFrom(
-                      foregroundColor: AppColors.error,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     ),
-                    icon: const Icon(Icons.logout_rounded, size: 18),
-                    label: const Text('Log out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  ),
+                ],
+              ),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.shield_outlined, color: AppColors.slate700),
+                  tooltip: 'Account & Security Settings',
+                  onPressed: () => _showUpdateEmailDialog(
+                    context,
+                    user,
+                    userDocRef,
+                    uData,
+                    defaultLoginId,
+                  ),
+                ),
+                // Dedicated Personal Alerts bell icon button with scoped real-time unread badge
+                StreamBuilder<QuerySnapshot>(
+                  stream: _notificationsStream,
+                  builder: (context, notifSnap) {
+                    final docs = (notifSnap.data?.docs ?? []).where((doc) {
+                      final data = doc.data() as Map<String, dynamic>;
+                      return _isNotificationForResident(data, user, userFlat, fullFlat);
+                    });
+                    final unreadCount = docs.where((doc) {
+                      final data = doc.data() as Map<String, dynamic>;
+                      return data['isRead'] != true;
+                    }).length;
+
+                    return IconButton(
+                      icon: Badge(
+                        isLabelVisible: unreadCount > 0,
+                        backgroundColor: AppColors.error,
+                        label: Text(
+                          '$unreadCount',
+                          style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                        child: Icon(
+                          _currentIndex == 6 ? Icons.notifications_rounded : Icons.notifications_outlined,
+                          color: _currentIndex == 6 ? AppColors.primary : AppColors.slate700,
+                        ),
+                      ),
+                      tooltip: 'Personal Alerts',
+                      onPressed: () => setState(() => _currentIndex = 6),
+                    );
+                  },
+                ),
+                if (MediaQuery.sizeOf(context).width < 600)
+                  IconButton(
+                    icon: const Icon(Icons.logout_rounded, color: AppColors.error, size: 20),
+                    tooltip: 'Log out',
                     onPressed: () async {
                       final confirm = await AppDialog.show<bool>(
                         context: context,
@@ -384,55 +459,132 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                         await FirebaseAuth.instance.signOut();
                       }
                     },
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.error,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      ),
+                      icon: const Icon(Icons.logout_rounded, size: 18),
+                      label: const Text('Log out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                      onPressed: () async {
+                        final confirm = await AppDialog.show<bool>(
+                          context: context,
+                          title: 'Sign Out',
+                          subtitle: 'Are you sure you want to log out?',
+                          icon: Icons.logout_rounded,
+                          iconColor: AppColors.error,
+                          iconBgColor: AppColors.errorSurface,
+                          body: const Text('You will need to sign in again to access your resident portal.'),
+                          actions: [
+                            OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('Sign Out'),
+                            ),
+                          ],
+                        );
+                        if (confirm == true) {
+                          await FirebaseAuth.instance.signOut();
+                        }
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            // Elder-friendly Navigation Drawer for secondary features and quick society actions
+            drawer: _buildResidentDrawer(
+              context,
+              user,
+              fullFlat,
+              userFlat,
+              uData,
+              userDocRef,
+              defaultLoginId,
+            ),
+            body: Column(
+              children: [
+                if (showEmailWarning)
+                  _buildEmailWarningBanner(
+                    context,
+                    user,
+                    defaultLoginId,
+                    userDocRef,
+                    uData,
+                  )
+                else if (showPasswordRevocationWarning)
+                  _buildPasswordRevocationBanner(
+                    context,
+                    user,
+                    defaultLoginId,
+                    userDocRef,
+                    uData,
+                  ),
+                Expanded(
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (child, animation) {
+                      return FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0.0, 0.02),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: KeyedSubtree(
+                      key: ValueKey<int>(_currentIndex),
+                      child: IndexedStack(index: _currentIndex, children: pages),
+                    ),
                   ),
                 ),
-            ],
-          ),
-          body: Column(
-            children: [
-              if (showEmailWarning)
-                _buildEmailWarningBanner(
-                  context,
-                  user,
-                  defaultLoginId,
-                  userDocRef,
-                  uData,
-                )
-              else if (showPasswordRevocationWarning)
-                _buildPasswordRevocationBanner(
-                  context,
-                  user,
-                  defaultLoginId,
-                  userDocRef,
-                  uData,
+              ],
+            ),
+            // Accessible 4-Destination Bottom Navigation Bar with WCAG AAA contrast & large touch targets
+            bottomNavigationBar: NavigationBar(
+              selectedIndex: _bottomNavIndex,
+              indicatorColor: AppColors.primarySurface,
+              height: 72,
+              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+              onDestinationSelected: _onBottomNavSelected,
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.home_outlined, size: 26),
+                  selectedIcon: Icon(Icons.home_rounded, color: AppColors.primary, size: 26),
+                  label: 'Home',
+                  tooltip: 'Home Dashboard',
                 ),
-              Expanded(
-                child: IndexedStack(index: _currentIndex, children: pages),
-              ),
-            ],
-          ),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _currentIndex,
-            indicatorColor: AppColors.primarySurface,
-            onDestinationSelected: (index) => setState(() => _currentIndex = index),
-            destinations: [
-              const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: AppColors.primary), label: 'Home'),
-              const NavigationDestination(icon: Icon(Icons.forum_outlined), selectedIcon: Icon(Icons.forum, color: AppColors.primary), label: 'Community'),
-              NavigationDestination(
-                icon: Badge(
-                  isLabelVisible: notifCount > 0,
-                  backgroundColor: AppColors.error,
-                  label: Text('$notifCount'),
-                  child: const Icon(Icons.notifications_outlined),
+                NavigationDestination(
+                  icon: Icon(Icons.badge_outlined, size: 26),
+                  selectedIcon: Icon(Icons.badge_rounded, color: AppColors.primary, size: 26),
+                  label: 'Visitors',
+                  tooltip: 'Gate Passes & Visitors',
                 ),
-                selectedIcon: const Icon(Icons.notifications, color: AppColors.primary),
-                label: 'Alerts',
-              ),
-              const NavigationDestination(icon: Icon(Icons.support_agent_outlined), selectedIcon: Icon(Icons.support_agent, color: AppColors.primary), label: 'Helpdesk'),
-              const NavigationDestination(icon: Icon(Icons.payment_outlined), selectedIcon: Icon(Icons.payment, color: AppColors.primary), label: 'Maintenance'),
-            ],
-          ),
-          floatingActionButton: _currentIndex == 0
+                NavigationDestination(
+                  icon: Icon(Icons.receipt_long_outlined, size: 26),
+                  selectedIcon: Icon(Icons.receipt_long_rounded, color: AppColors.primary, size: 26),
+                  label: 'Bills',
+                  tooltip: 'Maintenance & Bills',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.campaign_outlined, size: 26),
+                  selectedIcon: Icon(Icons.campaign_rounded, color: AppColors.primary, size: 26),
+                  label: 'Notice',
+                  tooltip: 'Society Notices & Circulars',
+                ),
+              ],
+            ),
+          // Quick Pre-approve Visitor FAB on Home (0) and Visitors (5)
+          floatingActionButton: (_currentIndex == 0 || _currentIndex == 5)
               ? FloatingActionButton.extended(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
@@ -444,12 +596,527 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                       ),
                     );
                   },
-                  icon: const Icon(Icons.person_add_rounded, size: 20),
-                  label: const Text('Pre-approve Visitor', style: TextStyle(fontWeight: FontWeight.w600)),
+                  icon: const Icon(Icons.person_add_rounded, size: 22),
+                  label: const Text('Pre-approve Visitor', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                 )
               : null,
+          ),
         );
-      },
+  }
+
+  /// Builds the accessible, elder-friendly Navigation Drawer for the Resident Portal.
+  ///
+  /// Designed in accordance with WCAG AAA & Nielsen Gerontological UX guidelines:
+  /// - High contrast ratios (> 7:1) using AppColors.slate900 / AppColors.slate800 against surfaces.
+  /// - Large, accessible touch targets (min 56dp height per destination item).
+  /// - Clean, readable typography with explanatory subtitles to minimize cognitive load.
+  /// - Full vertical scrollability via ListView to prevent RenderFlex overflow at 1.3x–1.6x system text scale.
+  Widget _buildResidentDrawer(
+    BuildContext context,
+    User user,
+    String? fullFlat,
+    String? userFlat,
+    Map<String, dynamic> uData,
+    DocumentReference? userDocRef,
+    String defaultLoginId,
+  ) {
+    final residentName = (uData['name'] ?? user.displayName ?? 'Resident').toString().trim();
+    final flatLabel = (fullFlat != null && fullFlat.isNotEmpty)
+        ? fullFlat
+        : (userFlat != null && userFlat.isNotEmpty ? userFlat : 'Resident');
+
+    return Drawer(
+      backgroundColor: AppColors.surface,
+      child: SafeArea(
+        top: false, // Let the header extend into status bar seamlessly
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            // Drawer Header with high-contrast resident profile and flat info
+            DrawerHeader(
+              decoration: const BoxDecoration(
+                color: AppColors.primary,
+              ),
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 28,
+                        backgroundColor: Colors.white.withValues(alpha: 0.2),
+                        child: Text(
+                          residentName.isNotEmpty ? residentName[0].toUpperCase() : 'R',
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              residentName,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Text(
+                                'Flat $flatLabel',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    SocietyConfig.societyName,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+              ),
+            ),
+
+            // Section 1: Core Daily Services
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 14, 20, 6),
+              child: Text(
+                'DAILY SERVICES',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                  color: AppColors.slate500,
+                ),
+              ),
+            ),
+            _buildDrawerTile(
+              context: context,
+              icon: Icons.home_rounded,
+              title: 'Home Dashboard',
+              subtitle: 'Overview, balances & quick actions',
+              isSelected: _currentIndex == 0,
+              onTap: () {
+                Navigator.pop(context);
+                setState(() => _currentIndex = 0);
+              },
+            ),
+            _buildDrawerTile(
+              context: context,
+              icon: Icons.badge_rounded,
+              title: 'Visitors & Gate Passes',
+              subtitle: 'Pre-approve guests & parcel deliveries',
+              isSelected: _currentIndex == 5,
+              onTap: () {
+                Navigator.pop(context);
+                setState(() => _currentIndex = 5);
+              },
+            ),
+            _buildDrawerTile(
+              context: context,
+              icon: Icons.receipt_long_rounded,
+              title: 'Bills & Maintenance',
+              subtitle: 'Pay maintenance dues & download receipts',
+              isSelected: _currentIndex == 4,
+              onTap: () {
+                Navigator.pop(context);
+                setState(() => _currentIndex = 4);
+              },
+            ),
+            _buildDrawerTile(
+              context: context,
+              icon: Icons.campaign_rounded,
+              title: 'Society Notices',
+              subtitle: 'RWA circulars & public announcements',
+              isSelected: _currentIndex == 2,
+              onTap: () {
+                Navigator.pop(context);
+                setState(() => _currentIndex = 2);
+              },
+            ),
+            StreamBuilder<QuerySnapshot>(
+              stream: _notificationsStream,
+              builder: (context, notifSnap) {
+                final docs = (notifSnap.data?.docs ?? []).where((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  return _isNotificationForResident(data, user, userFlat, fullFlat);
+                });
+                final badgeCount = docs.where((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  return data['isRead'] != true;
+                }).length;
+
+                return _buildDrawerTile(
+                  context: context,
+                  icon: Icons.notifications_rounded,
+                  title: 'Personal Alerts',
+                  subtitle: 'Gate clearances, bills & personal notifications',
+                  badgeCount: badgeCount,
+                  isSelected: _currentIndex == 6,
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() => _currentIndex = 6);
+                  },
+                );
+              },
+            ),
+
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Divider(color: AppColors.slate200, height: 1),
+            ),
+
+            // Section 2: Community & Facilities
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 8, 20, 6),
+              child: Text(
+                'COMMUNITY & FACILITIES',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                  color: AppColors.slate500,
+                ),
+              ),
+            ),
+            _buildDrawerTile(
+              context: context,
+              icon: Icons.forum_rounded,
+              title: 'Community Forum',
+              subtitle: 'Discussions with society neighbors',
+              isSelected: _currentIndex == 1,
+              onTap: () {
+                Navigator.pop(context);
+                setState(() => _currentIndex = 1);
+              },
+            ),
+            _buildDrawerTile(
+              context: context,
+              icon: Icons.support_agent_rounded,
+              title: 'Helpdesk & Complaints',
+              subtitle: 'Report maintenance, plumbing or electrical issues',
+              isSelected: _currentIndex == 3,
+              onTap: () {
+                Navigator.pop(context);
+                setState(() => _currentIndex = 3);
+              },
+            ),
+            _buildDrawerTile(
+              context: context,
+              icon: Icons.event_available_rounded,
+              title: 'Book Amenities',
+              subtitle: 'Reserve Gym, Club House or Sports slots',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AmenityBookingScreen(
+                      userFlat: flatLabel,
+                    ),
+                  ),
+                );
+              },
+            ),
+
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Divider(color: AppColors.slate200, height: 1),
+            ),
+
+            // Section 3: Safety & Settings
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 8, 20, 6),
+              child: Text(
+                'ASSISTANCE & SETTINGS',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                  color: AppColors.slate500,
+                ),
+              ),
+            ),
+            _buildDrawerTile(
+              context: context,
+              icon: Icons.phone_in_talk_rounded,
+              iconColor: AppColors.primary,
+              title: 'Security Gate Intercom',
+              subtitle: 'Direct call to security guard booth',
+              onTap: () {
+                Navigator.pop(context);
+                _showSecurityCallDialog(context);
+              },
+            ),
+            _buildDrawerTile(
+              context: context,
+              icon: Icons.shield_outlined,
+              title: 'Account & Security Settings',
+              subtitle: 'Update email & personal login credentials',
+              onTap: () {
+                Navigator.pop(context);
+                _showUpdateEmailDialog(
+                  context,
+                  user,
+                  userDocRef,
+                  uData,
+                  defaultLoginId,
+                );
+              },
+            ),
+
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Divider(color: AppColors.slate200, height: 1),
+            ),
+
+            // Sign out button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              child: ListTile(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: AppColors.error.withValues(alpha: 0.2)),
+                ),
+                tileColor: AppColors.errorSurface,
+                leading: const Icon(Icons.logout_rounded, color: AppColors.error, size: 24),
+                title: const Text(
+                  'Sign Out',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.error,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Leave resident account on this device',
+                  style: TextStyle(fontSize: 12, color: AppColors.slate600),
+                ),
+                onTap: () async {
+                  Navigator.pop(context);
+                  final confirm = await AppDialog.show<bool>(
+                    context: context,
+                    title: 'Sign Out',
+                    subtitle: 'Are you sure you want to log out?',
+                    icon: Icons.logout_rounded,
+                    iconColor: AppColors.error,
+                    iconBgColor: AppColors.errorSurface,
+                    body: const Text('You will need to sign in again to access your resident portal.'),
+                    actions: [
+                      OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('Sign Out'),
+                      ),
+                    ],
+                  );
+                  if (confirm == true) {
+                    await FirebaseAuth.instance.signOut();
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Builds an accessible, high-contrast Navigation Drawer tile with minimum 56dp height.
+  Widget _buildDrawerTile({
+    required BuildContext context,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    Color? iconColor,
+    int? badgeCount,
+    bool isSelected = false,
+  }) {
+    return Semantics(
+      button: true,
+      label: '$title: $subtitle',
+      selected: isSelected,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primarySurface : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: ListTile(
+          minVerticalPadding: 12,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? AppColors.primary
+                  : (iconColor ?? AppColors.slate700).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              icon,
+              size: 22,
+              color: isSelected ? Colors.white : (iconColor ?? AppColors.slate700),
+            ),
+          ),
+          title: Text(
+            title,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+              color: isSelected ? AppColors.primary : AppColors.slate900,
+            ),
+          ),
+          subtitle: Text(
+            subtitle,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.slate600,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: (badgeCount != null && badgeCount > 0)
+              ? Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.error,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$badgeCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                )
+              : null,
+          onTap: onTap,
+        ),
+      ),
+    );
+  }
+
+  /// Displays an elder-friendly Security Gate Intercom dialog with a 1-tap direct call button.
+  void _showSecurityCallDialog(BuildContext context) {
+    AppDialog.show(
+      context: context,
+      title: 'Security Gate Intercom',
+      subtitle: 'Main Security Gate & Guard Booth',
+      icon: Icons.phone_in_talk_rounded,
+      iconColor: AppColors.primary,
+      iconBgColor: AppColors.primarySurface,
+      body: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Need assistance from the gate guard or need to verify a visitor at the gate?',
+            style: TextStyle(fontSize: 14, color: AppColors.slate700, height: 1.4),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.slate50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.slate200),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.security_rounded, size: 28, color: AppColors.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Main Gate Booth',
+                        style: TextStyle(fontSize: 12, color: AppColors.slate500, fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        SocietyConfig.officePhone,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.slate900,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        OutlinedButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+          icon: const Icon(Icons.call_rounded, size: 18),
+          label: const Text('Call Security Guard'),
+          onPressed: () async {
+            Navigator.pop(context);
+            final telUri = Uri.parse('tel:${SocietyConfig.officePhone.replaceAll(' ', '')}');
+            if (await canLaunchUrl(telUri)) {
+              await launchUrl(telUri);
+            } else {
+              await Clipboard.setData(ClipboardData(text: SocietyConfig.officePhone));
+              if (context.mounted) {
+                AppFeedback.showSuccess(
+                  context,
+                  'Phone number copied to clipboard: ${SocietyConfig.officePhone}',
+                );
+              }
+            }
+          },
+        ),
+      ],
     );
   }
 
@@ -598,27 +1265,30 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                       const SizedBox(height: 6),
                       Align(
                         alignment: Alignment.centerRight,
-                        child: ElevatedButton.icon(
-                          icon: const Icon(Icons.mark_email_read_outlined, size: 13),
-                          label: const Text(
-                            'Update Email & Secure Account',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFDC2626),
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            minimumSize: const Size(0, 26),
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                          ),
-                          onPressed: () => _showUpdateEmailDialog(
-                            context,
-                            user,
-                            userDocRef,
-                            userData,
-                            defaultLoginId,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: ElevatedButton.icon(
+                            icon: const Icon(Icons.mark_email_read_outlined, size: 13),
+                            label: const Text(
+                              'Update Email & Secure Account',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFDC2626),
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              minimumSize: const Size(0, 26),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                            ),
+                            onPressed: () => _showUpdateEmailDialog(
+                              context,
+                              user,
+                              userDocRef,
+                              userData,
+                              defaultLoginId,
+                            ),
                           ),
                         ),
                       ),
@@ -761,27 +1431,30 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                       const SizedBox(height: 6),
                       Align(
                         alignment: Alignment.centerRight,
-                        child: ElevatedButton.icon(
-                          icon: const Icon(Icons.lock_reset_rounded, size: 13),
-                          label: const Text(
-                            'Change Password & Secure',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFD97706),
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            minimumSize: const Size(0, 26),
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                          ),
-                          onPressed: () => _showUpdateEmailDialog(
-                            context,
-                            user,
-                            userDocRef,
-                            userData,
-                            defaultLoginId,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: ElevatedButton.icon(
+                            icon: const Icon(Icons.lock_reset_rounded, size: 13),
+                            label: const Text(
+                              'Change Password & Secure',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFD97706),
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              minimumSize: const Size(0, 26),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                            ),
+                            onPressed: () => _showUpdateEmailDialog(
+                              context,
+                              user,
+                              userDocRef,
+                              userData,
+                              defaultLoginId,
+                            ),
                           ),
                         ),
                       ),
@@ -812,9 +1485,13 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
     bool isSaving = false;
     bool triggerPasswordReset = !isDefaultPasswordRevoked;
 
-    await showDialog(
+    await showGeneralDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
+      barrierDismissible: true,
+      barrierLabel: 'Dismiss',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (ctx, anim1, anim2) => StatefulBuilder(
         builder: (context, setDS) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Row(
@@ -859,30 +1536,57 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'Current Login ID: $defaultLoginId',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                          Row(
+                            children: [
+                              const Icon(Icons.account_circle_outlined, size: 16, color: AppColors.slate700),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'Current Login ID: $defaultLoginId',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.slate900),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 3),
+                          const SizedBox(height: 6),
                           if (isDefaultPasswordRevoked)
                             const Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(Icons.check_circle, color: Color(0xFF059669), size: 14),
-                                SizedBox(width: 4),
-                                Text(
-                                  'Private Password Active',
-                                  style: TextStyle(color: Color(0xFF059669), fontSize: 11.5, fontWeight: FontWeight.w600),
+                                Padding(
+                                  padding: EdgeInsets.only(top: 2),
+                                  child: Icon(Icons.check_circle_rounded, color: Color(0xFF059669), size: 15),
+                                ),
+                                SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'Private Password Active',
+                                    style: TextStyle(color: Color(0xFF059669), fontSize: 11.5, fontWeight: FontWeight.w600),
+                                  ),
                                 ),
                               ],
                             )
                           else
                             const Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 14),
-                                SizedBox(width: 4),
-                                Text(
-                                  'Initial Password: Password@123 (Default - Should be revoked)',
-                                  style: TextStyle(color: Color(0xFFDC2626), fontSize: 11.5, fontWeight: FontWeight.w600),
+                                Padding(
+                                  padding: EdgeInsets.only(top: 2),
+                                  child: Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 16),
+                                ),
+                                SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'Initial Password: Password@123\n(Default - Should be revoked)',
+                                    style: TextStyle(
+                                      color: Color(0xFFDC2626),
+                                      fontSize: 11.5,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.25,
+                                    ),
+                                    softWrap: true,
+                                  ),
                                 ),
                               ],
                             ),
@@ -939,27 +1643,36 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
               ),
             ),
           ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           actions: [
-            TextButton(
-              onPressed: isSaving ? null : () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton.icon(
-              icon: isSaving
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                    )
-                  : Icon(triggerPasswordReset ? Icons.send_rounded : Icons.check_circle_outline, size: 16),
-              label: Text(triggerPasswordReset ? 'Save & Send Reset Email' : 'Save & Update'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFDC2626),
-                foregroundColor: Colors.white,
-              ),
-              onPressed: isSaving
-                  ? null
-                  : () async {
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.end,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton(
+                  onPressed: isSaving ? null : () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton.icon(
+                  icon: isSaving
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                        )
+                      : Icon(triggerPasswordReset ? Icons.send_rounded : Icons.check_circle_outline, size: 16),
+                  label: Text(triggerPasswordReset ? 'Save & Send Reset Email' : 'Save & Update'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFDC2626),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: isSaving
+                      ? null
+                      : () async {
                       if (!formKey.currentState!.validate()) return;
                       setDS(() => isSaving = true);
                       final newEmail = emailCtrl.text.trim().toLowerCase();
@@ -1037,10 +1750,22 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                         }
                       }
                     },
+                ),
+              ],
             ),
           ],
         ),
       ),
+      transitionBuilder: (ctx, anim1, anim2, child) {
+        final curved = CurvedAnimation(parent: anim1, curve: Curves.easeOutCubic);
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.94, end: 1.0).animate(curved),
+          child: FadeTransition(
+            opacity: curved,
+            child: child,
+          ),
+        );
+      },
     );
     emailCtrl.dispose();
   }
@@ -2458,11 +3183,21 @@ class _HomeTabState extends State<HomeTab> {
             title: const Text('Gate Pass System', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
             subtitle: const Text('Pre-approve visitors, view gate clearances & deliveries.'),
             trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+            onTap: () => widget.onNavigateTab?.call(5),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.event_available_rounded, size: 38, color: Colors.teal),
+            title: const Text('Amenity & Facility Booking', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            subtitle: const Text('Book Community Hall, Society Ground, or Gym slots with live calendar.'),
+            trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
             onTap: () {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => PreApproveVisitorScreen(userFlat: flatLabel),
+                  builder: (_) => AmenityBookingScreen(userFlat: flatLabel),
                 ),
               );
             },
@@ -2473,11 +3208,102 @@ class _HomeTabState extends State<HomeTab> {
   }
 }
 
-class NotificationsTab extends StatelessWidget {
+/// Displays society announcements and official circulars only.
+/// Embedded as the 4th tab ("Notice") in the bottom navigation bar (Index 2).
+class ResidentNoticesTab extends StatelessWidget {
   final Function(int, [String?])? onNavigateTab;
   final String? userFlat;
   final String? fullFlat;
-  const NotificationsTab({
+  const ResidentNoticesTab({
+    super.key,
+    this.onNavigateTab,
+    this.userFlat,
+    this.fullFlat,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+      children: [
+        Row(
+          children: const [
+            Icon(Icons.campaign, color: Colors.teal, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Society Announcements',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.teal),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('announcements')
+              .orderBy('createdAt', descending: true)
+              .snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return Center(child: Text('Error: ${snapshot.error}'));
+            }
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            final docs = snapshot.data?.docs ?? [];
+            if (docs.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.campaign_outlined, size: 48, color: Colors.grey),
+                      SizedBox(height: 8),
+                      Text(
+                        'No announcements yet.',
+                        style: TextStyle(color: Colors.grey, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            final notices = docs.map((d) => NoticeModel.fromFirestore(d)).toList();
+
+            notices.sort((a, b) {
+              if (a.isPinned && !b.isPinned) return -1;
+              if (!a.isPinned && b.isPinned) return 1;
+              return b.createdAt.compareTo(a.createdAt);
+            });
+
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final isTwoColumn = constraints.maxWidth >= 600;
+                return TwoColumnNoticeList(
+                  notices: notices,
+                  isTwoColumn: isTwoColumn,
+                  isAdmin: false,
+                );
+              },
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+/// Displays personal alerts, gate clearances, and transactional notifications only.
+/// Accessed via the Top AppBar Bell Icon (Index 6) or Navigation Drawer.
+class ResidentAlertsTab extends StatelessWidget {
+  final Function(int, [String?])? onNavigateTab;
+  final String? userFlat;
+  final String? fullFlat;
+  const ResidentAlertsTab({
     super.key,
     this.onNavigateTab,
     this.userFlat,
@@ -2488,38 +3314,63 @@ class NotificationsTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
+    if (user == null) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 40),
+          child: Text('Please log in to view personal alerts.', style: TextStyle(color: Colors.grey)),
+        ),
+      );
+    }
+
     // Provide bottom padding so notification cards at the bottom are not hidden behind NavigationBar
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
       children: [
-        if (user != null) ...[
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('notifications')
-                .where('targetRole', whereIn: ['RESIDENT', 'ALL'])
-                .limit(100)
-                .snapshots(),
-            builder: (context, snap) {
-              if (snap.hasError) {
-                return Text('Error loading alerts: ${snap.error}',
-                    style: const TextStyle(color: Colors.red));
-              }
-              final docs = (snap.data?.docs ?? []).where((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                return _isNotificationForResident(data, user, userFlat, fullFlat);
-              }).toList();
-              // Sort in memory by createdAt descending
-              docs.sort((a, b) {
-                final aData = a.data() as Map<String, dynamic>;
-                final bData = b.data() as Map<String, dynamic>;
-                final aTime = (aData['createdAt'] as Timestamp?)?.toDate() ??
-                    DateTime.fromMillisecondsSinceEpoch(0);
-                final bTime = (bData['createdAt'] as Timestamp?)?.toDate() ??
-                    DateTime.fromMillisecondsSinceEpoch(0);
-                return bTime.compareTo(aTime);
-              });
+        StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('notifications')
+              .where('targetRole', whereIn: ['RESIDENT', 'ALL'])
+              .limit(100)
+              .snapshots(),
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Text('Error loading alerts: ${snap.error}',
+                  style: const TextStyle(color: Colors.red));
+            }
+            final docs = (snap.data?.docs ?? []).where((doc) {
+              final data = doc.data() as Map<String, dynamic>;
+              return _isNotificationForResident(data, user, userFlat, fullFlat);
+            }).toList();
+            // Sort in memory by createdAt descending
+            docs.sort((a, b) {
+              final aData = a.data() as Map<String, dynamic>;
+              final bData = b.data() as Map<String, dynamic>;
+              final aTime = (aData['createdAt'] as Timestamp?)?.toDate() ??
+                  DateTime.fromMillisecondsSinceEpoch(0);
+              final bTime = (bData['createdAt'] as Timestamp?)?.toDate() ??
+                  DateTime.fromMillisecondsSinceEpoch(0);
+              return bTime.compareTo(aTime);
+            });
 
-              if (docs.isEmpty) return const SizedBox.shrink();
+            if (docs.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.notifications_none_rounded, size: 48, color: Colors.grey),
+                      SizedBox(height: 8),
+                      Text(
+                        'No personal alerts right now.',
+                        style: TextStyle(color: Colors.grey, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
 
               final unreadDocs = docs.where((d) => (d.data() as Map)['isRead'] != true).toList();
 
@@ -2974,69 +3825,10 @@ class NotificationsTab extends StatelessWidget {
                       ),
                     );
                   }),
-                  const Divider(height: 24),
                 ],
               );
             },
           ),
-        ],
-        Row(
-          children: const [
-            Icon(Icons.campaign, color: Colors.teal, size: 20),
-            SizedBox(width: 8),
-            Text(
-              'Society Announcements',
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.teal),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('announcements')
-              .orderBy('createdAt', descending: true)
-              .snapshots(),
-          builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return Center(child: Text('Error: ${snapshot.error}'));
-            }
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final docs = snapshot.data?.docs ?? [];
-            if (docs.isEmpty) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
-                child: Center(
-                  child: Text('No announcements yet.',
-                      style: TextStyle(color: Colors.grey)),
-                ),
-              );
-            }
-
-            final notices = docs.map((d) => NoticeModel.fromFirestore(d)).toList();
-
-            notices.sort((a, b) {
-              if (a.isPinned && !b.isPinned) return -1;
-              if (!a.isPinned && b.isPinned) return 1;
-              return b.createdAt.compareTo(a.createdAt);
-            });
-
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                final isTwoColumn = constraints.maxWidth >= 600;
-                return TwoColumnNoticeList(
-                  notices: notices,
-                  isTwoColumn: isTwoColumn,
-                  isAdmin: false,
-                );
-              },
-            );
-          },
-        ),
       ],
     );
   }
@@ -3098,6 +3890,14 @@ class NotificationsTab extends StatelessWidget {
         title.contains('vehicle') ||
         title.contains('car') ||
         title.contains('bike');
+    final isAmenity = notif['amenity'] != null ||
+        type.contains('AMENITY') ||
+        type.contains('GYM') ||
+        title.contains('gym') ||
+        title.contains('amenity') ||
+        title.contains('community hall') ||
+        message.contains('gym slot') ||
+        message.contains('gym key');
 
     if (isPaymentApproved) {
       final dueId = notif['dueId']?.toString();
@@ -3120,6 +3920,25 @@ class NotificationsTab extends StatelessWidget {
     } else if (isPaymentRejected) {
       final month = notif['month']?.toString();
       onNavigateTab?.call(4, month); // Maintenance tab
+    } else if (isAmenity) {
+      // Direct navigation to AmenityBookingScreen (Gym tab if gym-related notification)
+      final targetFlat = userFlat ?? fullFlat ?? '';
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AmenityBookingScreen(
+            userFlat: targetFlat,
+            initialAmenity: (notif['amenity'] == 'GYM' ||
+                    title.contains('gym') ||
+                    message.contains('gym'))
+                ? AmenityType.gym
+                : (title.contains('ground') || message.contains('ground')
+                    ? AmenityType.openGround
+                    : AmenityType.communityHall),
+          ),
+        ),
+      );
+      return;
     } else if (isVehicle) {
       onNavigateTab?.call(0); // Home tab
     } else if (isComplaint) {
@@ -3145,7 +3964,10 @@ class NotificationsTab extends StatelessWidget {
     } else if (isEmergency) {
       showEmergencyNotificationDialog(context, notif);
     } else if (type == 'ANNOUNCEMENT' || title.contains('announcement') || message.contains('announcement')) {
-      onNavigateTab?.call(2); // Notifications & Announcements tab
+      onNavigateTab?.call(2); // Society Notices tab (Notice tab)
+    } else {
+      // Direct any unhandled personal notifications to the Personal Alerts tab
+      onNavigateTab?.call(6); // Personal Alerts tab (top bell icon)
     }
   }
 
@@ -4248,6 +5070,9 @@ class NotificationsTab extends StatelessWidget {
     );
   }
 }
+
+/// Backward-compatibility alias for legacy notification callers and dialog handlers.
+typedef NotificationsTab = ResidentAlertsTab;
 
 class MaintenanceTab extends StatefulWidget {
   final String? initialSelectedMonth;

@@ -15,6 +15,8 @@ import '../../utils/app_formatters.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/app_feedback.dart';
+// Security Guard bottom sheet for issuing and logging gym key handovers
+import 'gym_key_management_sheet.dart';
 
 // ============================================================================
 // SECURITY GUARD GATE TERMINAL DASHBOARD
@@ -72,6 +74,9 @@ class _GuardDashboardState extends State<GuardDashboard> {
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _cachedActiveVisitorDocs = [];
   final Set<String> _alertedOverstayDocIds = <String>{};
   Timer? _overstayCheckTimer;
+
+  // Active visitor checkout processing set to prevent double-tap race conditions
+  final Set<String> _processingCheckoutVisitorIds = <String>{};
 
   // Walk-in visitor state
   final _walkInNameCtrl = TextEditingController();
@@ -625,6 +630,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
   // ─── Guard Profile & Context Helper ────────────────────────────────────────
 
   String get _currentGuardUid => FirebaseAuth.instance.currentUser?.uid ?? '';
+  String get _currentGuardName => FirebaseAuth.instance.currentUser?.displayName ?? 'Security Guard';
 
   // ─── Passcode Verification & Check-in ──────────────────────────────────────
 
@@ -1629,6 +1635,16 @@ class _GuardDashboardState extends State<GuardDashboard> {
     else if (type == 'PASSCODE' || title.toLowerCase().contains('passcode') || title.toLowerCase().contains('guest')) {
       setState(() => _currentTab = 0);
     }
+    // 5. Gym slot booking & physical key handover alerts -> Open GymKeyManagementSheet modal
+    else if (type.contains('GYM') ||
+        title.toLowerCase().contains('gym') ||
+        notif['amenity'] == 'GYM') {
+      GymKeyManagementSheet.show(
+        context,
+        guardUid: _currentGuardUid,
+        guardName: _currentGuardName,
+      );
+    }
   }
 
   /// Displays the official gate clearance dialog showing Approved or Denied status for security action.
@@ -2019,11 +2035,19 @@ class _GuardDashboardState extends State<GuardDashboard> {
                 onSelected: (value) {
                   if (value == 'notices') {
                     _showNoticesModal(context);
+                  } else if (value == 'gym_keys') {
+                    // Open the Gym Key Management bottom sheet so security guards can track and log physical key handovers
+                    GymKeyManagementSheet.show(
+                      context,
+                      guardUid: _currentGuardUid,
+                      guardName: guardName,
+                    );
                   } else if (value == 'logout') {
                     FirebaseAuth.instance.signOut();
                   }
                 },
                 itemBuilder: (context) => [
+                  // Quick access to society announcements & circulars
                   const PopupMenuItem(
                     value: 'notices',
                     child: Row(
@@ -2031,6 +2055,17 @@ class _GuardDashboardState extends State<GuardDashboard> {
                         Icon(Icons.campaign_rounded, size: 18, color: AppColors.textPrimary),
                         SizedBox(width: 8),
                         Text('Society Notices', style: TextStyle(fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  // Physical gym key handover and tracking sheet for on-duty security guard
+                  const PopupMenuItem(
+                    value: 'gym_keys',
+                    child: Row(
+                      children: [
+                        Icon(Icons.fitness_center_rounded, size: 18, color: Colors.teal),
+                        SizedBox(width: 8),
+                        Text('Gym Keys & Amenities', style: TextStyle(fontSize: 13)),
                       ],
                     ),
                   ),
@@ -2320,6 +2355,66 @@ class _GuardDashboardState extends State<GuardDashboard> {
                   ),
                 ),
               ],
+              const SizedBox(height: 16),
+              // Dedicated quick-action tile for physical gym key handover and returns
+              // Guards can tap this anytime without leaving their primary gate terminal
+              InkWell(
+                onTap: () => GymKeyManagementSheet.show(
+                  context,
+                  guardUid: _currentGuardUid,
+                  guardName: guardName,
+                ),
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.teal.shade200),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.teal.withValues(alpha: 0.05),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.fitness_center_rounded, color: Colors.teal, size: 24),
+                      ),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Gym Key Handover & Return',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'Issue and log physical gym keys for active 1-hour slots',
+                              style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.chevron_right_rounded, color: Colors.teal.shade700),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -3120,6 +3215,7 @@ class _GuardDashboardState extends State<GuardDashboard> {
                               }
 
                               final photoUrl = data['photoUrl']?.toString();
+                              final isCheckingOut = _processingCheckoutVisitorIds.contains(doc.id);
 
                               return Container(
                                 padding: const EdgeInsets.all(12),
@@ -3212,20 +3308,43 @@ class _GuardDashboardState extends State<GuardDashboard> {
                                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                                             elevation: 0,
                                           ),
-                                          icon: const Icon(Icons.logout_rounded, size: 16),
-                                          label: const Text('Mark Exit', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                                          onPressed: () async {
-                                            await VisitorPassService.checkOutVisitor(
-                                              visitorDocId: doc.id,
-                                              guardUid: _currentGuardUid,
-                                              guardName: guardName,
-                                              gateName: gateName,
-                                              visitorData: data,
-                                            );
-                                            if (context.mounted) {
-                                              AppFeedback.showSuccess(context, '$name checked out and resident notified.');
-                                            }
-                                          },
+                                          icon: isCheckingOut
+                                              ? const SizedBox(
+                                                  width: 14,
+                                                  height: 14,
+                                                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.warningDark),
+                                                )
+                                              : const Icon(Icons.logout_rounded, size: 16),
+                                          label: Text(
+                                            isCheckingOut ? 'Checking out...' : 'Mark Exit',
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                          ),
+                                          // Disable button while checkout is running to eliminate double-tap duplicate notifications
+                                          onPressed: isCheckingOut
+                                              ? null
+                                              : () async {
+                                                  setState(() {
+                                                    _processingCheckoutVisitorIds.add(doc.id);
+                                                  });
+                                                  try {
+                                                    await VisitorPassService.checkOutVisitor(
+                                                      visitorDocId: doc.id,
+                                                      guardUid: _currentGuardUid,
+                                                      guardName: guardName,
+                                                      gateName: gateName,
+                                                      visitorData: data,
+                                                    );
+                                                    if (context.mounted) {
+                                                      AppFeedback.showSuccess(context, '$name checked out and resident notified.');
+                                                    }
+                                                  } finally {
+                                                    if (mounted) {
+                                                      setState(() {
+                                                        _processingCheckoutVisitorIds.remove(doc.id);
+                                                      });
+                                                    }
+                                                  }
+                                                },
                                         ),
                                         if (phone.isNotEmpty) ...[
                                           const SizedBox(height: 6),

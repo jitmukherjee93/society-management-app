@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
+import 'delivery_company_logo.dart';
 
 // ============================================================================
 // IN-APP HEADS-UP PUSH NOTIFICATION BANNER WIDGET
@@ -269,7 +270,7 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Category Avatar Badge or Live Visitor Photo
+                          // Category Avatar Badge, Live Visitor Photo, or Delivery Company Brand Logo
                           if (widget.payload.photoUrl != null && widget.payload.photoUrl!.isNotEmpty)
                             ClipRRect(
                               borderRadius: BorderRadius.circular(20.0),
@@ -287,6 +288,40 @@ class _PushNotificationBannerState extends State<PushNotificationBanner>
                                   child: Icon(_getCategoryIcon(), color: headerColor, size: 20.0),
                                 ),
                               ),
+                            )
+                          else if (widget.payload.isDelivery)
+                            // Branded circular delivery company logo (Blinkit, Swiggy, Zomato, etc.)
+                            Builder(
+                              builder: (context) {
+                                final brand = DeliveryCompanyUtils.resolveBrand(
+                                  deliveryApp: widget.payload.deliveryCompany,
+                                  title: widget.payload.title,
+                                );
+                                final brandInfo = DeliveryCompanyUtils.getBrandInfo(brand, widget.payload.deliveryCompany);
+                                return Container(
+                                  width: 40.0,
+                                  height: 40.0,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: brandInfo.primaryColor,
+                                    border: Border.all(color: Colors.white, width: 2),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(alpha: 0.12),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: ClipOval(
+                                    child: DeliveryCompanyLogo(
+                                      brand: brand,
+                                      customName: widget.payload.deliveryCompany,
+                                      size: 36.0,
+                                    ),
+                                  ),
+                                );
+                              },
                             )
                           else
                             Container(

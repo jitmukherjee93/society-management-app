@@ -422,6 +422,25 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       );
                     },
                   ),
+
+                  // 6. Pending Facility & Amenity Bookings (Community Hall & Society Ground advance approvals)
+                  StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('amenity_bookings')
+                        .where('status', isEqualTo: 'PENDING_APPROVAL')
+                        .snapshots(),
+                    builder: (context, snap) {
+                      final count = snap.data?.docs.length ?? 0;
+                      return _buildActionTile(
+                        width: itemWidth,
+                        title: 'Facility Bookings',
+                        count: count,
+                        highlight: count > 0,
+                        highlightColor: Colors.deepPurple,
+                        onTap: () => widget.onNavigateToTab(7), // Amenity Bookings Tab
+                      );
+                    },
+                  ),
                 ],
               );
             },
@@ -683,6 +702,14 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
             widget.onNavigateToTab(2);
           }
         },
+      ),
+      // Quick access shortcut to Amenity bookings management
+      _ShortcutItem(
+        icon: Icons.event_available_rounded,
+        label: 'Amenities',
+        color: Colors.deepPurple.shade700,
+        backgroundColor: Colors.deepPurple.shade50,
+        onTap: () => widget.onNavigateToTab(7),
       ),
     ];
 

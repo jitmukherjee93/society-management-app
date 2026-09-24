@@ -38,6 +38,10 @@ class NumberToWords {
   ];
 
   static String convert(num amount) {
+    if (amount < 0) {
+      return 'Minus ${convert(-amount)}';
+    }
+
     final int rupees = amount.floor();
     final int paise = ((amount - rupees) * 100).round();
 

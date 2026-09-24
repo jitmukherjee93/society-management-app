@@ -11,6 +11,7 @@ import '../services/visitor_pass_service.dart';
 import '../services/push_notification_manager.dart';
 import '../utils/flat_utils.dart';
 import '../widgets/app_feedback.dart';
+import '../widgets/delivery_company_logo.dart';
 
 // ============================================================================
 // MYGATE-STYLE FULL-SCREEN VISITOR CLEARANCE POPOUT SCREEN
@@ -115,11 +116,15 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
 
     // Purpose & Delivery App
     _purpose = notif['purpose']?.toString() ?? extra['purpose']?.toString() ?? 'Guest / Personal';
-    _deliveryApp = notif['deliveryApp']?.toString() ?? extra['deliveryApp']?.toString();
+    _deliveryApp = notif['deliveryApp']?.toString() ??
+        extra['deliveryApp']?.toString() ??
+        notif['deliveryProvider']?.toString() ??
+        extra['deliveryProvider']?.toString();
     _isDelivery = notif['isDelivery'] == true ||
         extra['isDelivery'] == true ||
         _purpose.toLowerCase().contains('delivery') ||
         _purpose.toLowerCase().contains('courier') ||
+        _purpose.toLowerCase().contains('parcel') ||
         (_deliveryApp != null && _deliveryApp!.isNotEmpty);
 
     // Gate Name
@@ -398,7 +403,19 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
       }
     }
 
-    // Top overlapping icon badge selection
+    // Resolve Delivery Brand if this is a delivery visitor
+    final deliveryBrand = _isDelivery
+        ? DeliveryCompanyUtils.resolveBrand(
+            deliveryApp: _deliveryApp,
+            purpose: _purpose,
+            visitorName: _visitorName,
+          )
+        : null;
+    final brandInfo = deliveryBrand != null
+        ? DeliveryCompanyUtils.getBrandInfo(deliveryBrand, _deliveryApp)
+        : null;
+
+    // Top overlapping icon badge selection (used as fallback for non-delivery visitors)
     IconData badgeIcon;
     if (_isDelivery) {
       badgeIcon = Icons.delivery_dining_rounded;
@@ -622,7 +639,11 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
                           ),
                         ),
 
-                        // Overlapping Yellow Circular Top Badge
+                        // Overlapping Top Circular Badge:
+                        // Replaces the generic bike icon with the official delivery company logo badge
+                        // (e.g. Blinkit, Swiggy, Zomato, Zepto, Amazon, Flipkart, etc.) when the walk-in
+                        // visitor is identified as a delivery executive. For regular guests/cabs/services,
+                        // preserves the standard high-contrast category icon.
                         Positioned(
                           top: 0,
                           child: Container(
@@ -630,17 +651,27 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
                             height: 66,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: const Color(0xFFFFD54F),
+                              color: _isDelivery && brandInfo != null
+                                  ? brandInfo.primaryColor
+                                  : const Color(0xFFFFD54F),
                               border: Border.all(color: Colors.white, width: 3.5),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.18),
+                                  color: Colors.black.withValues(alpha: 0.22),
                                   blurRadius: 10,
                                   offset: const Offset(0, 4),
                                 ),
                               ],
                             ),
-                            child: Icon(badgeIcon, size: 34, color: const Color(0xFF1E293B)),
+                            child: ClipOval(
+                              child: _isDelivery && deliveryBrand != null
+                                  ? DeliveryCompanyLogo(
+                                      brand: deliveryBrand,
+                                      customName: _deliveryApp,
+                                      size: 59,
+                                    )
+                                  : Icon(badgeIcon, size: 34, color: const Color(0xFF1E293B)),
+                            ),
                           ),
                         ),
                       ],
@@ -750,34 +781,13 @@ class _VisitorPopoutDialogState extends State<VisitorPopoutDialog> {
   }
 
   Widget _buildPurposeBadge() {
-    if (_deliveryApp != null && _deliveryApp!.isNotEmpty) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: Colors.amber.shade50,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: Colors.amber.shade300),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.local_shipping_rounded, size: 12, color: Colors.amber.shade900),
-                const SizedBox(width: 4),
-                Text(
-                  _deliveryApp!,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.amber.shade900,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+    // If the visitor is a delivery executive, display a brand-accurate DeliveryCompanyTag
+    // with miniature company logo and official brand palette.
+    if (_isDelivery || (_deliveryApp != null && _deliveryApp!.isNotEmpty)) {
+      return DeliveryCompanyTag(
+        deliveryApp: _deliveryApp,
+        purpose: _purpose,
+        visitorName: _visitorName,
       );
     }
 

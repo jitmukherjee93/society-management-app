@@ -117,7 +117,7 @@ class VisitorPassService {
       return PassVerificationStatus.expired;
     }
 
-    if (status == 'PENDING' || status.isEmpty) {
+    if (status == 'PENDING' || status == 'APPROVED' || status.isEmpty) {
       return PassVerificationStatus.valid;
     }
 
@@ -267,6 +267,11 @@ class VisitorPassService {
 
   /// Marks a visitor pass as checked-in (`isUsed: true`, `status: CHECKED_IN`)
   /// and dispatches an instant push notification to the resident of the host flat.
+  ///
+  /// Concurrency & Denial Guard: Executes inside a Firestore transaction.
+  /// If the resident has already denied the entry (`approvalStatus == 'DENIED'`),
+  /// the transaction aborts and throws an exception, preventing guards from overriding
+  /// resident security denials.
   static Future<void> checkInVisitor({
     required String visitorDocId,
     required String? guardUid,
@@ -274,26 +279,36 @@ class VisitorPassService {
     String? gateName,
     Map<String, dynamic>? visitorData,
   }) async {
-    await _fs.collection('visitors').doc(visitorDocId).update({
-      'status': 'CHECKED_IN',
-      'approvalStatus': 'APPROVED',
-      'isUsed': true,
-      'usedAt': FieldValue.serverTimestamp(),
-      'entryTime': FieldValue.serverTimestamp(),
-      'checkedInBy': guardUid,
-      'guardName': guardName ?? 'Security Guard',
-      'gateName': gateName ?? 'Main Gate',
+    final docRef = _fs.collection('visitors').doc(visitorDocId);
+
+    // Execute check-in within an atomic transaction to prevent race conditions
+    // and strictly respect resident denial decisions.
+    final updatedData = await _fs.runTransaction<Map<String, dynamic>?>((tx) async {
+      final snapshot = await tx.get(docRef);
+      if (!snapshot.exists) {
+        throw Exception('Visitor record ($visitorDocId) does not exist.');
+      }
+      final cur = snapshot.data() ?? {};
+      final currentApproval = cur['approvalStatus']?.toString().toUpperCase();
+      if (currentApproval == 'DENIED') {
+        throw Exception('Visitor entry has been DENIED by the resident. Check-in cannot proceed.');
+      }
+
+      tx.update(docRef, {
+        'status': 'CHECKED_IN',
+        'approvalStatus': 'APPROVED',
+        'isUsed': true,
+        'usedAt': FieldValue.serverTimestamp(),
+        'entryTime': FieldValue.serverTimestamp(),
+        'checkedInBy': guardUid,
+        'guardName': guardName ?? 'Security Guard',
+        'gateName': gateName ?? 'Main Gate',
+      });
+
+      return cur;
     });
 
-    Map<String, dynamic>? data = visitorData;
-    if (data == null) {
-      try {
-        final docSnap = await _fs.collection('visitors').doc(visitorDocId).get();
-        if (docSnap.exists) {
-          data = docSnap.data();
-        }
-      } catch (_) {}
-    }
+    Map<String, dynamic>? data = updatedData ?? visitorData;
 
     if (data != null) {
       final rawFlat = data['hostFlatNumber'] ?? data['flatNumber'] ?? '';
@@ -542,8 +557,13 @@ class VisitorPassService {
     return docRef.id;
   }
 
+  // In-memory set of visitor IDs currently undergoing checkout to debounce rapid double-taps by guards
+  static final Set<String> _checkingOutVisitorIds = {};
+
   /// Marks a visitor as checked-out upon leaving campus (`status: CHECKED_OUT`)
   /// and notifies the host resident that their guest has safely departed.
+  /// Uses in-memory debouncing and deterministic notification IDs (`checkout_<visitorDocId>`)
+  /// to guarantee that the resident receives exactly ONE departure notification.
   static Future<void> checkOutVisitor({
     required String visitorDocId,
     required String? guardUid,
@@ -551,57 +571,78 @@ class VisitorPassService {
     String? gateName,
     Map<String, dynamic>? visitorData,
   }) async {
-    await _fs.collection('visitors').doc(visitorDocId).update({
-      'status': 'CHECKED_OUT',
-      'exitTime': FieldValue.serverTimestamp(),
-      'checkedOutBy': guardUid,
-    });
-
-    Map<String, dynamic>? data = visitorData;
-    if (data == null) {
-      try {
-        final docSnap = await _fs.collection('visitors').doc(visitorDocId).get();
-        if (docSnap.exists) {
-          data = docSnap.data();
-        }
-      } catch (_) {}
+    // 1. Debounce rapid double-taps on the guard terminal
+    if (_checkingOutVisitorIds.contains(visitorDocId)) {
+      debugPrint('[VisitorPassService] Checkout already in progress for $visitorDocId. Suppressing duplicate invocation.');
+      return;
     }
+    _checkingOutVisitorIds.add(visitorDocId);
 
-    if (data != null) {
-      final rawFlat = data['hostFlatNumber'] ?? data['flatNumber'] ?? '';
-      final hostFlat = FlatUtils.normalize(rawFlat.toString());
-      final visitorName = (data['visitorName'] ?? 'Guest').toString().trim();
-      final purpose = (data['purpose'] ?? 'Guest / Personal').toString().trim();
-      final residentUid = data['residentUid']?.toString() ?? data['hostUid']?.toString();
-      final phone = (data['phone'] ?? '').toString().trim();
-      // Auto-capitalize vehicle registration for exit notification message
-      final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim().toUpperCase();
-      final isComingByCar = data['isComingByCar'] == true || vehicleNumber.isNotEmpty;
-      final gate = gateName ?? data['gateName']?.toString() ?? 'Main Gate';
-      final guard = guardName ?? data['guardName']?.toString() ?? 'Security Guard';
-      final vehicleInfo = isComingByCar && vehicleNumber.isNotEmpty ? ' with vehicle $vehicleNumber' : '';
-
-      if (hostFlat.isNotEmpty || (residentUid != null && residentUid.isNotEmpty)) {
-        await NotificationService.notifyResident(
-          flatNumber: hostFlat,
-          targetUid: residentUid,
-          title: 'Guest Departed: $visitorName',
-          message: 'Your guest $visitorName ($purpose) has checked out and exited from $gate$vehicleInfo.',
-          type: 'VISITOR_CHECK_OUT',
-          extraData: {
-            'visitorDocId': visitorDocId,
-            'visitorName': visitorName,
-            'purpose': purpose,
-            'phone': phone,
-            'isComingByCar': isComingByCar,
-            'vehicleNumber': vehicleNumber,
-            'gateName': gate,
-            'guardName': guard,
-            'status': 'CHECKED_OUT',
-            'exitTime': DateTime.now().toIso8601String(),
-          },
-        );
+    try {
+      // 2. Pre-check if already checked out to avoid duplicate exit records or notifications
+      Map<String, dynamic>? data = visitorData;
+      if (data == null || data['status'] == null) {
+        try {
+          final docSnap = await _fs.collection('visitors').doc(visitorDocId).get();
+          if (docSnap.exists) {
+            data = docSnap.data();
+          }
+        } catch (_) {}
       }
+
+      // If the visitor is already marked as checked out, gracefully exit
+      if (data != null && data['status'] == 'CHECKED_OUT') {
+        debugPrint('[VisitorPassService] Visitor $visitorDocId is already CHECKED_OUT. Aborting duplicate checkout.');
+        return;
+      }
+
+      await _fs.collection('visitors').doc(visitorDocId).update({
+        'status': 'CHECKED_OUT',
+        'exitTime': FieldValue.serverTimestamp(),
+        'checkedOutBy': guardUid,
+      });
+
+      if (data != null) {
+        final rawFlat = data['hostFlatNumber'] ?? data['flatNumber'] ?? '';
+        final hostFlat = FlatUtils.normalize(rawFlat.toString());
+        final visitorName = (data['visitorName'] ?? 'Guest').toString().trim();
+        final purpose = (data['purpose'] ?? 'Guest / Personal').toString().trim();
+        final residentUid = data['residentUid']?.toString() ?? data['hostUid']?.toString();
+        final phone = (data['phone'] ?? '').toString().trim();
+        // Auto-capitalize vehicle registration for exit notification message
+        final vehicleNumber = (data['vehicleNumber'] ?? '').toString().trim().toUpperCase();
+        final isComingByCar = data['isComingByCar'] == true || vehicleNumber.isNotEmpty;
+        final gate = gateName ?? data['gateName']?.toString() ?? 'Main Gate';
+        final guard = guardName ?? data['guardName']?.toString() ?? 'Security Guard';
+        final vehicleInfo = isComingByCar && vehicleNumber.isNotEmpty ? ' with vehicle $vehicleNumber' : '';
+
+        if (hostFlat.isNotEmpty || (residentUid != null && residentUid.isNotEmpty)) {
+          // Deterministic notification ID ensures idempotent document creation in Firestore.
+          // Cloud Functions onCreate and Firestore snapshot listeners fire EXACTLY once!
+          await NotificationService.notifyResident(
+            notificationId: 'checkout_$visitorDocId',
+            flatNumber: hostFlat,
+            targetUid: residentUid,
+            title: 'Guest Departed: $visitorName',
+            message: 'Your guest $visitorName ($purpose) has checked out and exited from $gate$vehicleInfo.',
+            type: 'VISITOR_CHECK_OUT',
+            extraData: {
+              'visitorDocId': visitorDocId,
+              'visitorName': visitorName,
+              'purpose': purpose,
+              'phone': phone,
+              'isComingByCar': isComingByCar,
+              'vehicleNumber': vehicleNumber,
+              'gateName': gate,
+              'guardName': guard,
+              'status': 'CHECKED_OUT',
+              'exitTime': DateTime.now().toIso8601String(),
+            },
+          );
+        }
+      }
+    } finally {
+      _checkingOutVisitorIds.remove(visitorDocId);
     }
   }
 
@@ -1275,8 +1316,12 @@ class VisitorPassService {
     // Generate a secure 4-digit pickup OTP upfront so both the visitor record and parcel entry retain it
     String pickupOtp = generatePickupOtp();
     bool transitioned = false;
+    final providerName = (deliveryApp != null && deliveryApp.isNotEmpty) ? deliveryApp : (visitorName.isNotEmpty ? visitorName : 'Delivery');
+    final parcelDocRef = _fs.collection('gate_parcels').doc();
+    String? createdParcelId;
 
     // Run atomic transaction to ensure status transitions cleanly from PENDING
+    // and both the visitor status update and gate_parcels entry are committed together atomically.
     if (targetDocId != null && targetDocId.isNotEmpty) {
       final visitorRef = _fs.collection('visitors').doc(targetDocId);
       try {
@@ -1295,8 +1340,8 @@ class VisitorPassService {
             }
             return true;
           }
-          // When delivery is marked leave at gate, delivery agent is NOT checked in to campus;
-          // status is set to LEFT_AT_GATE, parcel is placed in gate holding, and entryTime is deleted.
+
+          // 1. Update visitor document status to LEFT_AT_GATE
           transaction.update(visitorRef, {
             'approvalStatus': 'LEAVE_AT_GATE',
             'leaveAtGate': true,
@@ -1304,25 +1349,108 @@ class VisitorPassService {
             'status': 'LEFT_AT_GATE',
             'entryTime': FieldValue.delete(),
             'resolvedAt': now,
+            'parcelDocId': parcelDocRef.id,
           });
+
+          // 2. Atomically create the gate_parcels holding record
+          transaction.set(parcelDocRef, {
+            'flatNumber': normFlat,
+            'deliveryProvider': providerName,
+            'visitorName': visitorName,
+            'packetCount': 1,
+            'remarks': 'Left at gate as requested by resident during gate clearance',
+            'status': 'HELD_AT_GATE',
+            'pickupOtp': pickupOtp,
+            'receivedAt': now,
+            'receivedBy': guardUid ?? 'GATE',
+            'guardName': guardName ?? 'Security Guard',
+            'gateName': gateName ?? 'Main Gate',
+            'visitorDocId': targetDocId,
+            'photoUrl': photoUrl,
+          });
+
+          // 3. Atomically update linked notification if present
+          if (notifDocId != null && notifDocId.isNotEmpty) {
+            transaction.update(_fs.collection('notifications').doc(notifDocId), {
+              'approvalStatus': 'LEAVE_AT_GATE',
+              'leaveAtGate': true,
+              'pickupOtp': pickupOtp,
+              'isRead': true,
+              'resolvedAt': now,
+              'updatedAt': now,
+            });
+          }
+
           return true;
         });
+
+        if (transitioned) {
+          createdParcelId = parcelDocRef.id;
+        }
       } catch (e) {
         debugPrint('[VisitorPassService] Transaction error on leave-at-gate for visitor $targetDocId: $e');
+        // Fallback: batch write if transaction threw optimistic locking contention
         try {
-          await visitorRef.update({
+          final batch = _fs.batch();
+          batch.update(visitorRef, {
             'approvalStatus': 'LEAVE_AT_GATE',
             'leaveAtGate': true,
             'pickupOtp': pickupOtp,
             'status': 'LEFT_AT_GATE',
             'entryTime': FieldValue.delete(),
             'resolvedAt': now,
+            'parcelDocId': parcelDocRef.id,
           });
+          batch.set(parcelDocRef, {
+            'flatNumber': normFlat,
+            'deliveryProvider': providerName,
+            'visitorName': visitorName,
+            'packetCount': 1,
+            'remarks': 'Left at gate as requested by resident during gate clearance',
+            'status': 'HELD_AT_GATE',
+            'pickupOtp': pickupOtp,
+            'receivedAt': now,
+            'receivedBy': guardUid ?? 'GATE',
+            'guardName': guardName ?? 'Security Guard',
+            'gateName': gateName ?? 'Main Gate',
+            'visitorDocId': targetDocId,
+            'photoUrl': photoUrl,
+          });
+          if (notifDocId != null && notifDocId.isNotEmpty) {
+            batch.update(_fs.collection('notifications').doc(notifDocId), {
+              'approvalStatus': 'LEAVE_AT_GATE',
+              'leaveAtGate': true,
+              'pickupOtp': pickupOtp,
+              'isRead': true,
+              'resolvedAt': now,
+              'updatedAt': now,
+            });
+          }
+          await batch.commit();
           transitioned = true;
+          createdParcelId = parcelDocRef.id;
         } catch (_) {}
       }
     } else {
-      transitioned = true;
+      // Standalone parcel without prior visitor doc
+      try {
+        await parcelDocRef.set({
+          'flatNumber': normFlat,
+          'deliveryProvider': providerName,
+          'visitorName': visitorName,
+          'packetCount': 1,
+          'remarks': 'Left at gate as requested by resident during gate clearance',
+          'status': 'HELD_AT_GATE',
+          'pickupOtp': pickupOtp,
+          'receivedAt': now,
+          'receivedBy': guardUid ?? 'GATE',
+          'guardName': guardName ?? 'Security Guard',
+          'gateName': gateName ?? 'Main Gate',
+          'photoUrl': photoUrl,
+        });
+        createdParcelId = parcelDocRef.id;
+        transitioned = true;
+      } catch (_) {}
     }
 
     // Always dismiss and cancel the native notification alert from the Android hood and floating banner
@@ -1330,45 +1458,6 @@ class VisitorPassService {
       await PushNotificationManager.cancelNotification(notifDocId ?? '', targetDocId);
     } catch (e) {
       debugPrint('[VisitorPassService] Error canceling push notification: $e');
-    }
-
-    // Update all matching notification documents to resolved status and store pickupOtp
-    if (notifDocId != null && notifDocId.isNotEmpty) {
-      try {
-        await _fs.collection('notifications').doc(notifDocId).update({
-          'approvalStatus': 'LEAVE_AT_GATE',
-          'leaveAtGate': true,
-          'pickupOtp': pickupOtp,
-          'isRead': true,
-          'resolvedAt': now,
-          'updatedAt': now,
-        });
-      } catch (_) {}
-    }
-
-    // Automatically create a Parcel entry in gate_parcels for Gate Security
-    String? createdParcelId;
-    final providerName = (deliveryApp != null && deliveryApp.isNotEmpty) ? deliveryApp : (visitorName.isNotEmpty ? visitorName : 'Delivery');
-    try {
-      final parcelDocRef = await _fs.collection('gate_parcels').add({
-        'flatNumber': normFlat,
-        'deliveryProvider': providerName,
-        'visitorName': visitorName,
-        'packetCount': 1,
-        'remarks': 'Left at gate as requested by resident during gate clearance',
-        'status': 'HELD_AT_GATE',
-        'pickupOtp': pickupOtp,
-        'receivedAt': now,
-        'receivedBy': guardUid ?? 'GATE',
-        'guardName': guardName ?? 'Security Guard',
-        'gateName': gateName ?? 'Main Gate',
-        'visitorDocId': targetDocId,
-        'photoUrl': photoUrl,
-      });
-      createdParcelId = parcelDocRef.id;
-      debugPrint('[VisitorPassService] Automatically logged parcel entry $createdParcelId in gate_parcels with OTP $pickupOtp');
-    } catch (e) {
-      debugPrint('[VisitorPassService] Note: Resident client could not write directly to gate_parcels (expected if rules restrict resident writes): $e');
     }
 
     // Dispatch a PARCEL_HELD notification directly to the resident displaying their Pickup OTP

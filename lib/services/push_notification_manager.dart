@@ -198,13 +198,16 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       ),
     );
 
-    // If FCM generated an OS-level generic notification without buttons,
-    // cancel it immediately so only our interactive action-button notification is visible
-    if (notification != null && id.isNotEmpty) {
-      try {
-        await localNotif.cancel(id: 0, tag: id);
-        await localNotif.cancel(id: notifId, tag: id);
-      } catch (_) {}
+    // DEDUPLICATION SAFEGUARD:
+    // If FCM already generated a system-level notification via its 'notification' payload,
+    // Google Play Services (Android OS daemon) has already posted it to the notification drawer.
+    // For general alerts (guest departure, bills, notices), calling localNotif.show() would post an identical duplicate!
+    // We only post via localNotif for visitor entry approval requests which require custom
+    // interactive action buttons ('Approve'/'Deny') and custom doorbell ringtones, or when
+    // FCM sends a pure data-only message (notification == null).
+    if (notification != null && !isVisitorApproval) {
+      debugPrint('[FCM Background Handler] Notification block present. System notification already rendered by Android FCM for $id ($type). Suppressing duplicate local notification.');
+      return;
     }
 
     // Sanitize data payload to ensure no Firestore Timestamps crash jsonEncode
@@ -249,20 +252,18 @@ class PushNotificationManager with WidgetsBindingObserver {
   bool _isSystemNotificationsInitialized = false;
   PushNotificationPayload? _pendingLaunchPayload;
 
-  // Stores a visitor approval payload that arrived while the screen was locked/off.
-  // fullScreenIntent wakes the screen, but Android does NOT fire onDidReceiveNotificationResponse
-  // automatically — that only fires on an explicit user tap.
-  // When fullScreenIntent auto-brings the app to foreground, didChangeAppLifecycleState fires.
-  // We flush this pending payload there so the VisitorPopoutDialog opens immediately.
-  PushNotificationPayload? _pendingVisitorApprovalPayload;
-  // Timestamp when _pendingVisitorApprovalPayload was set — used to enforce a 2-minute TTL
-  // so a stale payload doesn't incorrectly show a popup if the user opens the app much later.
-  DateTime? _pendingVisitorApprovalSetAt;
+  // Queue storing pending incoming visitor approval payloads when screen is locked/backgrounded.
+  // Using a queue ensures that if multiple visitors arrive consecutively while the phone is locked,
+  // earlier payloads are preserved and not clobbered when the resident unlocks.
+  final List<PushNotificationPayload> _pendingVisitorApprovalQueue = [];
 
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscription;
   final Set<String> _seenNotificationIds = {};
+  // In-memory cache tracking recently displayed system notifications (deduplication key -> timestamp)
+  // to prevent dual-channel display between FCM and Firestore snapshot listener.
+  static final Map<String, DateTime> _recentlyShownSystemNotifs = {};
 
   // Active push payload notifier consumed by PushNotificationOverlay
   final ValueNotifier<PushNotificationPayload?> activeNotification = ValueNotifier(null);
@@ -293,26 +294,22 @@ class PushNotificationManager with WidgetsBindingObserver {
     //   1. The incoming state must be `inactive` or `resumed` (app is at least partially visible)
     //   2. The previous state must have been a fully background state (`paused` or `detached`)
     //      This prevents spurious triggers when the user alt-tabs or receives a phone call
-    //   3. A pending payload must exist AND be within 2 minutes (TTL) to avoid stale popups
+    //   3. A pending payload must exist in queue AND be within 2 minutes (TTL) to avoid stale popups
     final bool comingToForeground =
         (state == AppLifecycleState.inactive || state == AppLifecycleState.resumed) &&
         (previous == AppLifecycleState.paused || previous == AppLifecycleState.detached);
 
-    if (comingToForeground && _pendingVisitorApprovalPayload != null) {
+    if (comingToForeground && _pendingVisitorApprovalQueue.isNotEmpty) {
+      final now = DateTime.now();
       // TTL check: discard payloads older than 2 minutes (visitor already left / resolved)
-      final setAt = _pendingVisitorApprovalSetAt;
-      final bool isStale = setAt != null &&
-          DateTime.now().difference(setAt).inSeconds > 120;
+      _pendingVisitorApprovalQueue.removeWhere(
+        (p) => now.difference(p.receivedAt).inSeconds > 120,
+      );
 
-      if (isStale) {
-        debugPrint('[PushNotificationManager] Discarding stale visitor approval payload (>2 min old)');
-        _pendingVisitorApprovalPayload = null;
-        _pendingVisitorApprovalSetAt = null;
-      } else {
-        final deferred = _pendingVisitorApprovalPayload!;
-        _pendingVisitorApprovalPayload = null;  // Consume immediately — prevents double-firing
-        _pendingVisitorApprovalSetAt = null;
-        debugPrint('[PushNotificationManager] fullScreenIntent foreground detected (state=$state) — showing visitor popup over lock screen');
+      if (_pendingVisitorApprovalQueue.isNotEmpty) {
+        // Pop the latest fresh pending visitor payload to display
+        final deferred = _pendingVisitorApprovalQueue.removeLast();
+        debugPrint('[PushNotificationManager] fullScreenIntent foreground detected (state=$state) — showing visitor popup over lock screen for ${deferred.title}');
         // 300ms delay gives Flutter's Navigator time to be ready without making the user wait
         Future.delayed(const Duration(milliseconds: 300), () {
           final ctx = navigatorKey.currentContext;
@@ -372,9 +369,7 @@ class PushNotificationManager with WidgetsBindingObserver {
                 final isFresh = DateTime.now().difference(payload.receivedAt).inMinutes < 3;
                 if (payload.isVisitorApprovalRequest && isFresh && onIncomingVisitorApproval != null) {
                   debugPrint('[PushNotificationManager] Fresh local notif tapped — opening visitor approval popout dialog');
-                  // User tapped the notification manually — clear the pending payload so the
-                  // lifecycle resume handler doesn't fire a second duplicate popup.
-                  _pendingVisitorApprovalPayload = null;
+                  _pendingVisitorApprovalQueue.removeWhere((p) => p.id == payload.id);
                   onIncomingVisitorApproval!.call(ctx, payload);
                 } else {
                   debugPrint('[PushNotificationManager] Local notif tapped — routing to details dialog via handleBannerTap');
@@ -911,13 +906,10 @@ class PushNotificationManager with WidgetsBindingObserver {
     try {
       final int notifId = payload.id.hashCode & 0x7FFFFFFF;
 
-      // Store the payload so didChangeAppLifecycleState can flush it when Android
+      // Store the payload in the queue so didChangeAppLifecycleState can flush it when Android
       // auto-brings the app to foreground via fullScreenIntent (both over lock screen and after unlock).
-      // Without this, the popup would never show because onDidReceiveNotificationResponse
-      // only fires on explicit user tap — NOT on fullScreenIntent auto-launch.
-      _pendingVisitorApprovalPayload = payload;
-      // Record time so the lifecycle handler can enforce a 2-minute TTL on this payload.
-      _pendingVisitorApprovalSetAt = DateTime.now();
+      _pendingVisitorApprovalQueue.removeWhere((p) => p.id == payload.id);
+      _pendingVisitorApprovalQueue.add(payload);
 
       // Use 'society_visitor_wake_channel_v2' (Importance.max) — this is the key fix.
       // Android requires the channel importance to be HIGH or MAX for fullScreenIntent to actually
@@ -968,6 +960,26 @@ class PushNotificationManager with WidgetsBindingObserver {
 
   Future<void> _showSystemNotification(PushNotificationPayload payload) async {
     try {
+      // Deduplication check: if a system notification for this payload ID or visitor doc was recently shown (< 60s),
+      // suppress duplicate display to avoid dual-channel notifications (e.g. guest departure)!
+      final now = DateTime.now();
+      final visitorDocId = payload.extraData['visitorDocId']?.toString();
+      final dedupeKey = (visitorDocId != null && visitorDocId.isNotEmpty)
+          ? 'visitor_${payload.type}_$visitorDocId'
+          : payload.id;
+
+      if (_recentlyShownSystemNotifs.containsKey(dedupeKey)) {
+        final lastShown = _recentlyShownSystemNotifs[dedupeKey]!;
+        if (now.difference(lastShown).inSeconds < 60) {
+          debugPrint('[PushNotificationManager] System notification already displayed recently for $dedupeKey. Suppressing duplicate.');
+          return;
+        }
+      }
+      _recentlyShownSystemNotifs[dedupeKey] = now;
+      if (_recentlyShownSystemNotifs.length > 100) {
+        _recentlyShownSystemNotifs.removeWhere((_, time) => now.difference(time).inMinutes > 10);
+      }
+
       final int notifId = payload.id.hashCode & 0x7FFFFFFF;
       final bool isVisitorApproval = payload.isVisitorApprovalRequest;
       final bool isOverstay = payload.isOverstay;

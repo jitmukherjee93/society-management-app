@@ -45,6 +45,7 @@ class NotificationService {
   /// - Automatically resolves the resident's user document and email if only [flatNumber] is provided.
   /// - Populates `targetUids` list with flat lookup variants to support secure rule filtering.
   /// - Supports passing an optional [batch] to bundle with parent atomic operations.
+  /// - Optional [notificationId] ensures deterministic document ID for idempotent writes (prevents duplicates).
   static Future<String?> notifyResident({
     required String flatNumber,
     required String title,
@@ -53,6 +54,7 @@ class NotificationService {
     String? targetUid,
     Map<String, dynamic>? extraData,
     WriteBatch? batch,
+    String? notificationId,
   }) async {
     try {
       final normFlat = FlatUtils.normalize(flatNumber);
@@ -108,12 +110,23 @@ class NotificationService {
       };
 
       if (batch != null) {
-        final notifDocRef = _firestore.collection('notifications').doc();
-        batch.set(notifDocRef, payload);
+        // Use deterministic docId if provided to guarantee idempotency across batch operations
+        final notifDocRef = (notificationId != null && notificationId.isNotEmpty)
+            ? _firestore.collection('notifications').doc(notificationId)
+            : _firestore.collection('notifications').doc();
+        batch.set(notifDocRef, payload, SetOptions(merge: true));
         return notifDocRef.id;
       } else {
-        final docRef = await _firestore.collection('notifications').add(payload);
-        return docRef.id;
+        if (notificationId != null && notificationId.isNotEmpty) {
+          // Idempotent write: ensures multiple calls for the same event (e.g. guest departure checkout)
+          // update/merge into the same document instead of creating duplicate notifications in Firestore.
+          final notifDocRef = _firestore.collection('notifications').doc(notificationId);
+          await notifDocRef.set(payload, SetOptions(merge: true));
+          return notifDocRef.id;
+        } else {
+          final docRef = await _firestore.collection('notifications').add(payload);
+          return docRef.id;
+        }
       }
     } catch (e) {
       // Fallback logging without crashing UI flows

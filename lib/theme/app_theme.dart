@@ -123,10 +123,69 @@ class AppTheme {
         ),
       ),
 
+      // Page Transitions for butter-smooth latency-free screen changes
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: ZoomPageTransitionsBuilder(),
+          TargetPlatform.iOS: ZoomPageTransitionsBuilder(),
+          TargetPlatform.windows: ZoomPageTransitionsBuilder(),
+        },
+      ),
+
+      // Distinguishable Typography Hierarchy adhering to WCAG AAA standards
+      textTheme: const TextTheme(
+        displayLarge: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: AppColors.slate900, letterSpacing: -0.8),
+        displayMedium: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: AppColors.slate900, letterSpacing: -0.6),
+        headlineLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.slate900, letterSpacing: -0.4),
+        headlineMedium: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: AppColors.slate900, letterSpacing: -0.2),
+        titleLarge: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.slate900, letterSpacing: -0.1),
+        titleMedium: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.slate800, letterSpacing: 0.0),
+        titleSmall: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.slate700, letterSpacing: 0.1),
+        bodyLarge: TextStyle(fontSize: 15, fontWeight: FontWeight.w400, color: AppColors.slate800, height: 1.45, letterSpacing: 0.15),
+        bodyMedium: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w400, color: AppColors.slate700, height: 1.4, letterSpacing: 0.15),
+        bodySmall: TextStyle(fontSize: 12, fontWeight: FontWeight.w400, color: AppColors.slate600, height: 1.35, letterSpacing: 0.2),
+        labelLarge: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.slate800, letterSpacing: 0.2),
+        labelMedium: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: AppColors.slate700, letterSpacing: 0.3),
+        labelSmall: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500, color: AppColors.slate500, letterSpacing: 0.4),
+      ),
+
+      // Navigation Bar Theme with premium fluid indicator and high-contrast labels
+      navigationBarTheme: NavigationBarThemeData(
+        height: 72,
+        backgroundColor: Colors.white,
+        indicatorColor: AppColors.primarySurface,
+        elevation: 3,
+        shadowColor: Colors.black.withValues(alpha: 0.08),
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: AppColors.primary,
+              letterSpacing: 0.2,
+            );
+          }
+          return const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: AppColors.slate600,
+            letterSpacing: 0.1,
+          );
+        }),
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const IconThemeData(size: 26, color: AppColors.primary);
+          }
+          return const IconThemeData(size: 24, color: AppColors.slate600);
+        }),
+      ),
+
       // Dialog Theme
       dialogTheme: DialogThemeData(
         backgroundColor: Colors.white,
-        elevation: 4,
+        elevation: 6,
+        shadowColor: Colors.black.withValues(alpha: 0.12),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
           side: const BorderSide(color: AppColors.border, width: 0.9),

@@ -31,7 +31,13 @@ service cloud.firestore {
     }
     
     function isGuard() {
-      return isAuthenticated() && getUserRole() in ['GUARD', 'Guard', 'guard'];
+      return isAuthenticated() && (
+        getUserRole() in ['GUARD', 'Guard', 'guard'] ||
+        (request.auth.token.email != null && (
+          request.auth.token.email.matches('(?i).*guard.*') ||
+          request.auth.token.email.matches('(?i).*gate.*')
+        ))
+      );
     }
 
     match /users/{userId} {
@@ -73,17 +79,23 @@ service cloud.firestore {
       allow delete: if isAdmin();
 
       // Allow admins full create access.
-      // Allow authenticated residents to create advance/early bills when submitting for approval
+      // Allow authenticated residents to create advance bills when submitting for approval
       allow create: if isAdmin() || (
         isAuthenticated() &&
-        request.resource.data.status == 'PAYMENT_PENDING_APPROVAL'
+        request.resource.data.status == 'PAYMENT_PENDING_APPROVAL' &&
+        (request.resource.data.submittedBy == request.auth.uid || request.resource.data.userId == request.auth.uid)
       );
 
       // Allow admins full update access.
-      // Allow authenticated residents to update dues when submitting payment for approval
+      // Allow authenticated residents to submit payment for approval:
+      // - Must set status to PAYMENT_PENDING_APPROVAL
+      // - Must NOT alter the base billed amount or flatNumber
+      // - Resident cannot unilaterally mark dues as PAID or approved
       allow update: if isAdmin() || (
         isAuthenticated() &&
-        request.resource.data.status == 'PAYMENT_PENDING_APPROVAL'
+        request.resource.data.status == 'PAYMENT_PENDING_APPROVAL' &&
+        request.resource.data.amount == resource.data.amount &&
+        request.resource.data.flatNumber == resource.data.flatNumber
       );
     }
 
@@ -99,7 +111,10 @@ service cloud.firestore {
     }
 
     match /visitors/{visitorId} {
-      allow read: if isAuthenticated();
+      // Allow single document get if authenticated (preserves instant visitor popout & notification UI lookup)
+      allow get: if isAuthenticated();
+      // Allow collection queries only for Admins, Guards, or the resident who hosted the visitor
+      allow list: if isAdmin() || isGuard() || (isAuthenticated() && resource.data.hostUid == request.auth.uid);
       allow delete: if isAdmin();
       allow create: if isAuthenticated() && (
         isAdmin() || isGuard() ||
@@ -167,15 +182,8 @@ service cloud.firestore {
           'receiptStatus', 'disputed', 'disputeReason'
         ])
       );
-      allow delete: if isAuthenticated() && (
-        isAdmin() ||
-        (isGuard() && resource.data.targetRole == 'GUARD') ||
-        (resource.data != null && (
-          resource.data.targetUid == request.auth.uid ||
-          (resource.data.targetUids != null && request.auth.uid in resource.data.targetUids) ||
-          (resource.data.targetRole == 'RESIDENT' && isResident())
-        ))
-      );
+      // Preserve notifications as tamper-proof audit log; only Admin can hard-delete
+      allow delete: if isAdmin();
     }
 
     // Society Accounts & Budget Management Rules
@@ -195,8 +203,28 @@ service cloud.firestore {
     }
 
     match /society_transactions/{docId} {
+      // Financial ledger is strictly confidential to Society Management Admins
+      allow read, write: if isAdmin();
+    }
+
+    // Amenity & Facility Bookings (Community Hall, Ground, Gym)
+    match /amenity_bookings/{bookingId} {
+      // Transparency: all authenticated residents and security staff can check date/slot availability
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin();
+      // Authenticated users can create bookings for their flat (both Hall/Ground and Gym)
+      allow create: if isAuthenticated();
+      // Admins have full update; Guards can update key handover fields; Residents can cancel their own bookings
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        isGuard() ||
+        (resource.data.residentUid == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt', 'cancellationReason', 'updatedAt'])) ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'keyStatus', 'keyIssuedAt', 'keyIssuedByGuard', 'keyIssuedByGuardUid',
+          'keyReturnedAt', 'keyReceivedByGuard', 'keyReceivedByGuardUid',
+          'status', 'updatedAt'
+        ])
+      );
+      allow delete: if isAdmin();
     }
   }
 }
