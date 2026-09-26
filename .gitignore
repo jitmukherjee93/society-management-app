@@ -50,9 +50,10 @@ app.*.map.json
 # Firebase local cache
 .firebase/
 
-# Local APK binaries
+# Local APK / IPA binaries
 apks/
 *.apk
+*.ipa
 
 # Root-level emulator screenshots
 /*.png
