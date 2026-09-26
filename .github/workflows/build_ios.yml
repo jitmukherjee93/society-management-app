@@ -75,9 +75,11 @@ jobs:
       - name: Flutter Diagnostics
         run: flutter doctor -v
 
-      # Step 5: Fetch Flutter dependencies defined in pubspec.yaml
+      # Step 5: Prepare build directories and fetch Flutter dependencies
       - name: Install Dart & Flutter Dependencies
-        run: flutter pub get
+        run: |
+          mkdir -p build/ios/SourcePackages
+          flutter pub get
 
       # Step 6: Verify code quality and static analysis before building
       - name: Run Static Analysis
@@ -87,13 +89,16 @@ jobs:
       - name: Run Unit Tests
         run: flutter test
 
-      # Step 8: Pre-cache iOS artifacts and install CocoaPods
-      - name: Install CocoaPods Dependencies
+      # Step 8: Pre-cache iOS artifacts and configure iOS dependencies
+      - name: Configure iOS Dependencies
         run: |
           flutter precache --ios
-          cd ios
-          pod install --repo-update
-          cd ..
+          flutter build ios --config-only
+          if [ -f "ios/Podfile" ]; then
+            cd ios
+            pod install --repo-update
+            cd ..
+          fi
 
       # Step 9: Build iOS App based on inputs
       - name: Build iOS Application
