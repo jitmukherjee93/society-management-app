@@ -57,7 +57,7 @@ jobs:
 
       # Step 2: Set up Java runtime environment (required for any Gradle / tool dependencies)
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -73,12 +73,14 @@ jobs:
 
       # Step 4: Verify environment and print diagnostic info
       - name: Flutter Diagnostics
-        run: flutter doctor -v
+        run: |
+          flutter config --no-enable-macos-desktop
+          flutter doctor -v
 
       # Step 5: Prepare build directories and fetch Flutter dependencies
       - name: Install Dart & Flutter Dependencies
         run: |
-          mkdir -p build/ios/SourcePackages
+          mkdir -p build/ios/SourcePackages build/macos/SourcePackages
           flutter pub get
 
       # Step 6: Verify code quality and static analysis before building
