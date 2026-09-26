@@ -692,13 +692,17 @@ class _RoleRouterState extends State<RoleRouter> {
 
         final data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
         final role = data['role'] as String?;
-        final flatNumber = data['flatNumber'] as String?;
+        final userFlat = (data['flatNumber'] ?? '').toString().trim().toUpperCase();
+        final blockStr = (data['block'] ?? '').toString().trim().toUpperCase();
+        final fullFlat = (blockStr.isNotEmpty && !userFlat.startsWith(blockStr))
+            ? '$blockStr-$userFlat'
+            : userFlat;
 
         // Initialize real-time in-app push notifications for this authenticated session
         PushNotificationManager.instance.startListening(
           user: user,
           role: role,
-          flatNumber: flatNumber,
+          flatNumber: fullFlat.isNotEmpty ? fullFlat : userFlat,
         );
 
         // Role authorization check for current app flavor

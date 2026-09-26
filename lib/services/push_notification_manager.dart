@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -95,7 +96,15 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
     final FlutterLocalNotificationsPlugin localNotif = FlutterLocalNotificationsPlugin();
     const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const InitializationSettings initSettings = InitializationSettings(android: androidSettings);
+    const DarwinInitializationSettings darwinSettings = DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
+    const InitializationSettings initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: darwinSettings,
+    );
     await localNotif.initialize(
       settings: initSettings,
       onDidReceiveNotificationResponse: notificationTapBackground,
@@ -213,11 +222,20 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     // Sanitize data payload to ensure no Firestore Timestamps crash jsonEncode
     final sanitizedData = _sanitizeForJson(data);
 
+    const DarwinNotificationDetails darwinDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
     await localNotif.show(
       id: notifId,
       title: title,
       body: body,
-      notificationDetails: NotificationDetails(android: androidDetails),
+      notificationDetails: NotificationDetails(
+        android: androidDetails,
+        iOS: darwinDetails,
+      ),
       payload: jsonEncode({
         'id': id,
         'title': title,
@@ -329,11 +347,42 @@ class PushNotificationManager with WidgetsBindingObserver {
       const AndroidInitializationSettings initializationSettingsAndroid =
           AndroidInitializationSettings('@mipmap/ic_launcher');
 
-      const InitializationSettings initializationSettings = InitializationSettings(
-        android: initializationSettingsAndroid,
+      final DarwinInitializationSettings initializationSettingsDarwin =
+          DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestBadgePermission: true,
+        requestSoundPermission: true,
+        notificationCategories: [
+          DarwinNotificationCategory(
+            'VISITOR_APPROVAL_CATEGORY',
+            actions: [
+              DarwinNotificationAction.plain(
+                'APPROVE_ACTION',
+                'Approve',
+                options: {DarwinNotificationActionOption.foreground},
+              ),
+              DarwinNotificationAction.plain(
+                'LEAVE_AT_GATE_ACTION',
+                'Leave at Gate',
+                options: {DarwinNotificationActionOption.foreground},
+              ),
+              DarwinNotificationAction.plain(
+                'DENY_ACTION',
+                'Deny',
+                options: {DarwinNotificationActionOption.destructive},
+              ),
+            ],
+            options: {DarwinNotificationCategoryOption.customDismissAction},
+          ),
+        ],
       );
 
-      // Initialize the local notifications plugin with Android settings and response callbacks
+      final InitializationSettings initializationSettings = InitializationSettings(
+        android: initializationSettingsAndroid,
+        iOS: initializationSettingsDarwin,
+      );
+
+      // Initialize the local notifications plugin with Android and iOS settings and response callbacks
       await _localNotifications.initialize(
         settings: initializationSettings,
         onDidReceiveNotificationResponse: (NotificationResponse response) async {
@@ -406,119 +455,116 @@ class PushNotificationManager with WidgetsBindingObserver {
         }
       }
 
-      // Request notification permissions for Android 13+
-      final androidPlugin = _localNotifications.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
-      await androidPlugin?.requestNotificationsPermission();
+      // Request notification permissions for Android 13+ and iOS
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        final androidPlugin = _localNotifications.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+        await androidPlugin?.requestNotificationsPermission();
 
-      // ── USE_FULL_SCREEN_INTENT PERMISSION (Android 14+ / API 34+) ──────────────────
-      // On Android 14+, apps that are NOT phone-dialers or alarm apps must get explicit
-      // user permission for fullScreenIntent to work. Without it, the notification is
-      // posted silently into the status bar (doorbell rings) but the screen NEVER wakes.
-      //
-      // requestFullScreenIntentPermission() opens the system Settings page for this app
-      // where the user toggles "Allow display of pop-up while screen is on / off lock screen".
-      // On Android < 14, this is a no-op. flutter_local_notifications v22.3.1 supports this.
-      try {
-        await androidPlugin?.requestFullScreenIntentPermission();
-        debugPrint('[PushNotificationManager] USE_FULL_SCREEN_INTENT permission requested ✓');
-      } catch (e) {
-        // Safe to ignore — permission check may not apply on all Android versions.
-        debugPrint('[PushNotificationManager] fullScreenIntent permission check skipped: $e');
+        // ── USE_FULL_SCREEN_INTENT PERMISSION (Android 14+ / API 34+) ──────────────────
+        // On Android 14+, apps that are NOT phone-dialers or alarm apps must get explicit
+        // user permission for fullScreenIntent to work.
+        try {
+          await androidPlugin?.requestFullScreenIntentPermission();
+          debugPrint('[PushNotificationManager] USE_FULL_SCREEN_INTENT permission requested ✓');
+        } catch (e) {
+          debugPrint('[PushNotificationManager] fullScreenIntent permission check skipped: $e');
+        }
+
+        // Explicitly purge legacy channels that may have had sound or importance muted in device settings
+        await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_ring_channel');
+        await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_ring_channel_v2');
+        await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_ring_channel_v3');
+
+        // Create high importance notification channels
+        const AndroidNotificationChannel generalChannel = AndroidNotificationChannel(
+          'society_general_channel',
+          'Society Notifications',
+          description: 'Important society announcements, bills, visitor and parcel alerts',
+          importance: Importance.high,
+          playSound: true,
+          enableVibration: true,
+          showBadge: true,
+        );
+
+        const AndroidNotificationChannel emergencyChannel = AndroidNotificationChannel(
+          'society_emergency_channel',
+          'Society Emergency Alerts',
+          description: 'Critical emergency and security SOS alerts',
+          importance: Importance.max,
+          playSound: true,
+          enableVibration: true,
+          showBadge: true,
+        );
+
+        // Dedicated channel v4 for walk-in visitor clearance with custom doorbell ringtone
+        const AndroidNotificationChannel visitorRingChannel = AndroidNotificationChannel(
+          'society_visitor_ring_channel_v4',
+          'Visitor Doorbell & Gate Approvals',
+          description: 'Urgent visitor gate clearance requests with custom doorbell ringtone',
+          importance: Importance.max,
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound('cell_phone_ring_std'),
+          enableVibration: true,
+          showBadge: true,
+          audioAttributesUsage: AudioAttributesUsage.notificationRingtone,
+        );
+
+        // Dedicated channel for visitor overstay alerts with custom clock alarm sound
+        const AndroidNotificationChannel overstayChannel = AndroidNotificationChannel(
+          'society_overstay_channel',
+          'Visitor Overstay Alerts',
+          description: 'High-priority alarm alerts when visitors or delivery agents exceed allowed campus stay time',
+          importance: Importance.max,
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound('clock_alarm'),
+          enableVibration: true,
+          showBadge: true,
+          audioAttributesUsage: AudioAttributesUsage.alarm,
+        );
+
+        await androidPlugin?.createNotificationChannel(generalChannel);
+        await androidPlugin?.createNotificationChannel(emergencyChannel);
+        await androidPlugin?.createNotificationChannel(visitorRingChannel);
+        await androidPlugin?.createNotificationChannel(overstayChannel);
+
+        await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_silent_wake_channel');
+        const AndroidNotificationChannel visitorWakeChannel = AndroidNotificationChannel(
+          'society_visitor_wake_channel_v2',
+          'Visitor Gate Alerts',
+          description: 'Full-screen popup notification that wakes the screen when a visitor is waiting at the gate',
+          importance: Importance.max,   // MUST be HIGH or MAX for fullScreenIntent to fire on Samsung / Pixel
+          playSound: false,              // Doorbell sound already comes from society_visitor_ring_channel_v4 via FCM
+          enableVibration: true,
+          showBadge: true,
+        );
+        await androidPlugin?.createNotificationChannel(visitorWakeChannel);
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        final iosPlugin = _localNotifications.resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin>();
+        await iosPlugin?.requestPermissions(
+          alert: true,
+          badge: true,
+          sound: true,
+        );
+        debugPrint('[PushNotificationManager] iOS notification permissions requested ✓');
       }
-
-      // Explicitly purge legacy channels that may have had sound or importance muted in device settings
-      await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_ring_channel');
-      await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_ring_channel_v2');
-      await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_ring_channel_v3');
-
-      // Create high importance notification channels
-      const AndroidNotificationChannel generalChannel = AndroidNotificationChannel(
-        'society_general_channel',
-        'Society Notifications',
-        description: 'Important society announcements, bills, visitor and parcel alerts',
-        importance: Importance.high,
-        playSound: true,
-        enableVibration: true,
-        showBadge: true,
-      );
-
-      const AndroidNotificationChannel emergencyChannel = AndroidNotificationChannel(
-        'society_emergency_channel',
-        'Society Emergency Alerts',
-        description: 'Critical emergency and security SOS alerts',
-        importance: Importance.max,
-        playSound: true,
-        enableVibration: true,
-        showBadge: true,
-      );
-
-      // Dedicated channel v4 for walk-in visitor clearance with custom doorbell ringtone
-      const AndroidNotificationChannel visitorRingChannel = AndroidNotificationChannel(
-        'society_visitor_ring_channel_v4',
-        'Visitor Doorbell & Gate Approvals',
-        description: 'Urgent visitor gate clearance requests with custom doorbell ringtone',
-        importance: Importance.max,
-        playSound: true,
-        sound: RawResourceAndroidNotificationSound('cell_phone_ring_std'),
-        enableVibration: true,
-        showBadge: true,
-        audioAttributesUsage: AudioAttributesUsage.notificationRingtone,
-      );
-
-      // Dedicated channel for visitor overstay alerts with custom clock alarm sound
-      const AndroidNotificationChannel overstayChannel = AndroidNotificationChannel(
-        'society_overstay_channel',
-        'Visitor Overstay Alerts',
-        description: 'High-priority alarm alerts when visitors or delivery agents exceed allowed campus stay time',
-        importance: Importance.max,
-        playSound: true,
-        sound: RawResourceAndroidNotificationSound('clock_alarm'),
-        enableVibration: true,
-        showBadge: true,
-        audioAttributesUsage: AudioAttributesUsage.alarm,
-      );
-
-      await androidPlugin?.createNotificationChannel(generalChannel);
-      await androidPlugin?.createNotificationChannel(emergencyChannel);
-      await androidPlugin?.createNotificationChannel(visitorRingChannel);
-      await androidPlugin?.createNotificationChannel(overstayChannel);
-
-      // ── SCREEN-WAKE CHANNEL FIX ────────────────────────────────────────────────────────────────
-      // ROOT CAUSE: The old 'society_visitor_silent_wake_channel' used Importance.low.
-      // Android (documented behavior) silently suppresses fullScreenIntent for channels whose
-      // importance < HIGH. On Samsung One UI this is especially strict — the screen NEVER wakes
-      // from a low-importance channel notification, regardless of fullScreenIntent:true on the
-      // individual notification. This is why only sound played but the popup never appeared.
-      //
-      // FIX STRATEGY:
-      // 1. Delete the old low-importance channel — Android caches channel importance on first
-      //    registration and ignores any subsequent updates to the same channel ID. The only way
-      //    to change importance is to delete the channel and create a new one (or use a new ID).
-      // 2. Create 'society_visitor_wake_channel_v2' with Importance.max so Android actually fires
-      //    the fullScreenIntent and wakes/unlocks the screen.
-      // 3. playSound:false at the CHANNEL level — the doorbell ringtone already plays via the
-      //    FCM background handler through 'society_visitor_ring_channel_v4'. Keeping sound off
-      //    here prevents the doorbell from double-ringing.
-      await androidPlugin?.deleteNotificationChannel(channelId: 'society_visitor_silent_wake_channel');
-      const AndroidNotificationChannel visitorWakeChannel = AndroidNotificationChannel(
-        'society_visitor_wake_channel_v2',
-        'Visitor Gate Alerts',
-        description: 'Full-screen popup notification that wakes the screen when a visitor is waiting at the gate',
-        importance: Importance.max,   // MUST be HIGH or MAX for fullScreenIntent to fire on Samsung / Pixel
-        playSound: false,              // Doorbell sound already comes from society_visitor_ring_channel_v4 via FCM
-        enableVibration: true,
-        showBadge: true,
-      );
-      await androidPlugin?.createNotificationChannel(visitorWakeChannel);
 
       // Initialize Firebase Cloud Messaging permissions and stream listeners
       try {
-        await FirebaseMessaging.instance.requestPermission(
+        final fcmSettings = await FirebaseMessaging.instance.requestPermission(
           alert: true,
           badge: true,
           sound: true,
           provisional: false,
+        );
+        debugPrint('[PushNotificationManager] FCM permission authorizationStatus: ${fcmSettings.authorizationStatus}');
+
+        // Required on iOS to present heads-up alert banners and play sounds while app is in foreground
+        await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+          alert: true,
+          badge: true,
+          sound: true,
         );
 
         // Foreground/background FCM message listener
@@ -624,10 +670,16 @@ class PushNotificationManager with WidgetsBindingObserver {
     // Register FCM Device Token with User Profile in Firestore
     _syncFcmDeviceToken(user.uid);
 
-    // Request notification permission again if not yet granted on Android 13+
-    _localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+    // Request notification permission again if not yet granted on Android 13+ or iOS
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      _localNotifications
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+      _localNotifications
+          .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
+    }
 
     // ─── Consume pending launch payload ──────────────────────────────────────────
     // If the app was launched from a cold start or background tap of a visitor
@@ -667,15 +719,41 @@ class PushNotificationManager with WidgetsBindingObserver {
         .snapshots()
         .listen(
       (snapshot) {
-        // On initial stream connection when the app starts up, mark all existing documents as seen.
-        // This prevents the application from replaying stale unread notifications from past days/sessions
-        // (such as older checkout alerts or past visitor passes) as new push alerts!
+        // On initial stream connection when the app starts up, mark existing documents as seen,
+        // EXCEPT if there is an active pending visitor gate clearance created within the last 4 minutes.
+        // This ensures that if the resident was outside the app when the visitor arrived and opens the app,
+        // the visitor clearance popout dialog appears immediately rather than being swallowed.
         if (isInitialSnapshot) {
           isInitialSnapshot = false;
+          final now = DateTime.now();
+          QueryDocumentSnapshot<Map<String, dynamic>>? activePendingVisitorDoc;
+
           for (final doc in snapshot.docs) {
             _seenNotificationIds.add(doc.id);
+
+            final data = doc.data();
+            if (data['isRead'] != true && _isTargetedToCurrentUser(data, user)) {
+              final type = (data['type'] ?? '').toString().toUpperCase();
+              final approvalStatus = (data['approvalStatus'] ?? '').toString().toUpperCase();
+              final isWalkIn = data['isWalkIn'] == true || data['isWalkIn'] == 'true';
+              final isVisitorApproval = (type == 'VISITOR_CHECK_IN' || type == 'VISITOR_APPROVAL_REQUEST') &&
+                  (approvalStatus == 'PENDING' || isWalkIn);
+
+              if (isVisitorApproval) {
+                final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
+                if (createdAt == null || now.difference(createdAt).inMinutes < 4) {
+                  activePendingVisitorDoc = doc;
+                }
+              }
+            }
           }
-          debugPrint('[PushNotificationManager] Initial snapshot primed with ${_seenNotificationIds.length} existing notifications. Historical alerts suppressed.');
+          debugPrint('[PushNotificationManager] Initial snapshot primed with ${_seenNotificationIds.length} existing notifications.');
+
+          // If an active pending visitor gate clearance was found upon startup, deliver it immediately
+          if (activePendingVisitorDoc != null) {
+            debugPrint('[PushNotificationManager] Delivering active pending visitor clearance from initial snapshot: ${activePendingVisitorDoc.id}');
+            _triggerPushNotification(activePendingVisitorDoc.id, activePendingVisitorDoc.data());
+          }
           return;
         }
 
@@ -711,19 +789,35 @@ class PushNotificationManager with WidgetsBindingObserver {
   }
 
   /// Syncs the device FCM token to the user document in Firestore.
-  /// Also sets up an active onTokenRefresh listener to update Firestore automatically
-  /// if the Android operating system or Firebase rotates the device registration token.
+  /// Handles iOS APNs token acquisition before fetching FCM token to prevent [apns-token-not-set] errors.
   Future<void> _syncFcmDeviceToken(String uid) async {
     try {
+      final isIOS = defaultTargetPlatform == TargetPlatform.iOS;
+      final platformStr = isIOS ? 'ios' : 'android';
+
+      if (isIOS) {
+        // On iOS, ensure APNs token is obtained before requesting FCM token
+        String? apnsToken = await FirebaseMessaging.instance.getAPNSToken();
+        int attempts = 0;
+        while (apnsToken == null && attempts < 5) {
+          await Future.delayed(const Duration(seconds: 1));
+          apnsToken = await FirebaseMessaging.instance.getAPNSToken();
+          attempts++;
+        }
+        if (apnsToken == null) {
+          debugPrint('[PushNotificationManager] APNs token not yet available on iOS (may be simulator or pending APNs provisioning).');
+        }
+      }
+
       final token = await FirebaseMessaging.instance.getToken();
       if (token != null && token.isNotEmpty) {
         await FirebaseFirestore.instance.collection('users').doc(uid).set({
           'fcmToken': token,
           'fcmTokens': FieldValue.arrayUnion([token]),
-          'devicePlatform': 'android',
+          'devicePlatform': platformStr,
           'lastTokenSync': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
-        debugPrint('[PushNotificationManager] FCM Token synced for $uid: ${token.substring(0, 10)}...');
+        debugPrint('[PushNotificationManager] FCM Token synced for $uid ($platformStr): ${token.substring(0, 10)}...');
       }
 
       // Automatically sync whenever Firebase Cloud Messaging rotates the device token
@@ -732,10 +826,10 @@ class PushNotificationManager with WidgetsBindingObserver {
           FirebaseFirestore.instance.collection('users').doc(uid).set({
             'fcmToken': newToken,
             'fcmTokens': FieldValue.arrayUnion([newToken]),
-            'devicePlatform': 'android',
+            'devicePlatform': platformStr,
             'lastTokenSync': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true)).catchError((_) {});
-          debugPrint('[PushNotificationManager] Refreshed FCM Token auto-synced for $uid');
+          debugPrint('[PushNotificationManager] Refreshed FCM Token auto-synced for $uid ($platformStr)');
         }
       });
     } catch (e) {
@@ -776,12 +870,19 @@ class PushNotificationManager with WidgetsBindingObserver {
         return true;
       }
 
-      // Check flat number match
+      // Check flat number match with bidirectional lookup variants (e.g. 'A-101' and '101')
       if (_currentUserFlat != null && _currentUserFlat!.isNotEmpty) {
         final flatInDoc = FlatUtils.normalize((data['flatNumber'] ?? '').toString());
-        if (flatInDoc == _currentUserFlat) return true;
-        final lookupKeys = FlatUtils.getLookupKeys(_currentUserFlat);
-        if (targetUids.any((u) => lookupKeys.contains(u))) return true;
+        if (flatInDoc.isNotEmpty && flatInDoc == _currentUserFlat) return true;
+
+        final userKeys = FlatUtils.getLookupKeys(_currentUserFlat);
+        final docKeys = FlatUtils.getLookupKeys(flatInDoc);
+
+        // Check if user's flat keys intersect with doc's flat keys (e.g. 'A-101' and '101')
+        if (userKeys.any((k) => docKeys.contains(k))) return true;
+
+        // Check if targetUids array in doc matches any of user's flat lookup keys
+        if (targetUids.any((u) => userKeys.contains(u))) return true;
       }
     }
 
@@ -934,13 +1035,24 @@ class PushNotificationManager with WidgetsBindingObserver {
         // No action buttons — resident will interact via the full-screen popup
       );
 
+      const DarwinNotificationDetails darwinDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+        interruptionLevel: InterruptionLevel.timeSensitive,
+        categoryIdentifier: 'VISITOR_APPROVAL_CATEGORY',
+      );
+
       final sanitizedExtraData = _sanitizeForJson(payload.extraData);
 
       await _localNotifications.show(
         id: notifId,
         title: payload.title,
         body: payload.message,
-        notificationDetails: NotificationDetails(android: androidDetails),
+        notificationDetails: NotificationDetails(
+          android: androidDetails,
+          iOS: darwinDetails,
+        ),
         payload: jsonEncode({
           'id': payload.id,
           'title': payload.title,
@@ -1064,7 +1176,20 @@ class PushNotificationManager with WidgetsBindingObserver {
         ),
       );
 
-      final NotificationDetails platformDetails = NotificationDetails(android: androidDetails);
+      final DarwinNotificationDetails darwinDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+        interruptionLevel: (payload.isEmergency || payload.isOverstay || payload.isVisitorApprovalRequest)
+            ? InterruptionLevel.timeSensitive
+            : InterruptionLevel.active,
+        categoryIdentifier: payload.isVisitorApprovalRequest ? 'VISITOR_APPROVAL_CATEGORY' : null,
+      );
+
+      final NotificationDetails platformDetails = NotificationDetails(
+        android: androidDetails,
+        iOS: darwinDetails,
+      );
 
       // Sanitize payload data to ensure Firestore Timestamps or DateTimes do not crash jsonEncode
       final sanitizedExtraData = _sanitizeForJson(payload.extraData);

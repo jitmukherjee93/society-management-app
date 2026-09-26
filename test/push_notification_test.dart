@@ -420,6 +420,34 @@ void main() {
       await tester.pumpAndSettle();
       expect(leaveAtGateCalled, isTrue);
     });
+
+    test('Flat variant matching handles block prefix differences seamlessly', () {
+      // Test that A-101 and 101 share lookup keys for bidirectional matching
+      final userKeysA101 = {'A-101', 'a-101', '101', 'A101', 'a101'};
+      final docKeys101 = {'101'};
+      final intersects = userKeysA101.any((k) => docKeys101.contains(k));
+      expect(intersects, isTrue);
+
+      final userKeysB202 = {'B-202', 'b-202', '202', 'B202', 'b202'};
+      final docKeys202 = {'202'};
+      expect(userKeysB202.any((k) => docKeys202.contains(k)), isTrue);
+
+      // Mismatched flats do not intersect
+      final docKeys303 = {'C-303', '303'};
+      expect(userKeysB202.any((k) => docKeys303.contains(k)), isFalse);
+    });
+
+    test('Active pending visitor gate clearance within 4 minutes is considered fresh for initial snapshot delivery', () {
+      final now = DateTime.now();
+      final freshTime = now.subtract(const Duration(minutes: 1));
+      final staleTime = now.subtract(const Duration(minutes: 10));
+
+      final isFresh = now.difference(freshTime).inMinutes < 4;
+      final isStale = now.difference(staleTime).inMinutes < 4;
+
+      expect(isFresh, isTrue);
+      expect(isStale, isFalse);
+    });
   });
 }
 

@@ -73,10 +73,10 @@ class NotificationService {
           targetUids.add(resolvedUid);
           resolvedEmail = cached.email;
           if (resolvedEmail != null) targetUids.add(resolvedEmail);
-        } else {
+          final queryKeys = lookupKeys.isNotEmpty ? lookupKeys.take(10).toList() : [normFlat];
           final usersSnap = await _firestore
               .collection('users')
-              .where('flatNumber', isEqualTo: normFlat)
+              .where('flatNumber', whereIn: queryKeys)
               .limit(1)
               .get();
 
