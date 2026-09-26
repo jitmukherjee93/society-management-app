@@ -71,10 +71,11 @@ jobs:
           cache: true
           cache-key: "flutter-:os:-:channel:-:version:-:arch:-:hash:"
 
-      # Step 4: Verify environment and print diagnostic info
-      - name: Flutter Diagnostics
+      # Step 4: Verify environment and configure Flutter
+      - name: Flutter Diagnostics & Configuration
         run: |
           flutter config --no-enable-macos-desktop
+          flutter config --no-enable-swift-package-manager
           flutter doctor -v
 
       # Step 5: Prepare build directories and fetch Flutter dependencies
@@ -91,16 +92,14 @@ jobs:
       - name: Run Unit Tests
         run: flutter test
 
-      # Step 8: Pre-cache iOS artifacts and configure iOS dependencies
-      - name: Configure iOS Dependencies
+      # Step 8: Pre-cache iOS artifacts and configure CocoaPods dependencies
+      - name: Configure CocoaPods iOS Dependencies
         run: |
           flutter precache --ios
-          flutter build ios --config-only
-          if [ -f "ios/Podfile" ]; then
-            cd ios
-            pod install --repo-update
-            cd ..
-          fi
+          flutter build ios --config-only --no-codesign
+          cd ios
+          pod install --repo-update
+          cd ..
 
       # Step 9: Build iOS App based on inputs
       - name: Build iOS Application
