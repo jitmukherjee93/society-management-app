@@ -253,14 +253,30 @@ exports.onNotificationCreated = functions
       for (let i = 0; i < tokens.length; i += BATCH_SIZE) {
         const batchTokens = tokens.slice(i, i + BATCH_SIZE);
 
-        // CRITICAL FOR SINGLE NOTIFICATION WITH APPROVE/DENY BUTTONS:
+        // CRITICAL FOR SINGLE NOTIFICATION WITH APPROVE/DENY BUTTONS ON ANDROID:
         // For visitor clearance requests, omit the top-level 'notification' block.
-        // This delivers a pure high-priority data message to the Android device, preventing
-        // Google Play Services / Android OS from posting a duplicate, buttonless notification.
-        // Flutter's background handler receives the data and posts the ONE and ONLY notification
-        // with the interactive Approve and Deny buttons!
+        // This delivers a pure high-priority data message to Android, preventing
+        // Google Play Services from posting a duplicate, buttonless notification.
+        // Flutter's background handler receives the data and posts the ONE and ONLY
+        // notification with the interactive Approve / Leave at Gate / Deny buttons.
+        //
+        // iOS COMPATIBILITY — WHY WE NEED THE `apns` BLOCK:
+        // iOS APNs DROPS data-only messages (no notification block) silently when
+        // the app is killed or suspended. To wake the device and show a banner on iOS,
+        // the FCM message MUST include an `apns.payload.aps.alert` block.
+        // We use `content-available: 1` alongside the alert so:
+        //   (a) iOS shows a native OS banner regardless of app state.
+        //   (b) The iOS background handler also fires for any supplemental data work.
+        // The `apns` block is completely ignored by Android, so there is zero risk of
+        // duplicates on Android.
+        //
+        // CATEGORY on iOS unlocks the native Approve / Deny inline action buttons
+        // in the iOS notification centre — matching the Android interactive buttons.
+        const visitorApnsCategory = isVisitorRequest ? "VISITOR_APPROVAL_CATEGORY" : undefined;
         const multicastMessage = {
           tokens: batchTokens,
+          // Top-level notification: omitted for visitor requests on Android (prevents
+          // buttonless duplicate); present for all other notification types.
           ...(isVisitorRequest ? {} : {
             notification: {
               title: title,
@@ -281,6 +297,43 @@ exports.onNotificationCreated = functions
                 tag: notifId,
               },
             }),
+          },
+          // iOS-SPECIFIC PUSH CONFIGURATION
+          // The `apns` block is required for iOS to wake the device and display
+          // a banner/alert when the app is in the background or completely killed.
+          // Without this block, iOS APNs silently discards the message.
+          apns: {
+            headers: {
+              // `apns-priority: 10` = immediate delivery (vs 5 = low priority).
+              // Required for content-available and time-sensitive notifications.
+              "apns-priority": "10",
+              // `apns-push-type` must be 'alert' for visible banners or 'background'
+              // for silent background wakes. We always use 'alert' so the user sees
+              // the notification immediately.
+              "apns-push-type": "alert",
+            },
+            payload: {
+              aps: {
+                // `alert` causes iOS to display a native banner/lock-screen notification.
+                // This is mandatory for the notification to be visible when the app is killed.
+                alert: {
+                  title: title,
+                  body: messageText,
+                },
+                sound: isEmergency ? "default" : "default",
+                // `badge` count on the app icon (1 for any new notification)
+                badge: 1,
+                // `content-available: 1` tells iOS to wake the app in the background
+                // so the Flutter background handler can process the data payload
+                // (e.g., storing the visitor request details for the popup dialog).
+                "content-available": 1,
+                // `category` links to the UNNotificationCategory registered in the
+                // Flutter plugin (DarwinNotificationCategory 'VISITOR_APPROVAL_CATEGORY'),
+                // which adds inline 'Approve' / 'Leave at Gate' / 'Deny' action buttons
+                // directly in the iOS notification centre.
+                ...(visitorApnsCategory ? { category: visitorApnsCategory } : {}),
+              },
+            },
           },
         };
 

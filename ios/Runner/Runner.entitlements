@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- aps-environment is REQUIRED by Apple for any app that uses Push Notifications (APNs). -->
+	<!-- Without this entitlement, APNs refuses to deliver notifications to the device,           -->
+	<!-- regardless of whether Firebase/FCM token is correctly registered.                        -->
+	<!--                                                                                          -->
+	<!-- 'development' = used for Ad-hoc / Debug / Sideloaded builds (AltStore, Sideloadly, etc) -->
+	<!-- 'production'  = used for App Store / TestFlight distribution builds                      -->
+	<!--                                                                                          -->
+	<!-- Since our current builds are sideloaded (unsigned IPA), 'development' is the correct    -->
+	<!-- value. If this app is submitted to TestFlight or App Store later, change to 'production'  -->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>
