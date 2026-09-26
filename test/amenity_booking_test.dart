@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:society_management/models/amenity_booking.dart';
+import 'package:society_management/models/accounting_heads.dart';
 import 'package:society_management/services/amenity_booking_service.dart';
 
 // ============================================================================
@@ -308,6 +309,75 @@ void main() {
           contains('Cannot reserve a gym slot that has already passed'),
         )),
       );
+    });
+  });
+
+  group('6. Facility Booking Ledger & Accounting Integration Tests', () {
+    test('AccountingConfig.incomeHeads contains "Facility Booking Charges"', () {
+      expect(AccountingConfig.incomeHeads, contains('Facility Booking Charges'));
+    });
+
+    test('AmenityBooking serializes and deserializes ledger tracking fields correctly', () {
+      final booking = AmenityBooking(
+        id: 'booking_fac_01',
+        amenityType: AmenityType.communityHall,
+        bookingDate: '2026-11-20',
+        flatNumber: 'C-204',
+        residentUid: 'res_uid_999',
+        residentName: 'Debabrata Sen',
+        residentPhone: '9830012345',
+        occasionPurpose: 'Anniversary Banquet',
+        totalAmount: 4000.0,
+        advancePaid: 200.0,
+        balanceDue: 3800.0,
+        status: BookingStatus.confirmed,
+        advanceLedgerLogged: true,
+        advanceVoucherNumber: 'INC-2026-0099',
+        balanceVoucherNumber: 'INC-2026-0100',
+        createdAt: DateTime(2026, 11, 1),
+      );
+
+      final map = booking.toMap();
+      expect(map['advanceLedgerLogged'], isTrue);
+      expect(map['advanceVoucherNumber'], equals('INC-2026-0099'));
+      expect(map['balanceVoucherNumber'], equals('INC-2026-0100'));
+
+      final restored = AmenityBooking.fromMap(map, 'booking_fac_01');
+      expect(restored.advanceLedgerLogged, isTrue);
+      expect(restored.advanceVoucherNumber, equals('INC-2026-0099'));
+      expect(restored.balanceVoucherNumber, equals('INC-2026-0100'));
+    });
+
+    test('AmenityBooking copyWith preserves and updates ledger fields', () {
+      final booking = AmenityBooking(
+        id: 'booking_fac_02',
+        amenityType: AmenityType.openGround,
+        bookingDate: '2026-12-05',
+        flatNumber: 'B-101',
+        residentUid: 'res_uid_101',
+        residentName: 'Suresh Kumar',
+        residentPhone: '9830054321',
+        occasionPurpose: 'Society Sports Day',
+        totalAmount: 500.0,
+        advancePaid: 200.0,
+        balanceDue: 300.0,
+        status: BookingStatus.pendingApproval,
+        createdAt: DateTime(2026, 11, 10),
+      );
+
+      expect(booking.advanceLedgerLogged, isFalse);
+      expect(booking.advanceVoucherNumber, isNull);
+
+      final approved = booking.copyWith(
+        status: BookingStatus.confirmed,
+        advanceLedgerLogged: true,
+        advanceVoucherNumber: 'INC-2026-0105',
+      );
+
+      expect(approved.status, equals(BookingStatus.confirmed));
+      expect(approved.advanceLedgerLogged, isTrue);
+      expect(approved.advanceVoucherNumber, equals('INC-2026-0105'));
+      expect(approved.balanceDue, equals(300.0));
     });
   });
 }

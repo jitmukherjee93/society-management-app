@@ -1,0 +1,157 @@
+name: Build iOS Application (Free macOS Cloud Runner)
+
+# Trigger options:
+# 1. Manual trigger (workflow_dispatch) with customization dropdowns (Flavor and Build Type).
+# 2. Automated push/PR trigger on master or main branches.
+on:
+  workflow_dispatch:
+    inputs:
+      flavor:
+        description: 'Flavor / App Target to Build'
+        required: true
+        default: 'resident'
+        type: choice
+        options:
+          - 'resident'  # Builds Resident App (lib/main_resident.dart)
+          - 'guard'     # Builds Gate Guard App (lib/main_guard.dart)
+          - 'admin'     # Builds Admin App (lib/main_admin.dart)
+          - 'unified'   # Builds Unified App (lib/main.dart)
+          - 'all'       # Builds all 3 primary apps (Resident, Guard, Admin)
+      build_type:
+        description: 'Build Type'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - 'release'    # Builds unsigned release .ipa for physical devices / sideloading
+          - 'simulator'  # Builds .app for iOS Simulator testing
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - 'lib/**'
+      - 'ios/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/build_ios.yml'
+  pull_request:
+    branches:
+      - master
+      - main
+    paths:
+      - 'lib/**'
+      - 'ios/**'
+      - 'pubspec.yaml'
+
+jobs:
+  build-ios:
+    name: Build iOS on macOS Runner
+    # GitHub provides free macOS runners (macos-14 uses Apple Silicon M1/M2)
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      # Step 1: Check out the repository source code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Java runtime environment (required for any Gradle / tool dependencies)
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # Step 3: Install Flutter SDK matching the repository version (Flutter 3.47.2 / Stable channel)
+      - name: Setup Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.2'
+          channel: 'stable'
+          cache: true
+          cache-key: "flutter-:os:-:channel:-:version:-:arch:-:hash:"
+
+      # Step 4: Verify environment and print diagnostic info
+      - name: Flutter Diagnostics
+        run: flutter doctor -v
+
+      # Step 5: Fetch Flutter dependencies defined in pubspec.yaml
+      - name: Install Dart & Flutter Dependencies
+        run: flutter pub get
+
+      # Step 6: Verify code quality and static analysis before building
+      - name: Run Static Analysis
+        run: dart analyze
+
+      # Step 7: Run unit and widget test suite
+      - name: Run Unit Tests
+        run: flutter test
+
+      # Step 8: Pre-cache iOS artifacts and install CocoaPods
+      - name: Install CocoaPods Dependencies
+        run: |
+          flutter precache --ios
+          cd ios
+          pod install --repo-update
+          cd ..
+
+      # Step 9: Build iOS App based on inputs
+      - name: Build iOS Application
+        run: |
+          # Determine target flavor: default to 'resident' on push/PR, or use user selection
+          SELECTED_FLAVOR="${{ github.event.inputs.flavor || 'resident' }}"
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
+
+          echo "Target Flavor: $SELECTED_FLAVOR"
+          echo "Build Type: $BUILD_TYPE"
+
+          # Helper function to build a specific flavor entrypoint
+          build_flavor() {
+            local FLAVOR_NAME=$1
+            local ENTRYPOINT=$2
+            echo "=========================================="
+            echo "Building $FLAVOR_NAME using $ENTRYPOINT"
+            echo "=========================================="
+
+            if [ "$BUILD_TYPE" = "simulator" ]; then
+              flutter build ios --simulator -t "$ENTRYPOINT"
+              # Archive the simulator .app bundle into a zip archive
+              cd build/ios/iphonesimulator
+              zip -r -q "${FLAVOR_NAME}_iOS_Simulator.zip" Runner.app
+              cd ../../..
+              mv "build/ios/iphonesimulator/${FLAVOR_NAME}_iOS_Simulator.zip" "./"
+            else
+              # Build unsigned release bundle for iOS
+              flutter build ios --release --no-codesign -t "$ENTRYPOINT"
+              # Create standard Payload folder structure for an unsigned .ipa package
+              rm -rf Payload
+              mkdir -p Payload
+              cp -R build/ios/iphoneos/Runner.app Payload/
+              zip -r -q "SocietyManagement_${FLAVOR_NAME}_unsigned.ipa" Payload
+              rm -rf Payload
+            fi
+          }
+
+          if [ "$SELECTED_FLAVOR" = "all" ]; then
+            build_flavor "resident" "lib/main_resident.dart"
+            build_flavor "guard" "lib/main_guard.dart"
+            build_flavor "admin" "lib/main_admin.dart"
+          elif [ "$SELECTED_FLAVOR" = "guard" ]; then
+            build_flavor "guard" "lib/main_guard.dart"
+          elif [ "$SELECTED_FLAVOR" = "admin" ]; then
+            build_flavor "admin" "lib/main_admin.dart"
+          elif [ "$SELECTED_FLAVOR" = "unified" ]; then
+            build_flavor "unified" "lib/main.dart"
+          else
+            build_flavor "resident" "lib/main_resident.dart"
+          fi
+
+      # Step 10: Upload the generated iOS IPA / App artifacts to GitHub Actions
+      - name: Upload iOS Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-${{ github.event.inputs.flavor || 'resident' }}-${{ github.sha }}
+          path: |
+            *.ipa
+            *Simulator.zip
+          retention-days: 14

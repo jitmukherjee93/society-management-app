@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import '../models/amenity_booking.dart';
+import '../models/accounting_heads.dart';
 import 'notification_service.dart';
 
 // ============================================================================
@@ -301,10 +302,17 @@ class AmenityBookingService {
     });
   }
 
-  /// Admin approval of Community Hall / Ground booking
+  /// Admin approval of Community Hall / Ground booking.
+  /// When confirmed, this method:
+  /// 1. Updates the booking status to CONFIRMED.
+  /// 2. If an advance fee was paid and hasn't yet been credited to the ledger, generates
+  ///    an income voucher and posts an entry to `society_transactions` under 'Facility Booking Charges'.
+  /// 3. Marks `advanceLedgerLogged: true` and records `advanceVoucherNumber`.
+  /// 4. Dispatches an in-app confirmation notification to the resident.
   static Future<void> adminApproveBooking({
     required String bookingId,
     required String adminUid,
+    String? adminName,
     String? remarks,
   }) async {
     final docRef = _fs.collection('amenity_bookings').doc(bookingId);
@@ -313,9 +321,42 @@ class AmenityBookingService {
 
     final data = docSnap.data() ?? {};
     final flatNumber = (data['flatNumber'] ?? '').toString();
+    final residentName = (data['residentName'] ?? 'Resident').toString();
     final residentUid = data['residentUid']?.toString();
     final amenityName = (data['amenityName'] ?? 'Facility').toString();
     final bookingDate = (data['bookingDate'] ?? '').toString();
+    final occasionPurpose = (data['occasionPurpose'] ?? '').toString();
+    final advancePaid = ((data['advancePaid'] ?? 0.0) as num).toDouble();
+    final paymentRef = data['paymentRef']?.toString();
+    final advanceLedgerLogged = data['advanceLedgerLogged'] == true;
+
+    String? advanceVoucher;
+    // Post advance to society_transactions under 'Facility Booking Charges' if not already logged
+    if (advancePaid > 0 && !advanceLedgerLogged) {
+      advanceVoucher = AccountingConfig.generateVoucherCode('INC');
+      try {
+        await _fs.collection('society_transactions').add({
+          'type': 'INCOME',
+          'category': 'Facility Booking Advance',
+          'accountHead': 'Facility Booking Charges',
+          'amount': advancePaid,
+          'voucherNumber': advanceVoucher,
+          'description': 'Advance fee for $amenityName on $bookingDate from Flat $flatNumber ($occasionPurpose)',
+          'flatNumber': flatNumber,
+          'paidToOrReceivedFrom': 'Flat $flatNumber ($residentName)',
+          'bookingId': bookingId,
+          'paymentMode': paymentRef != null && paymentRef.isNotEmpty ? 'Online / UPI' : 'Office Cash',
+          'referenceNumber': (paymentRef != null && paymentRef.isNotEmpty) ? paymentRef : 'OFFICE-ADVANCE',
+          'paymentDate': FieldValue.serverTimestamp(),
+          'createdAt': FieldValue.serverTimestamp(),
+          'createdBy': adminName ?? 'Society Office',
+          'createdByUid': adminUid,
+          'source': 'AMENITY_BOOKING_ADVANCE',
+        });
+      } catch (e) {
+        debugPrint('[AmenityBookingService] Error posting advance fee to ledger: $e');
+      }
+    }
 
     final updatePayload = <String, dynamic>{
       'status': BookingStatus.confirmed.value,
@@ -323,6 +364,10 @@ class AmenityBookingService {
       'approvedBy': adminUid,
       'updatedAt': FieldValue.serverTimestamp(),
     };
+    if (advanceVoucher != null) {
+      updatePayload['advanceLedgerLogged'] = true;
+      updatePayload['advanceVoucherNumber'] = advanceVoucher;
+    }
     if (remarks != null && remarks.isNotEmpty) {
       updatePayload['adminRemarks'] = remarks;
     }
@@ -333,8 +378,12 @@ class AmenityBookingService {
       targetUid: residentUid,
       title: '🎉 Booking Confirmed: $amenityName',
       message: 'Your booking for $amenityName on $bookingDate has been confirmed by Society Admin! Balance payment can be cleared at the society office.',
-      type: 'GENERAL',
-      extraData: {'bookingId': bookingId},
+      type: 'AMENITY_BOOKING_APPROVED',
+      extraData: {
+        'bookingId': bookingId,
+        'amenity': amenityName,
+        'bookingDate': bookingDate,
+      },
     );
   }
 
@@ -367,8 +416,13 @@ class AmenityBookingService {
       targetUid: residentUid,
       title: '❌ Booking Declined: $amenityName',
       message: 'Your booking for $amenityName on $bookingDate was declined by Admin. Reason: $reason.',
-      type: 'GENERAL',
-      extraData: {'bookingId': bookingId},
+      type: 'AMENITY_BOOKING_REJECTED',
+      extraData: {
+        'bookingId': bookingId,
+        'amenity': amenityName,
+        'bookingDate': bookingDate,
+        'reason': reason,
+      },
     );
   }
 
@@ -498,7 +552,9 @@ class AmenityBookingService {
     final newAdvancePaid = advancePaid + amountPaid;
     final newBalanceDue = (totalAmount - newAdvancePaid).clamp(0.0, double.infinity);
 
-    // 1. Update booking record
+    final voucherCode = AccountingConfig.generateVoucherCode('INC');
+
+    // 1. Update booking record with payment details and voucher number
     await docRef.update({
       'advancePaid': newAdvancePaid,
       'balanceDue': newBalanceDue,
@@ -507,27 +563,112 @@ class AmenityBookingService {
       'balanceReferenceNumber': referenceNumber,
       'balanceReceivedBy': adminName,
       'balanceReceivedByUid': adminUid,
+      'balanceVoucherNumber': voucherCode,
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // 2. Add ledger entry to society_transactions as facility income
+    // 2. Add ledger entry to society_transactions under 'Facility Booking Charges'
     try {
+      final residentName = (data['residentName'] ?? 'Resident').toString();
+      final bookingDate = (data['bookingDate'] ?? '').toString();
       await _fs.collection('society_transactions').add({
         'type': 'INCOME',
-        'category': 'AMENITY_FEE',
-        'head': 'Facility & Amenity Charges',
+        'category': 'Facility Booking Balance',
+        'accountHead': 'Facility Booking Charges',
         'amount': amountPaid,
-        'description': '$amenityName payment from Flat $flatNumber ($occasionPurpose)',
+        'voucherNumber': voucherCode,
+        'description': 'Balance fee for $amenityName on $bookingDate from Flat $flatNumber ($occasionPurpose)',
         'flatNumber': flatNumber,
+        'paidToOrReceivedFrom': 'Flat $flatNumber ($residentName)',
         'bookingId': bookingId,
         'paymentMode': paymentMode,
-        'referenceNumber': referenceNumber ?? 'OFFICE-CASH',
+        'referenceNumber': (referenceNumber != null && referenceNumber.isNotEmpty) ? referenceNumber : 'OFFICE-BALANCE',
+        'paymentDate': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': adminName,
         'createdByUid': adminUid,
+        'source': 'AMENITY_BOOKING_BALANCE',
       });
     } catch (e) {
       debugPrint('[AmenityBookingService] Note on ledger income write: $e');
+    }
+  }
+
+  /// Retroactive / idempotent reconciliation:
+  /// Finds confirmed or completed Community Hall / Ground bookings whose advance payment
+  /// has not yet been logged in `society_transactions` (e.g. approved prior to ledger integration),
+  /// and automatically creates the corresponding income transaction under 'Facility Booking Charges'.
+  static Future<int> syncApprovedBookingsToLedger() async {
+    try {
+      final confirmedSnap = await _fs
+          .collection('amenity_bookings')
+          .where('status', whereIn: ['CONFIRMED', 'COMPLETED'])
+          .get();
+
+      int backfilledCount = 0;
+      for (final doc in confirmedSnap.docs) {
+        final data = doc.data();
+        final bookingId = doc.id;
+        final advancePaid = ((data['advancePaid'] ?? 0.0) as num).toDouble();
+        if (advancePaid <= 0) continue;
+
+        final bool alreadyFlagged = data['advanceLedgerLogged'] == true;
+        if (alreadyFlagged) continue;
+
+        // Check if an advance transaction already exists in society_transactions for this booking
+        final existingTx = await _fs
+            .collection('society_transactions')
+            .where('bookingId', isEqualTo: bookingId)
+            .where('source', isEqualTo: 'AMENITY_BOOKING_ADVANCE')
+            .limit(1)
+            .get();
+
+        if (existingTx.docs.isNotEmpty) {
+          // Transaction already exists; update booking doc flag to prevent future redundant queries
+          await doc.reference.update({'advanceLedgerLogged': true});
+          continue;
+        }
+
+        // Post missing income transaction to 'Facility Booking Charges'
+        final flatNumber = (data['flatNumber'] ?? '').toString();
+        final residentName = (data['residentName'] ?? 'Resident').toString();
+        final amenityName = (data['amenityName'] ?? 'Facility').toString();
+        final bookingDate = (data['bookingDate'] ?? '').toString();
+        final occasionPurpose = (data['occasionPurpose'] ?? '').toString();
+        final paymentRef = data['paymentRef']?.toString();
+        final voucherCode = AccountingConfig.generateVoucherCode('INC');
+
+        final dynamic paymentDateRaw = data['approvedAt'] ?? data['createdAt'] ?? FieldValue.serverTimestamp();
+
+        await _fs.collection('society_transactions').add({
+          'type': 'INCOME',
+          'category': 'Facility Booking Advance',
+          'accountHead': 'Facility Booking Charges',
+          'amount': advancePaid,
+          'voucherNumber': voucherCode,
+          'description': 'Advance fee for $amenityName on $bookingDate from Flat $flatNumber ($occasionPurpose)',
+          'flatNumber': flatNumber,
+          'paidToOrReceivedFrom': 'Flat $flatNumber ($residentName)',
+          'bookingId': bookingId,
+          'paymentMode': paymentRef != null && paymentRef.isNotEmpty ? 'Online / UPI' : 'Office Cash',
+          'referenceNumber': (paymentRef != null && paymentRef.isNotEmpty) ? paymentRef : 'OFFICE-ADVANCE',
+          'paymentDate': paymentDateRaw,
+          'createdAt': FieldValue.serverTimestamp(),
+          'createdBy': 'System Backfill',
+          'source': 'AMENITY_BOOKING_ADVANCE',
+        });
+
+        await doc.reference.update({
+          'advanceLedgerLogged': true,
+          'advanceVoucherNumber': voucherCode,
+        });
+
+        backfilledCount++;
+      }
+      return backfilledCount;
+    } catch (e) {
+      debugPrint('[AmenityBookingService] Error during syncApprovedBookingsToLedger: $e');
+      return 0;
     }
   }
 

@@ -324,6 +324,8 @@ class AccountingConfig {
     'CESC (Transformer Room Rent)',
     'Car Parking Fees (Two-Wheelers)',
     'Car Parking Fees (Four-Wheelers)',
+    // Revenue collected from resident bookings for Community Hall and Society Ground
+    'Facility Booking Charges',
     'Puja Subscriptions & Allocations',
     'Bank Interest / Dividend',
     'Other / Miscellaneous Inflow',

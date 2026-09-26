@@ -39,6 +39,8 @@ class _ManageAmenityBookingsTabState extends State<ManageAmenityBookingsTab> {
     super.initState();
     // Initialize stream once in initState to avoid redundant subscriptions on rebuild
     _bookingsStream = AmenityBookingService.getAllBookingsStream(limit: 100);
+    // Retroactively sync any confirmed bookings whose advance payment was not posted to ledger
+    AmenityBookingService.syncApprovedBookingsToLedger();
   }
 
   @override
@@ -627,6 +629,7 @@ class _ManageAmenityBookingsTabState extends State<ManageAmenityBookingsTab> {
         await AmenityBookingService.adminApproveBooking(
           bookingId: b.id,
           adminUid: adminUid,
+          adminName: currentAdmin?.displayName ?? 'Society Office',
         );
         if (context.mounted) {
           AppFeedback.showSuccess(context, 'Booking for Flat ${b.flatNumber} has been confirmed!');

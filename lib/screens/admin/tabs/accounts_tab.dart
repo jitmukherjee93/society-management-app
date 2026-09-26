@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../../../models/accounting_heads.dart';
 import '../../../constants/society_config.dart';
 import '../../../services/staff_remuneration_service.dart';
+import '../../../services/amenity_booking_service.dart';
 import '../../../utils/storage_utils.dart';
 import '../../../utils/file_downloader.dart';
 import '../../../utils/app_formatters.dart';
@@ -44,6 +45,8 @@ class _AccountsTabState extends State<AccountsTab> with SingleTickerProviderStat
     super.initState();
     _tabController = TabController(length: 5, vsync: this);
     _selectedRemunerationMonth = _getCurrentMonth();
+    // Retroactively sync any confirmed bookings whose advance payment was not posted to ledger
+    AmenityBookingService.syncApprovedBookingsToLedger();
   }
 
   @override

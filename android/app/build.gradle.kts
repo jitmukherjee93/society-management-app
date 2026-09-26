@@ -58,11 +58,6 @@ android {
             applicationIdSuffix = ".guard"
             manifestPlaceholders["appName"] = "Gate Security Kiosk"
         }
-        create("admin") {
-            dimension = "app"
-            applicationIdSuffix = ".admin"
-            manifestPlaceholders["appName"] = "Ramkrishnapuram Admin"
-        }
     }
 }
 

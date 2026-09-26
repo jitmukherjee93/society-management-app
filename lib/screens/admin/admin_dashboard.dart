@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -33,6 +34,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   String? _selectedSubTab;
   bool _isSidebarCollapsed = false;
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
 
   @override
   void initState() {
@@ -51,6 +53,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       PushNotificationManager.instance.onNotificationClick = null;
     }
     _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -893,10 +896,36 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
+  String _getTabTitle(int index) {
+    switch (index) {
+      case 0:
+        return 'Dashboard Overview';
+      case 1:
+        return 'Flats & Residents';
+      case 2:
+        return 'Accounts & Ledger';
+      case 3:
+        return 'Notices & Broadcasts';
+      case 4:
+        return 'Helpdesk Tickets';
+      case 5:
+        return 'Maintenance Bills';
+      case 6:
+        return 'Visitors & Gate';
+      case 7:
+        return 'Amenity Bookings';
+      default:
+        return 'Admin Portal';
+    }
+  }
+
+  // ─── Desktop / Laptop Sidebar ─────────────────────────────────────────────
+
   Widget _buildDesktopSidebar() {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      width: _isSidebarCollapsed ? 72 : 230,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      width: _isSidebarCollapsed ? 76 : 246,
       clipBehavior: Clip.hardEdge,
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -907,38 +936,53 @@ class _AdminDashboardState extends State<AdminDashboard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header branding & collapse button
           Container(
             height: 64,
-            padding: EdgeInsets.symmetric(horizontal: _isSidebarCollapsed ? 8 : 16),
+            padding: EdgeInsets.symmetric(horizontal: _isSidebarCollapsed ? 12 : 16),
             alignment: _isSidebarCollapsed ? Alignment.center : Alignment.centerLeft,
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: AppColors.border, width: 0.8)),
+            ),
             child: _isSidebarCollapsed
                 ? IconButton(
                     icon: Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: AppColors.primaryLight,
+                        gradient: const LinearGradient(
+                          colors: [AppColors.primary, AppColors.primaryDark],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Icon(Icons.admin_panel_settings_rounded, size: 20, color: AppColors.primary),
+                      child: const Icon(Icons.admin_panel_settings_rounded, size: 20, color: Colors.white),
                     ),
                     tooltip: 'Expand sidebar',
-                    onPressed: () {
-                      setState(() {
-                        _isSidebarCollapsed = false;
-                      });
-                    },
+                    onPressed: () => setState(() => _isSidebarCollapsed = false),
                   )
                 : Row(
                     children: [
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: AppColors.primaryLight,
+                          gradient: const LinearGradient(
+                            colors: [AppColors.primary, AppColors.primaryDark],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
                           borderRadius: BorderRadius.circular(10),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.primary.withValues(alpha: 0.25),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
-                        child: const Icon(Icons.admin_panel_settings_rounded, size: 20, color: AppColors.primary),
+                        child: const Icon(Icons.admin_panel_settings_rounded, size: 20, color: Colors.white),
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 12),
                       const Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -950,7 +994,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 fontWeight: FontWeight.w900,
                                 fontSize: 14,
                                 color: AppColors.textPrimary,
-                                letterSpacing: 0.3,
+                                letterSpacing: 0.2,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -973,41 +1017,92 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           size: 20,
                         ),
                         tooltip: 'Collapse sidebar',
-                        onPressed: () {
-                          setState(() {
-                            _isSidebarCollapsed = true;
-                          });
-                        },
+                        onPressed: () => setState(() => _isSidebarCollapsed = true),
                       ),
                     ],
                   ),
           ),
-          const Divider(height: 1, color: AppColors.border),
-          const SizedBox(height: 12),
+
+          // Categorized Navigation List
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
               children: [
-                _buildSidebarNavItem(0, 'Dashboard', Icons.dashboard_outlined, Icons.dashboard_rounded),
-                _buildSidebarNavItem(1, 'Flats & Units', Icons.apartment_outlined, Icons.apartment_rounded),
-                _buildSidebarNavItem(2, 'Accounts', Icons.account_balance_wallet_outlined, Icons.account_balance_wallet_rounded),
-                _buildSidebarNavItem(3, 'Notices', Icons.campaign_outlined, Icons.campaign_rounded),
-                _buildSidebarNavItem(4, 'Helpdesk', Icons.support_agent_outlined, Icons.support_agent_rounded),
-                _buildSidebarNavItem(5, 'Maintenance', Icons.receipt_long_outlined, Icons.receipt_long_rounded),
-                _buildSidebarNavItem(6, 'Visitors', Icons.badge_outlined, Icons.badge_rounded),
-                // Amenity & facility booking management tab (Hall, Ground, Gym)
-                _buildSidebarNavItem(7, 'Amenities', Icons.event_available_outlined, Icons.event_available_rounded),
+                _buildSidebarSectionHeader('OVERVIEW'),
+                _buildSidebarNavItem(
+                  0,
+                  'Dashboard',
+                  Icons.dashboard_outlined,
+                  Icons.dashboard_rounded,
+                ),
+                const SizedBox(height: 12),
+
+                _buildSidebarSectionHeader('COMMUNITY & ACCESS'),
+                _buildSidebarNavItem(
+                  1,
+                  'Flats & Units',
+                  Icons.apartment_outlined,
+                  Icons.apartment_rounded,
+                ),
+                _buildSidebarNavItem(
+                  6,
+                  'Visitors & Gate',
+                  Icons.badge_outlined,
+                  Icons.badge_rounded,
+                ),
+                _buildSidebarNavItem(
+                  7,
+                  'Amenity Bookings',
+                  Icons.event_available_outlined,
+                  Icons.event_available_rounded,
+                  trailing: _buildPendingAmenityBadge(),
+                ),
+                const SizedBox(height: 12),
+
+                _buildSidebarSectionHeader('FINANCE & LEDGER'),
+                _buildSidebarNavItem(
+                  5,
+                  'Maintenance Bills',
+                  Icons.receipt_long_outlined,
+                  Icons.receipt_long_rounded,
+                  trailing: _buildPendingPaymentsBadge(),
+                ),
+                _buildSidebarNavItem(
+                  2,
+                  'Accounts & Ledger',
+                  Icons.account_balance_wallet_outlined,
+                  Icons.account_balance_wallet_rounded,
+                ),
+                const SizedBox(height: 12),
+
+                _buildSidebarSectionHeader('COMMUNICATION'),
+                _buildSidebarNavItem(
+                  3,
+                  'Notices & Broadcasts',
+                  Icons.campaign_outlined,
+                  Icons.campaign_rounded,
+                ),
+                _buildSidebarNavItem(
+                  4,
+                  'Helpdesk Tickets',
+                  Icons.support_agent_outlined,
+                  Icons.support_agent_rounded,
+                  trailing: _buildOpenComplaintsBadge(),
+                ),
               ],
             ),
           ),
+
           const Divider(height: 1, color: AppColors.border),
+
+          // Sidebar Footer with System Status
           Container(
             padding: EdgeInsets.all(_isSidebarCollapsed ? 12 : 16),
             child: _isSidebarCollapsed
                 ? const Center(
                     child: Tooltip(
-                      message: 'Ramkrishnapuram RWA\nVersion 1.2.0',
-                      child: Icon(Icons.info_outline_rounded, size: 18, color: AppColors.textMuted),
+                      message: 'Ramkrishnapuram RWA\nVersion 1.2.0 • Online',
+                      child: Icon(Icons.check_circle_rounded, size: 18, color: AppColors.success),
                     ),
                   )
                 : Column(
@@ -1018,9 +1113,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           Container(
                             width: 8,
                             height: 8,
-                            decoration: const BoxDecoration(
+                            decoration: BoxDecoration(
                               color: AppColors.success,
                               shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.success.withValues(alpha: 0.4),
+                                  blurRadius: 4,
+                                  spreadRadius: 1,
+                                ),
+                              ],
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -1031,12 +1133,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         ],
                       ),
                       const SizedBox(height: 4),
-                      const Text(
-                        'Ramkrishnapuram RWA',
-                        style: TextStyle(fontSize: 11, color: AppColors.textMuted),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
                       const Text(
                         'v1.2.0 • Admin Portal',
                         style: TextStyle(fontSize: 10, color: AppColors.textMuted),
@@ -1049,7 +1145,34 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  Widget _buildSidebarNavItem(int index, String title, IconData icon, IconData activeIcon) {
+  Widget _buildSidebarSectionHeader(String title) {
+    if (_isSidebarCollapsed) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 4),
+        child: Divider(height: 1, color: AppColors.border),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(left: 10, top: 4, bottom: 6),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.8,
+          color: AppColors.textMuted,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSidebarNavItem(
+    int index,
+    String title,
+    IconData icon,
+    IconData activeIcon, {
+    Widget? trailing,
+  }) {
     final isSelected = _currentIndex == index;
     final content = Semantics(
       button: true,
@@ -1061,58 +1184,65 @@ class _AdminDashboardState extends State<AdminDashboard> {
             _currentIndex = index;
           });
         },
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          constraints: const BoxConstraints(minHeight: 48), // WCAG minimum 48dp touch target
-          padding: const EdgeInsets.symmetric(
-            horizontal: 12,
-            vertical: 10,
+          constraints: const BoxConstraints(minHeight: 46), // WCAG touch target
+          padding: EdgeInsets.symmetric(
+            horizontal: _isSidebarCollapsed ? 8 : 12,
+            vertical: 9,
           ),
           decoration: BoxDecoration(
             color: isSelected ? AppColors.primaryLight : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(10),
+            border: isSelected
+                ? Border.all(color: AppColors.primaryBorder.withValues(alpha: 0.8), width: 1)
+                : null,
           ),
-        child: Row(
-          mainAxisAlignment: _isSidebarCollapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
-          children: [
-            Icon(
-              isSelected ? activeIcon : icon,
-              size: 20,
-              color: isSelected ? AppColors.primary : AppColors.textSecondary,
-            ),
-            if (!_isSidebarCollapsed) ...[
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                    color: isSelected ? AppColors.primaryDark : AppColors.textPrimary,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
+          child: Row(
+            mainAxisAlignment: _isSidebarCollapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+            children: [
+              Icon(
+                isSelected ? activeIcon : icon,
+                size: 20,
+                color: isSelected ? AppColors.primary : AppColors.textSecondary,
               ),
-              if (isSelected)
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: const BoxDecoration(
-                    color: AppColors.primary,
-                    shape: BoxShape.circle,
+              if (!_isSidebarCollapsed) ...[
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                      color: isSelected ? AppColors.primaryDark : AppColors.textPrimary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                if (trailing != null) ...[
+                  trailing,
+                  const SizedBox(width: 4),
+                ],
+                if (isSelected && trailing == null)
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: const BoxDecoration(
+                      color: AppColors.primary,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
-    ),
-  );
+    );
 
     if (_isSidebarCollapsed) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(vertical: 3),
         child: Tooltip(
           message: title,
           preferBelow: false,
@@ -1127,10 +1257,91 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
+  // Live badge helpers for sidebar and mobile drawer
+  Widget _buildPendingPaymentsBadge() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('maintenance_dues')
+          .where('status', isEqualTo: 'PAYMENT_PENDING_APPROVAL')
+          .limit(20)
+          .snapshots(),
+      builder: (context, snap) {
+        final count = snap.data?.docs.length ?? 0;
+        if (count == 0) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.amber.shade50,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.amber.shade300, width: 0.8),
+          ),
+          child: Text(
+            '$count',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.amber.shade900),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPendingAmenityBadge() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('amenity_bookings')
+          .where('status', isEqualTo: 'PENDING_APPROVAL')
+          .limit(20)
+          .snapshots(),
+      builder: (context, snap) {
+        final count = snap.data?.docs.length ?? 0;
+        if (count == 0) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.purple.shade50,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.purple.shade300, width: 0.8),
+          ),
+          child: Text(
+            '$count',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.purple.shade900),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildOpenComplaintsBadge() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('complaints')
+          .where('status', whereIn: ['OPEN', 'PENDING', 'ESCALATED'])
+          .limit(20)
+          .snapshots(),
+      builder: (context, snap) {
+        final count = snap.data?.docs.length ?? 0;
+        if (count == 0) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.red.shade50,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.red.shade300, width: 0.8),
+          ),
+          child: Text(
+            '$count',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.red.shade900),
+          ),
+        );
+      },
+    );
+  }
+
+  // ─── Desktop Header with Breadcrumb & Search Shortcut ───────────────────────
+
   Widget _buildDesktopHeader() {
     return Container(
       height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 24),
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(
@@ -1139,12 +1350,33 @@ class _AdminDashboardState extends State<AdminDashboard> {
       ),
       child: Row(
         children: [
+          // Section Breadcrumb
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Admin Portal',
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.chevron_right_rounded, size: 16, color: AppColors.textMuted),
+              const SizedBox(width: 6),
+              Text(
+                _getTabTitle(_currentIndex),
+                style: const TextStyle(fontSize: 13, color: AppColors.textPrimary, fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+
+          const SizedBox(width: 24),
+
+          // Search Input with Ctrl + K Shortcut
           Container(
             width: 320,
             height: 38,
             decoration: BoxDecoration(
               color: AppColors.background,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(10),
               border: Border.all(color: AppColors.border),
             ),
             child: Row(
@@ -1156,6 +1388,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 Expanded(
                   child: TextField(
                     controller: _searchController,
+                    focusNode: _searchFocusNode,
                     onSubmitted: _handleSearchSubmit,
                     style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
                     decoration: const InputDecoration(
@@ -1169,10 +1402,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 ),
                 Container(
                   margin: const EdgeInsets.only(right: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: BorderRadius.circular(5),
                     border: Border.all(color: AppColors.border),
                   ),
                   child: const Text(
@@ -1183,12 +1416,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ],
             ),
           ),
+
           const Spacer(),
+
+          // Society badge
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: AppColors.cardSurfaceSecondary,
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(color: AppColors.border),
             ),
             child: const Row(
@@ -1203,12 +1439,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ],
             ),
           ),
+
           const SizedBox(width: 8),
+
+          // FY Pill
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: AppColors.primaryLight.withValues(alpha: 0.5),
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(color: AppColors.primaryBorder),
             ),
             child: const Row(
@@ -1223,13 +1462,14 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ],
             ),
           ),
+
           if (AccountingConfig.simulatedDate != null) ...[
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: AppColors.warningSurface,
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: AppColors.warningBorder),
               ),
               child: Row(
@@ -1245,15 +1485,21 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ),
             ),
           ],
-          const SizedBox(width: 10),
+
+          const SizedBox(width: 12),
+
+          // Notifications Bell
           _AdminNotificationBadge(
             onPressed: () => _showNotificationsDialog(context),
           ),
+
           const SizedBox(width: 8),
+
+          // Admin Profile Avatar & Popup Menu
           PopupMenuButton<String>(
             tooltip: 'Admin Account',
             offset: const Offset(0, 48),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             onSelected: (val) {
               if (val == 'logout') {
                 FirebaseAuth.instance.signOut();
@@ -1283,7 +1529,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ),
             ],
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
                 color: AppColors.cardSurfaceSecondary,
                 borderRadius: BorderRadius.circular(20),
@@ -1308,6 +1554,232 @@ class _AdminDashboardState extends State<AdminDashboard> {
       ),
     );
   }
+
+  // ─── Mobile Drawer ─────────────────────────────────────────────────────────
+
+  Widget _buildMobileDrawer(BuildContext context) {
+    return Drawer(
+      backgroundColor: Colors.white,
+      child: SafeArea(
+        child: Column(
+          children: [
+            // Drawer Header with Society Logo & Admin Info
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [AppColors.primary, AppColors.primaryDark],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.admin_panel_settings_rounded, size: 24, color: AppColors.primary),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Ramkrishnapuram',
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              'RWA Admin Portal',
+                              style: TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.verified_rounded, size: 13, color: Colors.white),
+                        SizedBox(width: 6),
+                        Text(
+                          'Signed in as Administrator • FY 26-27',
+                          style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Modules Menu List
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                children: [
+                  _buildDrawerNavItem(
+                    0,
+                    'Dashboard Overview',
+                    'Key metrics & quick actions',
+                    Icons.dashboard_rounded,
+                  ),
+                  _buildDrawerNavItem(
+                    1,
+                    'Flats & Residents',
+                    'Flats directory, owners, vehicles',
+                    Icons.apartment_rounded,
+                  ),
+                  _buildDrawerNavItem(
+                    6,
+                    'Visitors & Gate',
+                    'Entry logs & overstay clearances',
+                    Icons.badge_rounded,
+                  ),
+                  _buildDrawerNavItem(
+                    7,
+                    'Amenity Bookings',
+                    'Community Hall, Ground & Gym',
+                    Icons.event_available_rounded,
+                    trailing: _buildPendingAmenityBadge(),
+                  ),
+                  const Divider(height: 16, color: AppColors.border),
+                  _buildDrawerNavItem(
+                    5,
+                    'Maintenance Bills',
+                    'Billing generation & payment approvals',
+                    Icons.receipt_long_rounded,
+                    trailing: _buildPendingPaymentsBadge(),
+                  ),
+                  _buildDrawerNavItem(
+                    2,
+                    'Accounts & Ledger',
+                    'Income, expenses & financial vouchers',
+                    Icons.account_balance_wallet_rounded,
+                  ),
+                  const Divider(height: 16, color: AppColors.border),
+                  _buildDrawerNavItem(
+                    3,
+                    'Notices & Broadcasts',
+                    'Society notices & alerts',
+                    Icons.campaign_rounded,
+                  ),
+                  _buildDrawerNavItem(
+                    4,
+                    'Helpdesk Tickets',
+                    'Resident grievances & tracking',
+                    Icons.support_agent_rounded,
+                    trailing: _buildOpenComplaintsBadge(),
+                  ),
+                ],
+              ),
+            ),
+
+            const Divider(height: 1, color: AppColors.border),
+
+            // Drawer Footer
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: AppColors.success,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Online • v1.2.0',
+                    style: TextStyle(fontSize: 11, color: AppColors.textMuted, fontWeight: FontWeight.w600),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      FirebaseAuth.instance.signOut();
+                    },
+                    icon: const Icon(Icons.logout_rounded, size: 16, color: AppColors.error),
+                    label: const Text('Logout', style: TextStyle(color: AppColors.error, fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDrawerNavItem(
+    int index,
+    String title,
+    String subtitle,
+    IconData icon, {
+    Widget? trailing,
+  }) {
+    final isSelected = _currentIndex == index;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: ListTile(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        selected: isSelected,
+        selectedTileColor: AppColors.primaryLight,
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.primary : AppColors.cardSurfaceSecondary,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: isSelected ? Colors.white : AppColors.textSecondary,
+          ),
+        ),
+        title: Text(
+          title,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+            color: isSelected ? AppColors.primaryDark : AppColors.textPrimary,
+          ),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: trailing,
+        onTap: () {
+          Navigator.pop(context);
+          setState(() => _currentIndex = index);
+        },
+      ),
+    );
+  }
+
+  // ─── Main Scaffold Build ───────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -1338,37 +1810,69 @@ class _AdminDashboardState extends State<AdminDashboard> {
       const ManageAmenityBookingsTab(),
     ];
 
-    final isDesktop = MediaQuery.sizeOf(context).width >= 900;
+    final isDesktop = MediaQuery.sizeOf(context).width >= 960;
 
     if (isDesktop) {
-      return Scaffold(
-        backgroundColor: AppColors.background,
-        body: Row(
-          children: [
-            _buildDesktopSidebar(),
-            Expanded(
-              child: Column(
-                children: [
-                  _buildDesktopHeader(),
-                  Expanded(
-                    child: IndexedStack(
-                      index: _currentIndex,
-                      children: pages,
+      return CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.keyK, control: true): () {
+            _searchFocusNode.requestFocus();
+          },
+        },
+        child: Scaffold(
+          backgroundColor: AppColors.background,
+          body: Row(
+            children: [
+              _buildDesktopSidebar(),
+              Expanded(
+                child: Column(
+                  children: [
+                    _buildDesktopHeader(),
+                    Expanded(
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        switchInCurve: Curves.easeOutCubic,
+                        switchOutCurve: Curves.easeInCubic,
+                        transitionBuilder: (child, animation) {
+                          return FadeTransition(
+                            opacity: animation,
+                            child: SlideTransition(
+                              position: Tween<Offset>(
+                                begin: const Offset(0, 0.015),
+                                end: Offset.zero,
+                              ).animate(animation),
+                              child: child,
+                            ),
+                          );
+                        },
+                        child: KeyedSubtree(
+                          key: ValueKey<int>(_currentIndex),
+                          child: pages[_currentIndex],
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     }
 
-    // Mobile / Tablet layout (< 900px)
+    // Mobile / Tablet layout (< 960px)
     final isMobile = MediaQuery.sizeOf(context).width < 600;
 
     return Scaffold(
+      drawer: _buildMobileDrawer(context),
       appBar: AppBar(
+        leading: Builder(
+          builder: (ctx) => IconButton(
+            icon: const Icon(Icons.menu_rounded, color: AppColors.textPrimary),
+            tooltip: 'Open navigation menu',
+            onPressed: () => Scaffold.of(ctx).openDrawer(),
+          ),
+        ),
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1387,16 +1891,19 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    isMobile ? 'Admin Portal' : 'Admin Management Portal',
-                    style: TextStyle(fontSize: isMobile ? 15 : 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                    _getTabTitle(_currentIndex),
+                    style: TextStyle(
+                      fontSize: isMobile ? 14 : 16,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
-                  if (!isMobile)
-                    const Text(
-                      'Ramkrishnapuram RWA',
-                      style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                  const Text(
+                    'Ramkrishnapuram RWA',
+                    style: TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
               ),
             ),
@@ -1408,87 +1915,198 @@ class _AdminDashboardState extends State<AdminDashboard> {
         ),
         actions: [
           if (AccountingConfig.simulatedDate != null)
-            isMobile
-                ? Tooltip(
-                    message: 'Simulated Date: ${DateFormat('dd MMMM yyyy').format(AccountingConfig.currentDate)}',
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: AppColors.warningSurface,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: AppColors.warningBorder),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.calendar_today_rounded, size: 12, color: AppColors.warningDark),
-                          const SizedBox(width: 4),
-                          Text(
-                            DateFormat('dd MMM').format(AccountingConfig.currentDate),
-                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.warningDark),
-                          ),
-                        ],
-                      ),
+            Tooltip(
+              message: 'Simulated Date: ${DateFormat('dd MMMM yyyy').format(AccountingConfig.currentDate)}',
+              child: Container(
+                margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.warningSurface,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: AppColors.warningBorder),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.calendar_today_rounded, size: 12, color: AppColors.warningDark),
+                    const SizedBox(width: 4),
+                    Text(
+                      DateFormat('dd MMM').format(AccountingConfig.currentDate),
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.warningDark),
                     ),
-                  )
-                : Container(
-                    margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.warningSurface,
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: AppColors.warningBorder),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.calendar_today_rounded, size: 14, color: AppColors.warningDark),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Simulated Date: ${DateFormat('dd MMMM yyyy').format(AccountingConfig.currentDate)}',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warningDark),
-                        ),
-                      ],
-                    ),
-                  ),
+                  ],
+                ),
+              ),
+            ),
           _AdminNotificationBadge(
             onPressed: () => _showNotificationsDialog(context),
             tooltip: 'Notifications',
           ),
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, size: 20, color: AppColors.error),
-            tooltip: 'Logout',
-            onPressed: () => FirebaseAuth.instance.signOut(),
+          PopupMenuButton<String>(
+            tooltip: 'Admin Options',
+            icon: const Icon(Icons.more_vert_rounded, size: 20, color: AppColors.textSecondary),
+            onSelected: (val) {
+              if (val == 'logout') {
+                FirebaseAuth.instance.signOut();
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem<String>(
+                value: 'logout',
+                child: Row(
+                  children: [
+                    Icon(Icons.logout_rounded, size: 16, color: AppColors.error),
+                    SizedBox(width: 8),
+                    Text('Logout', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w600, fontSize: 13)),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
-      body: IndexedStack(index: _currentIndex, children: pages),
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) {
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.015),
+                end: Offset.zero,
+              ).animate(animation),
+              child: child,
+            ),
+          );
+        },
+        child: KeyedSubtree(
+          key: ValueKey<int>(_currentIndex),
+          child: pages[_currentIndex],
+        ),
+      ),
       bottomNavigationBar: _buildMobileBottomNav(),
     );
   }
 
+  // ─── Mobile Bottom Navigation (Ergonomic 5-Item Navigation) ───────────────
+
   Widget _buildMobileBottomNav() {
+    // Indices in bottom bar:
+    // 0: Dashboard (Index 0)
+    // 1: Flats (Index 1)
+    // 2: Accounts (Index 2)
+    // 3: Bills (Index 5)
+    // 4: More / Menu (opens drawer or represents remaining tabs 3, 4, 6, 7)
+    final isSecondaryTabActive = [3, 4, 6, 7].contains(_currentIndex);
+    final secondaryLabel = isSecondaryTabActive ? _getTabShortLabel(_currentIndex) : 'More';
+
     return SafeArea(
       child: Container(
         height: 64,
         decoration: const BoxDecoration(
           color: Colors.white,
           border: Border(top: BorderSide(color: AppColors.border, width: 0.9)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black12,
+              blurRadius: 4,
+              offset: Offset(0, -1),
+            ),
+          ],
         ),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Row(
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildMobileNavItem(0, 'Dashboard', Icons.dashboard_outlined, Icons.dashboard_rounded, targetIndex: 0),
+            _buildMobileNavItem(1, 'Flats', Icons.apartment_outlined, Icons.apartment_rounded, targetIndex: 1),
+            _buildMobileNavItem(2, 'Accounts', Icons.account_balance_wallet_outlined, Icons.account_balance_wallet_rounded, targetIndex: 2),
+            _buildMobileNavItem(5, 'Bills', Icons.receipt_long_outlined, Icons.receipt_long_rounded, targetIndex: 5),
+            Builder(
+              builder: (ctx) => _buildMobileNavActionItem(
+                label: secondaryLabel,
+                icon: isSecondaryTabActive ? _getTabIcon(_currentIndex) : Icons.grid_view_rounded,
+                isActive: isSecondaryTabActive,
+                onTap: () => Scaffold.of(ctx).openDrawer(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getTabShortLabel(int index) {
+    switch (index) {
+      case 3:
+        return 'Notices';
+      case 4:
+        return 'Helpdesk';
+      case 6:
+        return 'Visitors';
+      case 7:
+        return 'Amenities';
+      default:
+        return 'More';
+    }
+  }
+
+  IconData _getTabIcon(int index) {
+    switch (index) {
+      case 3:
+        return Icons.campaign_rounded;
+      case 4:
+        return Icons.support_agent_rounded;
+      case 6:
+        return Icons.badge_rounded;
+      case 7:
+        return Icons.event_available_rounded;
+      default:
+        return Icons.grid_view_rounded;
+    }
+  }
+
+  Widget _buildMobileNavItem(
+    int matchIndex,
+    String label,
+    IconData icon,
+    IconData activeIcon, {
+    required int targetIndex,
+  }) {
+    final isSelected = _currentIndex == matchIndex;
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label: '$label tab',
+      child: InkWell(
+        onTap: () => setState(() => _currentIndex = targetIndex),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          constraints: const BoxConstraints(minHeight: 48, minWidth: 58),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.primaryLight : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildMobileNavItem(0, 'Dashboard', Icons.dashboard_outlined, Icons.dashboard_rounded),
-              _buildMobileNavItem(1, 'Flats', Icons.apartment_outlined, Icons.apartment_rounded),
-              _buildMobileNavItem(2, 'Accounts', Icons.account_balance_wallet_outlined, Icons.account_balance_wallet_rounded),
-              _buildMobileNavItem(3, 'Notices', Icons.campaign_outlined, Icons.campaign_rounded),
-              _buildMobileNavItem(4, 'Helpdesk', Icons.support_agent_outlined, Icons.support_agent_rounded),
-              _buildMobileNavItem(5, 'Bills', Icons.receipt_long_outlined, Icons.receipt_long_rounded),
-              _buildMobileNavItem(6, 'Visitors', Icons.badge_outlined, Icons.badge_rounded),
-              _buildMobileNavItem(7, 'Amenities', Icons.event_available_outlined, Icons.event_available_rounded),
+              Icon(
+                isSelected ? activeIcon : icon,
+                size: 20,
+                color: isSelected ? AppColors.primary : AppColors.textSecondary,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                  color: isSelected ? AppColors.primaryDark : AppColors.textSecondary,
+                ),
+              ),
             ],
           ),
         ),
@@ -1496,46 +2114,47 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  Widget _buildMobileNavItem(int index, String label, IconData icon, IconData activeIcon) {
-    final isSelected = _currentIndex == index;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Semantics(
-        button: true,
-        selected: isSelected,
-        label: '$label tab',
-        child: InkWell(
-          onTap: () => setState(() => _currentIndex = index),
-          borderRadius: BorderRadius.circular(10),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-            constraints: const BoxConstraints(minHeight: 48, minWidth: 64),
-            decoration: BoxDecoration(
-              color: isSelected ? AppColors.primaryLight : Colors.transparent,
-              borderRadius: BorderRadius.circular(10),
-              border: isSelected ? Border.all(color: AppColors.primaryBorder) : null,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  isSelected ? activeIcon : icon,
-                  size: 20,
-                  color: isSelected ? AppColors.primary : AppColors.textSecondary,
+  Widget _buildMobileNavActionItem({
+    required String label,
+    required IconData icon,
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    return Semantics(
+      button: true,
+      selected: isActive,
+      label: '$label menu',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          constraints: const BoxConstraints(minHeight: 48, minWidth: 58),
+          decoration: BoxDecoration(
+            color: isActive ? AppColors.primaryLight : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 20,
+                color: isActive ? AppColors.primary : AppColors.textSecondary,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
+                  color: isActive ? AppColors.primaryDark : AppColors.textSecondary,
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                    color: isSelected ? AppColors.primaryDark : AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
           ),
         ),
       ),

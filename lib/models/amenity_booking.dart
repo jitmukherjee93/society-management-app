@@ -175,6 +175,12 @@ class AmenityBooking {
   final String? keyIssuedByGuard;
   final String? keyReceivedByGuard;
   final String? adminRemarks;
+  /// Tracks whether the advance payment has been posted into society_transactions ledger
+  final bool advanceLedgerLogged;
+  /// Voucher number issued for the advance payment income
+  final String? advanceVoucherNumber;
+  /// Voucher number issued for the balance payment income
+  final String? balanceVoucherNumber;
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -200,6 +206,9 @@ class AmenityBooking {
     this.keyIssuedByGuard,
     this.keyReceivedByGuard,
     this.adminRemarks,
+    this.advanceLedgerLogged = false,
+    this.advanceVoucherNumber,
+    this.balanceVoucherNumber,
     required this.createdAt,
     this.updatedAt,
   });
@@ -239,6 +248,9 @@ class AmenityBooking {
       keyIssuedByGuard: data['keyIssuedByGuard']?.toString(),
       keyReceivedByGuard: data['keyReceivedByGuard']?.toString(),
       adminRemarks: data['adminRemarks']?.toString(),
+      advanceLedgerLogged: data['advanceLedgerLogged'] == true,
+      advanceVoucherNumber: data['advanceVoucherNumber']?.toString(),
+      balanceVoucherNumber: data['balanceVoucherNumber']?.toString(),
       // Resilient parsing: accepts both Firestore Timestamps and client DateTime/FieldValue objects without casting errors
       createdAt: data['createdAt'] is Timestamp
           ? (data['createdAt'] as Timestamp).toDate()
@@ -273,6 +285,9 @@ class AmenityBooking {
       if (keyIssuedByGuard != null) 'keyIssuedByGuard': keyIssuedByGuard,
       if (keyReceivedByGuard != null) 'keyReceivedByGuard': keyReceivedByGuard,
       if (adminRemarks != null) 'adminRemarks': adminRemarks,
+      'advanceLedgerLogged': advanceLedgerLogged,
+      if (advanceVoucherNumber != null) 'advanceVoucherNumber': advanceVoucherNumber,
+      if (balanceVoucherNumber != null) 'balanceVoucherNumber': balanceVoucherNumber,
       'createdAt': Timestamp.fromDate(createdAt),
       'updatedAt': FieldValue.serverTimestamp(),
     };
@@ -289,6 +304,9 @@ class AmenityBooking {
     double? advancePaid,
     double? balanceDue,
     String? paymentRef,
+    bool? advanceLedgerLogged,
+    String? advanceVoucherNumber,
+    String? balanceVoucherNumber,
   }) {
     return AmenityBooking(
       id: id,
@@ -312,6 +330,9 @@ class AmenityBooking {
       keyIssuedByGuard: keyIssuedByGuard ?? this.keyIssuedByGuard,
       keyReceivedByGuard: keyReceivedByGuard ?? this.keyReceivedByGuard,
       adminRemarks: adminRemarks ?? this.adminRemarks,
+      advanceLedgerLogged: advanceLedgerLogged ?? this.advanceLedgerLogged,
+      advanceVoucherNumber: advanceVoucherNumber ?? this.advanceVoucherNumber,
+      balanceVoucherNumber: balanceVoucherNumber ?? this.balanceVoucherNumber,
       createdAt: createdAt,
       updatedAt: DateTime.now(),
     );

@@ -35,13 +35,18 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = MediaQuery.sizeOf(context).width >= 1050;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isDesktop = screenWidth >= 1050;
+    final isMobile = screenWidth < 600;
     final timeStr = DateFormat('hh:mm a').format(_lastRefreshed);
 
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+        padding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 12 : 24,
+          vertical: isMobile ? 14 : 24,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -158,12 +163,15 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
           ),
           const SizedBox(height: 16),
 
-          // 2x2 Grid for Actions Pending
+          // Responsive Grid for Actions Pending (1 column on mobile, 2 columns on tablet/desktop)
           LayoutBuilder(
             builder: (context, constraints) {
-              final itemWidth = (constraints.maxWidth - 14) / 2;
+              final isSingleCol = constraints.maxWidth < 480;
+              final crossAxisCount = isSingleCol ? 1 : 2;
+              const spacing = 12.0;
+              final itemWidth = (constraints.maxWidth - ((crossAxisCount - 1) * spacing)) / crossAxisCount;
               return Wrap(
-                spacing: 14,
+                spacing: spacing,
                 runSpacing: 12,
                 children: [
                   // 1. Payment Intimations / Approvals
@@ -177,6 +185,7 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Payment Intimations',
+                        icon: Icons.payments_rounded,
                         count: count,
                         highlight: count > 0,
                         highlightColor: Colors.amber.shade700,
@@ -198,6 +207,7 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Member / Vehicle Reqs',
+                        icon: Icons.directions_car_rounded,
                         count: count,
                         highlight: count > 0,
                         highlightColor: Colors.indigo,
@@ -225,6 +235,7 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Escalated Tickets',
+                        icon: Icons.support_agent_rounded,
                         count: openCount,
                         highlight: openCount > 0,
                         highlightColor: Colors.red.shade700,
@@ -244,6 +255,7 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Overdue Maintenance Dues',
+                        icon: Icons.receipt_long_rounded,
                         count: count,
                         highlight: count > 0,
                         highlightColor: Colors.deepOrange,
@@ -319,12 +331,16 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
           ),
           const SizedBox(height: 16),
 
-          // 2x2 Grid for Society Stats
+          // Responsive Grid for Society Stats (1 col on mobile, 2 cols on tablet/desktop, 3 cols on wide screens)
           LayoutBuilder(
             builder: (context, constraints) {
-              final itemWidth = (constraints.maxWidth - 14) / 2;
+              final isSingleCol = constraints.maxWidth < 480;
+              final isThreeCol = constraints.maxWidth >= 820;
+              final crossAxisCount = isSingleCol ? 1 : (isThreeCol ? 3 : 2);
+              const spacing = 12.0;
+              final itemWidth = (constraints.maxWidth - ((crossAxisCount - 1) * spacing)) / crossAxisCount;
               return Wrap(
-                spacing: 14,
+                spacing: spacing,
                 runSpacing: 12,
                 children: [
                   // 1. Active Flats
@@ -335,6 +351,8 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Active Flats',
+                        icon: Icons.apartment_rounded,
+                        iconColor: Colors.blue.shade700,
                         count: count > 0 ? count : 130,
                         onTap: () => widget.onNavigateToTab(1), // Society/Flats
                       );
@@ -348,7 +366,9 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       final count = snap.data?.docs.length ?? 0;
                       return _buildActionTile(
                         width: itemWidth,
-                        title: 'Active Residents / Users',
+                        title: 'Active Residents',
+                        icon: Icons.people_alt_rounded,
+                        iconColor: const Color(0xFF059669),
                         count: count,
                         onTap: () => widget.onNavigateToTab(1), // Society/Flats
                       );
@@ -370,6 +390,8 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Active Guards on Duty',
+                        icon: Icons.security_rounded,
+                        iconColor: Colors.cyan.shade800,
                         count: onDutyCount,
                         onTap: () => widget.onNavigateToTab(1, subTab: 'guards'),
                       );
@@ -396,6 +418,8 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Staff Payroll ($curMonth)',
+                        icon: Icons.badge_rounded,
+                        iconColor: Colors.indigo.shade700,
                         countString: '$paidCount/11',
                         badgeText: '$percent%',
                         badgeColor: paidCount == 11 ? Colors.green : Colors.indigo,
@@ -415,6 +439,7 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Visitors In-Campus',
+                        icon: Icons.directions_walk_rounded,
                         count: count,
                         highlight: count > 0,
                         highlightColor: const Color(0xFF0D9488),
@@ -434,6 +459,7 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
                       return _buildActionTile(
                         width: itemWidth,
                         title: 'Facility Bookings',
+                        icon: Icons.event_available_rounded,
                         count: count,
                         highlight: count > 0,
                         highlightColor: Colors.deepPurple,
@@ -454,6 +480,8 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
   Widget _buildActionTile({
     required double width,
     required String title,
+    IconData? icon,
+    Color? iconColor,
     int? count,
     String? countString,
     String? badgeText,
@@ -462,71 +490,97 @@ class _AdminHomeDashboardTabState extends State<AdminHomeDashboardTab> {
     Color? highlightColor,
     required VoidCallback onTap,
   }) {
+    final effectiveColor = highlightColor ?? iconColor ?? AppColors.primary;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      hoverColor: Colors.grey.shade50,
-      child: Container(
+      borderRadius: BorderRadius.circular(12),
+      hoverColor: effectiveColor.withValues(alpha: 0.04),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
         width: width,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: highlight ? (highlightColor ?? AppColors.primary).withValues(alpha: 0.35) : AppColors.border,
+            color: highlight
+                ? effectiveColor.withValues(alpha: 0.35)
+                : AppColors.border,
             width: highlight ? 1.2 : 0.9,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.02),
-              blurRadius: 4,
-              offset: const Offset(0, 1),
+              color: highlight
+                  ? effectiveColor.withValues(alpha: 0.06)
+                  : Colors.black.withValues(alpha: 0.02),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
             ),
           ],
         ),
         child: Row(
           children: [
-            Expanded(
-              child: Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary,
+            if (icon != null) ...[
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: effectiveColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                child: Icon(icon, size: 19, color: effectiveColor),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (badgeText != null) ...[
+                    const SizedBox(height: 2),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                      decoration: BoxDecoration(
+                        color: (badgeColor ?? effectiveColor).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: (badgeColor ?? effectiveColor).withValues(alpha: 0.25)),
+                      ),
+                      child: Text(
+                        badgeText,
+                        style: TextStyle(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.bold,
+                          color: badgeColor ?? effectiveColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            if (badgeText != null) ...[
-              Container(
-                margin: const EdgeInsets.only(right: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: (badgeColor ?? AppColors.primary).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: (badgeColor ?? AppColors.primary).withValues(alpha: 0.3)),
-                ),
-                child: Text(
-                  badgeText,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: badgeColor ?? AppColors.primary,
-                  ),
-                ),
-              ),
-            ],
+            const SizedBox(width: 8),
             Text(
               countString ?? '${count ?? 0}',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w800,
-                color: highlight ? (highlightColor ?? AppColors.primary) : AppColors.textPrimary,
+                color: highlight ? effectiveColor : AppColors.textPrimary,
+                letterSpacing: -0.3,
               ),
             ),
-            const SizedBox(width: 6),
-            const Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.textMuted),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right_rounded, size: 18, color: effectiveColor.withValues(alpha: 0.5)),
           ],
         ),
       ),
